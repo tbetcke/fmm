@@ -168,7 +168,9 @@ proposal keeps every one of them.
    the regime, the M2L of an offset class, pruning, the FFT grid) is a function of k, the
    global tree geometry, the tolerance and the calibration tables only, never of the charges
    or of a rank's share of the boxes. Every rank then makes the same decisions, and
-   constraint 2 can hold.
+   constraint 2 can hold. The execution split of a level call (how its boxes are cut into
+   tasks) may read the thread count and the boxes a rank computes, provided no bit of the
+   output depends on it (amended at H6.G; CH6.2f's question 1, signed off 2026-11-08).
 
 ## 3. Mathematical framework
 
@@ -355,6 +357,21 @@ The top level, formula and calibrated rule, at 10⁻⁶ and 10⁻⁸: 43 and 48 
 38 at kD = 100; 144 and 151 against 131 and 135 at kD = 500. The formula stays above as the
 uncalibrated reference. The excess p − x on the high-frequency levels grows about linearly
 in L, faster than the formula's (ln 1/ε)^{2/3}, which is CH4.3's to refit.
+
+**The M2L's degree on levels with waves (amended at H6.G).** Below ε = 10⁻⁶ a level that runs
+the exponential M2L (Section 5.3) has two degrees: the calibrated p_l above, and the
+resolving degree p_w at which its M2L runs, since FMM3D's quadratures at iprec 3 err on the
+truncated tail of a degree-p_l multipole on the plateau (CH6.1c, CH6.1f). The rule
+(`PlaneWaveRaise::Rule`; CH6.1g, CH6.1h):
+
+| ε | p_l (plateau) | p_w | at p_w | at p_l |
+| --- | ---: | ---: | --- | --- |
+| 10⁻⁷ ≤ ε < 10⁻⁶ | 20 | max(p_l, 28) | the M2L, the level's stores, the M2M from and L2L to its children | the M2M to the parent, the L2L from it, and the leaves' P2M, L2P, P2L and M2P |
+| 10⁻⁸ ≤ ε < 10⁻⁷ | 24 | max(p_l, 32) | all but the translations to and from the parent | the M2M to the parent and the L2L from it |
+
+The FMM's errors then fall to 0.003–1.00× Rotation's at p_l (CH6.1g, CH6.1h), and the stores
+of a raised level grow about 1.7–1.9×. At ε ≥ 10⁻⁶ and on levels without waves p_l is every
+operator's degree, as above.
 
 ### 3.6 The diagonal form, its rounding, and the regimes
 
@@ -614,32 +631,48 @@ is for Laplace:
   crossover by machine class (the column kernel's ISA and the multipole planes) and whose
   tables fit the dense budget, Rotation on the others. It is the first form of Section
   6.4's selection on low-frequency levels; CH4.0 adds a per-level term for sparse levels.
-- **Exponential (plane-wave) M2L**, opt-in at first: the Helmholtz generalisation of
-  CONVENTIONS §3.14 (Greengard, Huang, Rokhlin and Wandzura 1998; Cheng et al. 2006): the
-  same six directions, rotations and merge and shift, with quadratures in which the
-  integral splits into a propagating and an evanescent part. Three reasons to expect it to
-  matter. Phase 6 T10 measured the Laplace plane-wave M2L at 2.2–9.8× the faster of Batched
-  and Rotation at f64 p ≥ 8 on the M3 Max and locust, and 3.6–12.5× at p ≥ 12 on Kathleen
-  (docs/phase6/README.md, decision 6). The Helmholtz low-frequency levels run at p of 7 to
-  24 in D1's range (CH3.3; 20 to 60 before calibration), up to about 38 on intermediate
-  levels, where an O(p²) per-pair M2L still gains. And the low-frequency levels carry most of the
-  far-field work below kD ≈ 10³ (Section 7), which is why H6 comes before H4 by default.
-  FMM3D uses this M2L for Helmholtz up to boxes of 8 wavelengths, Re(k w) ≤ 16π (amended at
-  CH0.4: its code, not the 32 of its documentation; spikes/pw-quadrature §2.4). The cost
-  of entry: the quadratures depend on k w_l, so a level needs its own quadrature
-  (generated or tabulated; spike S4), unlike the single Laplace table of §3.14. Gumerov and Duraiswami found RCR
-  about as efficient as exponential forms at moderate p in their 2009 code; the
-  repository's own Laplace measurement points the other way, so the decision is a
-  measurement (CH6.2). (Amended at CH6.2h; D8 signed off 2026-11-08: `Auto` takes it by
-  default on each level of degree at least one above Batched's crossover, 12 on AVX-512 with
-  two planes, where the precision rule gives a quadrature, ε ≥ 10⁻⁶, and Im k w_l < 5π, in
-  f64; fmm-validate/results/helmholtz-ch6-2h.md.) (Amended at CH6.1g; D8's bound revisited and
-  signed off 2026-11-11: also at 10⁻⁸ ≤ ε < 10⁻⁷, where the rule runs iprec 3 with the level's
-  degree raised to max(p_l, 32); not at 10⁻⁷ ≤ ε < 10⁻⁶ until the degree raised on the M2L
-  alone is measured (CH6.1h); fmm-validate/results/helmholtz-ch6-1g.md.) (Amended at CH6.1h;
-  signed off 2026-11-11: also at 10⁻⁷ ≤ ε < 10⁻⁶, where the rule raises the M2L alone to
-  max(p_l, 28), the level's leaves and translations to its parent kept at p_l, and below 10⁻⁷
-  all but those translations; fmm-validate/results/helmholtz-ch6-1h.md.)
+- **Exponential (plane-wave) M2L**, `Auto`'s default on the levels of its rule since D8
+  (amended at H6.G; opt-in until CH6.2): the Helmholtz generalisation of CONVENTIONS §3.14
+  (Greengard, Huang, Rokhlin and Wandzura 1998; Cheng et al. 2006), in CONVENTIONS §3.15
+  "Exponential M2L": the same six directions, rotations and merge and shift, with quadratures
+  in which the integral splits into a propagating and an evanescent part. FMM3D uses this M2L
+  for Helmholtz up to boxes of 8 wavelengths, Re(k w) ≤ 16π (amended at CH0.4: its code, not
+  the 32 of its documentation; spikes/pw-quadrature §2.4).
+  - *As expected before H6.* Three reasons to expect it to matter: Phase 6 T10 measured the
+    Laplace plane-wave M2L at 2.2–9.8× the faster of Batched and Rotation at f64 p ≥ 8 on
+    the M3 Max and locust, and 3.6–12.5× at p ≥ 12 on Kathleen (docs/phase6/README.md,
+    decision 6); the Helmholtz low-frequency levels run at p of 7 to 24 in D1's range (CH3.3;
+    20 to 60 before calibration), up to about 38 on intermediate levels, where an O(p²)
+    per-pair M2L still gains; and the low-frequency levels carry most of the far-field work
+    below kD ≈ 10³ (Section 7), which is why H6 comes before H4 by default. Gumerov and
+    Duraiswami found RCR about as efficient as exponential forms at moderate p in their 2009
+    code; the repository's own Laplace measurement pointed the other way, so the decision was
+    a measurement (CH6.2). The cost of entry: the quadratures depend on k w_l, so a level
+    needs its own quadrature, unlike the single Laplace table of §3.14.
+  - *As built (CH6.1, CH6.2).* The quadratures are FMM3D's tables for iprec 1 to 3 (437
+    domains of complex κ = k w each, kept with NIST's notice), with α counts of this
+    library's own by a Bessel bound that resolves the region's corner (CH0.4, CH6.1a; fewer
+    held in the FMM but not per pair, CH6.2e, CH6.2g). The precision and degree are chosen
+    per level by the FMM's errors against Rotation's (within about 1.1×): iprec 2 at
+    ε ≥ 10⁻⁶ at the level's degree p_l; iprec 3 below, at a raised degree p_w = max(p_l, 28)
+    for 10⁻⁷ ≤ ε < 10⁻⁶ and max(p_l, 32) for 10⁻⁸ ≤ ε < 10⁻⁷ (Section 3.5; CH6.1e, CH6.1g,
+    CH6.1h); Rotation below 10⁻⁸. A level whose κ_l lies outside the tables keeps Rotation.
+  - *D8* (signed off 2026-11-08 at CH6.2h, amended 2026-11-11 at CH6.1g and CH6.1h): `Auto`
+    takes it on each level of degree p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512
+    with two planes) where the rule gives a quadrature (ε ≥ 10⁻⁸) and Im k w_l < 5π, in f64;
+    Batched to its crossover on the rest, Rotation else; no term for the level's boxes, once
+    merge and shift splits the coarse levels by child (CH6.2f).
+  - *As measured.* Both readings hold, in different ranges. At 10⁻³ (p ≈ 7) RCR and the waves
+    are at par, as Gumerov and Duraiswami found, and Batched is often faster; the rule rarely
+    takes the waves there. At 10⁻⁶ the exponential M2L takes 0.19–0.61× Rotation's M2L on
+    the M6, locust and Kathleen (CH6.2b, CH6.2c), and the evaluation 0.05–0.91× the previous
+    `Auto`'s (CH6.2h); at 10⁻⁷ and 10⁻⁸ the evaluation takes 0.43–0.83× and 0.31–0.71×
+    Rotation's on every case above 0.1 s (CH6.1h, Kathleen), and 0.27–0.65× on W1 at
+    kD = 500 and W3 at kD = 100 (H6 gate §8, Kathleen job 633000). The gain is below Laplace's T10:
+    below 10⁻⁶ the waves need a degree above the level's, and above it they run at p ≈ 15,
+    where Rotation is still cheap. Merge and shift is 64–95 % of the time per level (CH6.2d).
+    Reports: fmm-validate/results/helmholtz-ch6-{1e,1g,1h,2b,2d,2f,2h}.md; the H6 gate,
+    docs/helmholtz/gates/H6.md §3.1.
 
 ### 5.4 M2L on high-frequency levels: signatures
 
@@ -1207,6 +1240,23 @@ and there, at tight ε, the FMM is slowest against FMM3D (H3 gate report,
 numbers, uses the calibrated rule (`DegreeRule::CALIBRATED`), not S7's p, for the
 low-frequency levels. The tables above stay until it does.
 
+**H6 measurements (amended at H6.G).** The exponential M2L (Section 5.3) adds a transient that
+the tables above leave out: the waves of one frame of the largest level with waves, 8.9 GB on
+W1 at kD = 500 and 11.7 GB on W3 at kD = 100 at 10⁻⁶ when unbounded, against Rotation's peak
+of 5.4 and 5.3 GB (CH6.2a). Like the signature scratch it counts against the node budget: the
+level call runs by chunks of whole parents within `DEFAULT_PLANE_WAVE_NODE_BUDGET` (8 GiB per
+node, divided over the node's ranks), bit for bit at every bound, at 1.03–1.04× the unbounded
+time at one rank and 1.04–1.11× at 40 ranks per node. Below 10⁻⁶ the raised degree p_w of
+Section 3.5 enlarges the stores of the levels with waves about 1.7–1.9×. The build at p_w,
+FMM3D's tables parsed once and the RCR tables at p_w, takes 2–9× Rotation's and under 1 s on
+cases of 10⁵ points (CH6.1h). The time: at 10⁻⁶ the exponential M2L takes 0.50× Rotation's
+M2L on W1 at kD = 500 and 0.24× on W3 at kD = 100 (Kathleen, CH6.2c), and one evaluation of
+W1 at kD = 500 22.4 s against FMM3D's 61.6 and 43.2 s per call (CH6.2d); the rest of that
+far field is mostly the high-frequency levels' RCR, H4's. At 10⁻⁷ and 10⁻⁸ on the same two
+cases the default took 0.27–0.65× Rotation's evaluation, with a launch's peak resident size of
+19–22.5 GB at one rank (H6 gate §8). CH0.8b's census counts the waves buffer and the raised
+stores as well.
+
 **Transfer functions on the high-frequency levels**, only for the classes that use the
 diagonal form (counted here for every class; a hybrid level stores fewer):
 
@@ -1260,7 +1310,7 @@ and reported per frequency in CH4.4.
 | R4 | Radial functions for complex arguments, and Yukawa at κ r > 1 | loss of accuracy or overflow in recursions | recursion direction by argument, the scaling of Section 3.4 with exponential scaling for Yukawa; spike S3 against arbitrary precision |
 | R5 | Rounding in the diagonal form | transfer-function terms up to 10¹⁵ at the nearest classes on levels thought high frequency (Section 3.6); a per-level switch would return wrong results at tight tolerances | the per-(level, class) rule with the rounding bound; RCR for failing classes; S6 in full 3D with realistic placements; joint calibration with p (S7); the T7 test on every class (Section 9) |
 | R6 | Conservative error bounds | p too large, time and memory wasted | empirical calibration per (k a_l, ε) and operator: S7, then CH2.3, CH3.3, CH4.3 |
-| R7 | Exponential M2L quadratures per level | precomputation complexity, accuracy per k w_l | spike S4 before CH6.1; opt-in until measured |
+| R7 | Exponential M2L quadratures per level | precomputation complexity, accuracy per k w_l; the waves buffer and the raised stores in memory | spike S4 before CH6.1; opt-in until measured. Amended at H6.G: mitigated by FMM3D's tables with this library's counts (CH6.1a), the precision and the resolving degree by the FMM's errors (CH6.1e–h) and the default by D8 (CH6.2h); the build under 1 s on 10⁵ points; the waves buffer under a node budget (CH6.2a, Section 7). Remaining: f32 untested (D3, CH7.1); levels outside the tables or at Im k w_l ≥ 5π on Rotation |
 | R8 | Damped high-frequency levels (complex k) | growth of plane waves and transfer functions | damping-dependent truncation (Grasso et al. 2012) and bound, both measured in S6; prune where possible |
 | R9 | f32 | phases and high degrees out of f32's range; the bound of Section 3.6 5·10⁸ times larger | f64 first; f32 only by measurement (S6, D3) |
 | R10 | Table build time in frequency sweeps | build dominates short solves | build cost reported per k; per-level cache keys so octave sweeps rebuild one level; interpolated transfer functions if S6 allows |
@@ -1381,7 +1431,10 @@ and for complex and purely imaginary k the branch, before any comparison.
 looser of the two accuracies, and the sampled direct sum stays the primary measure. Above
 boxes of 8 wavelengths (amended at CH0.4; 32 by its documentation) FMM3D uses point and
 shoot, slower but still accurate. Whether it is accurate and efficient for purely
-imaginary zk (the Yukawa case) is not verified; CH1.4 checks it (risk R12).
+imaginary zk (the Yukawa case) is not verified; CH1.4 checks it (risk R12). At eps = 10⁻³
+(its iprec 1) FMM3D missed ε on three cases at kD = 100, W1, W3 and the W4 cube
+(1.23–2.03·10⁻³; CH6.2d), so comparisons of time are at matched accuracy, FMM3D's eps chosen
+by its error, not at the same requested eps (amended at H6.G).
 
 **Per phase:**
 
@@ -1390,7 +1443,7 @@ imaginary zk (the Yukawa case) is not verified; CH1.4 checks it (risk R12).
 | H1 (CH1.4) | two-point normalisation; fixtures; `nd-fmm-ref`'s direct sum to round-off | real, complex, imaginary |
 | H2 (CH2.5) | Yukawa FMM on W1 and W3, sampled and full-target, over κ D | imaginary, if R12 clears |
 | H3 (CH3.6) | RCR on every level: W1, W3 and W4 for kD ≤ 100, and W1 at kD = 500 | real |
-| H6 (CH6.2) | the exponential M2L against `hfmm3d`'s, which uses the same M2L up to boxes of 8 wavelengths (amended at CH0.4): per-level accuracy and time | real |
+| H6 (CH6.2) | the exponential M2L against `hfmm3d`'s, which uses the same M2L up to boxes of 8 wavelengths (amended at CH0.4): per-level accuracy and time; met at 10⁻³ and 10⁻⁶ (CH6.2d), 10⁻⁷ and 10⁻⁸ in CH9.1 (amended at H6.G) | real |
 | H4 (CH4.4, CH4.5) | W1 to kD = 1000, W2 to 500, W3 to 200, with the levels and classes mapped; then matched accuracy | real |
 | H5 (CH5.3) | the (Re kD, Im kD) grid on W1 | complex |
 | H7 (CH7.6) | the device path at matched accuracy | real, complex |
@@ -1477,9 +1530,9 @@ flowchart LR
 | CH3.4 | Helmholtz P2P (real and complex k), on the P2P skeleton of CH2.4 | accuracy contract over k r up to 22 c_leaf; cost per pair | CH2.4 |
 | CH3.5 | The shared drivers extended to complex expansions (two planes, real shifts for real k, the epilogue) | constraint 1 of Section 2, as CH2.0; else the complex operator gets its own drivers. Closed as a record, no driver change: the target-by-target drivers already pass whole blocks (amended at H3.G) | CH2.0 |
 | CH3.6 | Gate: RCR on every level against FMM3D | both codes against the same sampled direct sum on W1, W3 and W4 for kD ≤ 100, and on W1 at kD = 500 with time reported; the full-target crosscheck | CH3.3, CH1.4, CH3.4 (the user, 2026-10-28: timed with the vectorised P2P) |
-| **H6** | **Exponential M2L on low-frequency levels** (opt-in; before H4 by default) | | |
-| CH6.1 | The §3.14 machinery generalised: six directions, per-level quadratures, merge and shift | errors within about 1.1× Rotation's, as T13's budget for Laplace | CH0.4, CH3.1 |
-| CH6.2 | Measured against Rotation and the table-based strategies on the three machines, and against `hfmm3d`'s exponential M2L | per-level accuracy and time beside FMM3D's on the same problems; adopted as a strategy where it wins, else kept opt-in or dropped (D8) | CH6.1, CH1.4 |
+| **H6** | **Exponential M2L on low-frequency levels** (adopted under `Auto` by D8; before H4 by default; amended at H6.G) | | |
+| CH6.1 | The §3.14 machinery generalised: six directions, per-level quadratures, merge and shift; done as CH6.1a–h (the quadratures, the generator, the pair chain, merge and shift, the precision per level, and the resolving degree below 10⁻⁶, Section 3.5) | errors within about 1.1× Rotation's, as T13's budget for Laplace | CH0.4, CH3.1 |
+| CH6.2 | Measured against Rotation and the table-based strategies on the three machines, and against `hfmm3d`'s exponential M2L; done as CH6.2a–i (the waves buffer, the times per level, FMM3D, the counts, the coarse levels' split, D8's rule, and CH6.2i, the same split in Laplace's plane-wave M2L) | per-level accuracy and time beside FMM3D's on the same problems; adopted as a strategy where it wins, else kept opt-in or dropped (D8: adopted under `Auto`, CH6.2h) | CH6.1, CH1.4 |
 | **H4** | **High-frequency levels** | | |
 | CH4.0 | The M2L rule's sparse-level term (added at CH3.2d): a per-level term from the global tree, rank-invariant | CH3.2d's sweeps within 1.10 on every case of the three machines, sparse levels included | CH3.2d |
 | CH4.0b | The worst-box concentration (added at H3.G): where CH3.6's worst box at 30–146× the all-target ℓ2 error comes from, on all-RCR trees | the cause stated; whether a pointwise criterion joins Section 9.1's ℓ2 proposed | CH3.6 |
@@ -1500,7 +1553,7 @@ flowchart LR
 | CH7.3 | Device leaf operators: P2M, L2P, M2P, P2L with radial recursions | against the host operators within error | CH3.1 |
 | CH7.4 | Diagonal M2L and the transforms (cubek-fft where S5 adopted it, else the transform as a GEMM) | as CH4.2 on the device; device locals against the host's within error (the grids may differ, Section 6.5) | CH4.2, CH7.1, CH0.5 |
 | CH7.5a–c | Laplace's plane-wave M2L on the device (added at CH7.5a): the merge and shift kernels (CH7.5a), the device's `PlaneWave` behind an opt-in setting (CH7.5b), measured and adopted or dropped (CH7.5c) | T13's requirement 1 on the device (within 1.1× Dense's errors against the direct sum), bit for bit run to run and on P ranks against one rank; adopted where it wins at p ≥ 12 (T13's gate), else dropped | Phase 6 T13 |
-| CH7.5d | Exponential M2L on the device, if D8 adopted it on the host, on CH7.5a's kernels (CH7.5 before CH7.5a) | as CH6.1 on the device | CH7.5c, CH6.2, CH7.1 |
+| CH7.5d | Exponential M2L on the device, on CH7.5a's kernels (CH7.5 before CH7.5a); D8 adopted it on the host (amended at H6.G) | as CH6.1 on the device | CH7.5c, CH6.2, CH7.1 |
 | CH7.6 | Device performance against FMM3D at matched accuracy | as CH4.5, the device path labelled beside the host's, as T9 reported Laplace's | CH7.2, CH7.3, CH7.4, CH4.5 |
 | **H8** | **Distributed path** | | |
 | CH8.1 | Byte cap for the replicated top, counted per node; exchange of the high-frequency levels | bit for bit the one-rank output on P ranks; memory per rank and per node bounded | CH4.4 |
@@ -1546,7 +1599,7 @@ these.
 | D5 | Source types in the first release | charges, real and complex, with potentials and gradients; dipoles when C6.4 exists for Laplace |
 | D6 | Order of H4 and H6 | H6 first by default (Sections 7 and 10); H4 first only if D1 puts most of the work at kD of several hundred or more and loose tolerances |
 | D7 | Host back ends for the φ step | the product as the default and reference; FFTW through RLST 0.12 behind the optional `fftw` feature (CH4.6), with the GPL warning; rustfft as a fast default without FFTW if S9 shows it deterministic per box and faster than the product, decided per machine (Homebrew's FFTW on the M3 Max has no SIMD); all behind a trait internal to `nd-fmm-exec`, since RLST provides none (its DF4) |
-| D8 | Whether the exponential M2L may become a default on low-frequency levels | after CH6.2, as Laplace's T11 decides for `PlaneWave` |
+| D8 | Whether the exponential M2L may become a default on low-frequency levels | after CH6.2, as Laplace's T11 decides for `PlaneWave`. Signed off at CH6.2h (2026-11-08), amended at CH6.1g and CH6.1h (2026-11-11): `Auto` takes it by the rule of Section 5.3 |
 | D9 | What "within noise" means in constraint 1 of Section 2 | the run-to-run spread of the Laplace baseline, repeated on each machine of record before the change, per benchmark; plus the C3S.4 throughput gate |
 | D10 | cubek-fft on the device | after S5 (CH0.5): adopt it (a new dependency, and the cubecl pin moved to the current 0.11.x, 0.11.3 on 2026-10-22, if 0.3.1 is needed), contribute twiddle tables and radix 3 and 5 upstream first, or keep the transform as a GEMM |
 | D11 | The maximum leaf width c_leaf (Section 3.7) | from S8: the largest c_leaf at which P2P and leaf costs stay within 10 % of their best on W1 and W3, expected between 0.5 and 1 |
@@ -1734,6 +1787,10 @@ these.
     a record; CH4.0, CH4.0b and CH4.0c added to H4 (C4).
   - Section 10 diagram and text: the edge H2 → H3 is CH2.0 and CH2.4 (C5).
   - Section 9.1: the box measure of the full-target crosscheck, reported, not gated (C6).
+- **Amended at CH0.4, 2026-11-03** (spike S4, spikes/pw-quadrature/SPIKE_REPORT.md; signed off
+  by the user on PR #178, "yes to 2 and 3"; this line added at H6.G): FMM3D's plane waves stop
+  at boxes of 8 wavelengths, Re(k w) ≤ 16π, not the 32 of its documentation (Sections 5.3,
+  9.2, 11 and 13).
 - **Amended at CH7.5a, 2026-11-05** (signed off by the user on PR #187, "Please do as
   recommended"): Section 10 table, CH7.5 split into Laplace's plane-wave M2L on the device
   (CH7.5a–c, a new row) and Helmholtz's exponential M2L on the device (CH7.5d, the former
@@ -1746,6 +1803,30 @@ these.
   p_high term; Sections 5.4 and 5.6: T from extended precision (per sample or
   interpolated), the damping factor; Sections 1 and 6.5: f32 on high-frequency levels by
   D3.
+- **Amended at CH6.2h, 2026-11-08** (D8, fmm-validate/results/helmholtz-ch6-2h.md; signed off
+  by the user on PR #200, "1–5 as recommended"; this line added at H6.G): Section 5.3, `Auto`
+  takes the exponential M2L by default on the levels of its rule at ε ≥ 10⁻⁶; Section 6.4, the
+  selection on low-frequency levels with it, no boxes term.
+- **Amended at CH6.1g, 2026-11-11** (fmm-validate/results/helmholtz-ch6-1g.md; signed off by the
+  user on PR #203, "Lift for 10⁻⁸–10⁻⁷ only (Recommended)"; this line added at H6.G): Section
+  5.3, D8 also at 10⁻⁸ ≤ ε < 10⁻⁷, iprec 3 with the level's degree raised to max(p_l, 32).
+- **Amended at CH6.1h, 2026-11-11** (fmm-validate/results/helmholtz-ch6-1h.md; signed off by the
+  user on PR #204, "Lift it (Recommended)"; this line added at H6.G): Section 5.3, D8 also at
+  10⁻⁷ ≤ ε < 10⁻⁶, the M2L alone raised to max(p_l, 28).
+- **Amended at H6.G, 2026-11-12** (draft 0.8 stays the plan of record; signed off by the user,
+  C1–C8 "Accept all (Recommended)"; `docs/helmholtz/gates/H6.md` §4):
+  - Section 5.3: the exponential M2L's bullet restated as built, with D8's rule and the
+    measured gains; the three reasons kept as the expectation (C1).
+  - Section 3.5: the M2L's resolving degree p_w on levels with waves below 10⁻⁶ (C2).
+  - Section 7: an "H6 measurements" paragraph, the waves buffer under the node budget, the
+    raised stores, the build and the times (C3).
+  - Section 8: R7's mitigation as done and what remains (C4).
+  - Section 2, constraint 9: the execution split may read the threads and a rank's computed
+    boxes when no bit depends on it (C5).
+  - Section 9.2: the H6 row's coverage; FMM3D's misses of ε at eps = 10⁻³, so time at matched
+    accuracy (C6).
+  - Sections 10 and 12: H6 adopted under `Auto`; CH6.1a–h and CH6.2a–i; CH7.5d; D8's row (C7).
+  - Appendix A: the lines of CH0.4, CH6.2h, CH6.1g and CH6.1h (C8).
 
 ## Appendix B. The stability check behind Section 3.6
 
