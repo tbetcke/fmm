@@ -56,7 +56,10 @@ Slash commands in `.claude/skills/`, for the Helmholtz work:
   docs/helmholtz/roadmap.md, plans, implements, verifies, logs and opens the PR.
 - `/verify`: the checks below for what a branch changed, with the Laplace protection of the
   proposal's constraint 1. Run before calling anything done.
-- `/milestone-gate`: a milestone's gate report and close.
+- `/milestone-gate`: a milestone's gate report and close. Every gate repeats the two
+  read-only project review passes (the record: mathematics, algorithms, benchmarks; the
+  architecture), each by one subagent on Fable at medium effort; the driving session checks
+  and triages their findings into the roadmap (`docs/reviews/`).
 
 ## Working rules
 - Run `cargo fmt --all` after every Rust edit, before the other checks or committing.
