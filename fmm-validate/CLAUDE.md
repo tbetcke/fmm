@@ -477,6 +477,22 @@ the same checksum. `tools/helmholtz/ch4-0-runs.sh` runs the task's pair and FMM 
 (gated on macOS, and with `GATE=1` elsewhere), `ch4-0-tables.py` makes the report's tables. Its
 report is `results/helmholtz-ch4-0.md`.
 
+Helmholtz CH4.0b (the worst-box concentration; docs/helmholtz/tasks/CH4.0b.md) added
+`helmholtz_accuracy::Density` and `Case::{density, domain, max_points_per_leaf}` (§9.1's random
+charges by default, every earlier bit unchanged; the trace of a plane wave along
+`PLANE_WAVE_DIRECTION`, complex charges only, or a constant; the FMM's domain and leaf size
+named) and `helmholtz_boxes` (MPI-free): the direct sum at every point or at §9.1's samples
+plus s targets per box (`Reference`, `box_sample`), the box measure of §9.1 (`Errors::boxes`,
+CH3.6's `crosscheck` against the same reference bit for bit), a target's offsets from its box
+centres per level (`offsets`), and each level's part of the error from runs with one level's
+degree raised (`level_shares`, `level_parts_at`). The `helmholtz_boxes` example (one rank, not
+registered) prints the runs at each ε and M2L, the worst boxes with their place, the errors by
+the levels on a face and, with `--study levels`, the levels' parts by the target's distance
+from its box centre. `tests/helmholtz_accuracy.rs` checks the densities, a named domain and
+leaf size, and the box study against `crosscheck` (about 15 % more on its one-rank debug run,
+83–87 → 95–99 s on a loaded M6). `tools/helmholtz/ch4-0b-runs.sh` runs the task's stages.
+Its report is `results/helmholtz-ch4-0b.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

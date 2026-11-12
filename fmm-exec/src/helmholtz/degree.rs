@@ -19,6 +19,12 @@
 //! over 0.14 ≤ x ≤ 65 and 10⁻⁸ ≤ ε ≤ 10⁻³ (the plateau to 10⁻¹⁰); the rule is at least
 //! every measured degree. Outside those ranges it is an extrapolation.
 //!
+//! ε is a relative ℓ2 tolerance, not a pointwise one (proposal §9.1, amended at Helmholtz
+//! CH4.0b): the truncation is largest at targets and sources near a corner of their box, so
+//! pointwise the errors reach 10–60 ε there, most from the coarsest level on the plateau
+//! (`fmm-validate/results/helmholtz-ch4-0b.md`). A worst box within ε takes the rule at
+//! about ε/10 at 10⁻³ and 10⁻⁶ and ε/30 to ε/100 at 10⁻⁸ on W1.
+//!
 //! S7's closed form, [`s7_degree`], max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈x + (ln 1/ε)^{2/3} x^{1/3}⌉),
 //! was the default before CH3.3. It is the per-pair worst case (the worst of the 316
 //! offsets and three placements, potential and gradient, per-pair relative ℓ2 norm, margin

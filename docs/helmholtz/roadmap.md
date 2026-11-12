@@ -10,13 +10,11 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 Status (2026-11-12): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). The RCR FMM on every level meets ε against FMM3D
 (CH3.6); `Auto` takes the exponential M2L on the low-frequency levels at every ε ≥ 10⁻⁸ (D8).
-CH4.0, the first task of the H4 list, adds `Auto`'s term for Batched from the global tree
-(CH3.2d's sweeps within 1.049 of the per-level best on the three machines), Batched's split
-by the threads and the dense budget per node (signed off on #211); its residual at 40–72
-threads is CH4.0f, off the list. HR, H0,
-H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: the
-priority list for H4 below, from CH4.0b. The history of this line until H6.G is in
-`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
+Of the H4 list, CH4.0 (Batched's term, split and node budget) is merged and CH4.0b (the
+worst boxes: corner placement on the coarsest plateau level; the smooth densities within ε;
+ε stays an ℓ2 tolerance, the worst box a gate bound of 100 ε) is signed off on #212. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of
+H0, CH0.4 and CH0.6. Next: CH4.0c. The history of this line until H6.G is in `progress.md`
+and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
 ## How `/next-task` reads this file
 
@@ -485,21 +483,15 @@ task's full line is in its record or report and its progress entry
   64–5,000 boxes still behind Rotation (CH4.0f). Signed off (the user, 2026-11-12, on #211): the node budget 8 GiB, a few
   ranks per node with threads the advice (CH8.0 added); done with its residual left to CH4.0f,
   off the priority list; proposal §6.4 amended. *Needs:* CH3.2d.
-- [ ] **CH4.0b The worst-box concentration.** Added on 2026-11-02 at the H3 gate (question
-  4a; CH3.6's sign-off 1, "a follow-up before H4"): on W1 at 10⁻⁶ and 10⁻⁸ CH3.6's worst
-  box was up to 146× the all-target ℓ2 error (FMM3D 37×), pointwise up to 57 ε, in boxes
-  where the sphere touches its bounding cube. Before the diagonal form adds a second source
-  of error, on all-RCR trees. *Done when:* the cause located (level, list, operator or
-  placement) with the box measure of proposal §9.1; whether a pointwise criterion joins
-  §9.1's ℓ2 proposed. Also (review 2026-11-12, M5 and A3): every calibration and gate so
-  far has random charges in [−1, 1], whose near field dominates the norms. A smooth density
-  on W1 (q = e^{ik d·x}, the trace of a plane wave; a constant density at low kD), at 10⁻³,
-  10⁻⁶ and 10⁻⁸ under the default and on all-RCR, in ℓ2 and per box against the sampled
-  direct sum: within ε, or the degrees (the plateau, p_w at 10⁻⁶ on the exponential M2L)
-  that such a density needs, before CH4.3 calibrates on this rule. *Needs:* CH3.6.
-  *Machines:* Kathleen. *Sign-off:* the criterion; the charge model of the gates (a check of this task only;
-  whether a smooth density becomes a standing workload, amending D12, is decided on its
-  result: question 4 of #209, the user, 2026-11-12, on #209: "I agree").
+- [x] **CH4.0b The worst-box concentration.** Report: `fmm-validate/results/helmholtz-ch4-0b.md`.
+  The cause is placement: a level's error at targets near a box corner is 19–45× its RMS
+  within one half-width, mostly on the coarsest plateau level; W1's six tangent points are box
+  vertices on every level, and boxes clipped at a corner elsewhere; not a list, the boundary or
+  a defect. The smooth densities (a plane wave's trace, a constant) meet ε in ℓ2 on W1 at
+  kD = 10–500, 10⁻³–10⁻⁸, under Rotation and the default (the constant 0.66 ε at most).
+  Signed off (the user, 2026-11-12, on #212, "Sign off 1 and 2 as recommended"): ε stays §9.1's ℓ2
+  tolerance and the box measure a gate bound of 100 ε (proposal §9.1 amended); the gates keep
+  the random charges (D12), CH4.0c, CH4.3 and CH4.4 verify on the smooth densities too. *Needs:* CH3.6.
 - [ ] **CH4.0c The degree rule beyond its measured range.** Added on 2026-11-02 at the H3
   gate (question 4b; CH3.3's sign-off 2): the high-frequency branch is measured to x = 65
   and checked at x = 108 only, and falls below S7's per-pair p* above that at ε ≤ 10⁻⁷.
@@ -508,7 +500,11 @@ task's full line is in its record or report and its progress entry
   *Done when:* within ε, or the rule corrected or S7's degrees named per level above its
   range. Also (review 2026-11-12, M6, M7): the range of ε the rule is measured on (D1's
   10⁻³ to 10⁻⁸) stated where the rule is documented, in place of CH3.3's 10⁻¹⁸ to 10⁻¹; it
-  stays before CH4.1, as CH4.4 runs at kD = 1000 on a second new source of error.
+  stays before CH4.1, as CH4.4 runs at kD = 1000 on a second new source of error. Also
+  (CH4.0b, report §4): on W1 at kD = 100 the constant density misses ε in ℓ2 below 10⁻⁸
+  (1.5× at 10⁻⁹, 3.4× at 10⁻¹⁰), all of it from level 2 on the high-frequency branch (p = 40
+  at x = 21.7); the random charges do not show it. CH4.0c's runs include the constant density
+  (CH4.0b's sign-off 2).
   *Needs:* CH3.6. *Machines:* Kathleen.
 - [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
   "Can you add leaf size tuning to the roadmap?"). `HelmholtzFmmBuilder` refines to a fixed
@@ -587,11 +583,15 @@ task's full line is in its record or report and its progress entry
   (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation
   analysis. Also (review 2026-11-12, M8): the excess-bandwidth length
   L ≈ 2ka + c (2ka)^{1/3} of the high-frequency FMM literature, between S6's last two, in
-  the same sweep. *Needs:* CH4.2.
+  the same sweep. Also (CH4.0b's sign-off 2): the calibration verified on the constant
+  density (kD ≤ 100) and the plane wave's trace (kD = 500) as well as on §9.1's charges
+  (`helmholtz_accuracy::Density`). *Needs:* CH4.2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
-  to levels and classes, with no error concentrated at a class boundary; time, memory and
-  build cost per k. *Needs:* CH4.3, CH1.4. *Machines:* Kathleen.
+  to levels and classes, with no error concentrated at a class boundary and the worst box at
+  most 100 ε (proposal §9.1, amended at CH4.0b); time, memory and build cost per k. Also
+  (CH4.0b's sign-off 2): the plane wave's trace at kD = 500 and 1000 beside §9.1's charges.
+  *Needs:* CH4.3, CH1.4. *Machines:* Kathleen.
 - [ ] **CH4.5 Host performance against FMM3D at matched accuracy.** As C6.8, setup apart,
   one node, on CH4.4's sweep. *Needs:* CH4.4. *Machines:* locust, Kathleen.
 - [ ] **CH4.6 The optional FFTW back end of the φ step.** *Done when:* against the product to
