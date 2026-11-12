@@ -521,8 +521,10 @@ impl LevelShape {
 /// level call needs over the pair (1.45 on AVX-512 and AVX2 with two planes, 1.2 with one,
 /// 1.15 on NEON, from the FMM's per-level times at one thread); never falling as p grows;
 /// 64 (a full block's columns, which no level reaches) from p = 16 and where Batched never
-/// reaches the margin. NEON's is the larger of the M6's and locust's; the scalar kernel
-/// (the reference path) takes NEON's, unmeasured. Auto runs Batched on a level only where
+/// reaches the margin. NEON's is the larger of the M6's and locust's, but at p = 11 with one
+/// plane the M6's (locust's pairs there are not monotone in c, and on both machines the
+/// level of 24 columns per read runs Batched faster); the scalar kernel (the reference
+/// path) takes NEON's, unmeasured. Auto runs Batched on a level only where
 /// [`LevelShape::batched_columns`] is at least this and p_l at most its crossover
 /// ([`auto_batched_max_degree`] or the degree named), a condition of its own. A function of
 /// the machine class and p alone (proposal §2, constraint 9).
@@ -540,7 +542,7 @@ pub fn auto_batched_min_columns(isa: Isa, planes: usize, p: usize) -> f64 {
         0.6, 0.6, 0.6, 0.6, 0.8, 1.0, 1.4, 2.1, 3.1, 5.6, 7.5, 37.5, 64.0, 64.0, 64.0, 64.0,
     ];
     const NEON_ONE: [f64; 16] = [
-        0.3, 0.3, 0.3, 0.3, 0.6, 0.8, 1.3, 2.1, 3.2, 8.0, 13.7, 64.0, 64.0, 64.0, 64.0, 64.0,
+        0.3, 0.3, 0.3, 0.3, 0.6, 0.8, 1.3, 2.1, 3.2, 8.0, 13.7, 13.7, 64.0, 64.0, 64.0, 64.0,
     ];
     const NEON_TWO: [f64; 16] = [
         0.4, 0.4, 0.4, 0.4, 0.8, 1.2, 2.1, 3.9, 7.5, 23.7, 64.0, 64.0, 64.0, 64.0, 64.0, 64.0,
