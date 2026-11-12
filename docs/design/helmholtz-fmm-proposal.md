@@ -1,7 +1,8 @@
 # Helmholtz-family FMM in 3D: design proposal
 
-Draft 0.8, 2026-10-26. A proposal for review, not a plan: nothing here is signed off, and no
-convention changes. It turns the design discussion of 2026-10-20 (the wideband literature,
+Draft 0.8, 2026-10-26: the plan of record since its sign-off that day (D0), amended by
+sign-off since (Appendix A). It was written as a proposal for review, and no convention
+changes. It turns the design discussion of 2026-10-20 (the wideband literature,
 the fit with this repository, the expected values of p, the practical record of the
 Gumerov–Duraiswami scheme) into an architecture, a list of risks, a validation plan and a
 phased plan with gates. Section 12 lists the decisions the proposal needs from the user.
@@ -314,6 +315,10 @@ formula above (before calibration):
 | 6 | 1.2 λ | 6.8 | 25 | 676 |
 | 7 | 0.6 λ | 3.4 | 23 | 576 |
 | 8 | 0.3 λ | 1.7 | 22 | 529 (formula floor) |
+
+The tree as built stops a level earlier: with c_leaf = 1 (D11) W1 at kD = 500 has every leaf
+on level 7, as Section 7 assumes (H3 gate §3.1); the row of level 8 is the formula's value
+only.
 
 Top level (level 2) against kD, at ε = 10⁻⁴ / 10⁻⁶ / 10⁻⁸:
 
@@ -1251,7 +1256,8 @@ Section 3.5 enlarges the stores of the levels with waves about 1.7–1.9×. The 
 FMM3D's tables parsed once and the RCR tables at p_w, takes 2–9× Rotation's and under 1 s on
 cases of 10⁵ points (CH6.1h). The time: at 10⁻⁶ the exponential M2L takes 0.50× Rotation's
 M2L on W1 at kD = 500 and 0.24× on W3 at kD = 100 (Kathleen, CH6.2c), and one evaluation of
-W1 at kD = 500 22.4 s against FMM3D's 61.6 and 43.2 s per call (CH6.2d); the rest of that
+W1 at kD = 500 22.4 s, our build apart, against FMM3D's 61.6 and 43.2 s per whole call, its
+4.0 s setup included (CH6.2d); the rest of that
 far field is mostly the high-frequency levels' RCR, H4's. At 10⁻⁷ and 10⁻⁸ on the same two
 cases the default took 0.27–0.65× Rotation's evaluation, with a launch's peak resident size of
 19–22.5 GB at one rank (H6 gate §8). CH0.8b's census counts the waves buffer and the raised
@@ -1827,6 +1833,13 @@ these.
     accuracy (C6).
   - Sections 10 and 12: H6 adopted under `Auto`; CH6.1a–h and CH6.2a–i; CH7.5d; D8's row (C7).
   - Appendix A: the lines of CH0.4, CH6.2h, CH6.1g and CH6.1h (C8).
+- **Amended at the review after the H6 gate, 2026-11-12** (`docs/reviews/2026-11-12-H6.md`,
+  M10 and B1; signed off by the user on PR #209, question 5, "I agree"), editorial:
+  - The header: draft 0.8 is the plan of record (D0), no longer "nothing here is signed off".
+  - Section 3.5: under the example table, the built tree's leaves on level 7, not 8.
+  - Section 7: the 22.4 s of W1 at kD = 500 is our evaluation with the build apart, FMM3D's
+    times its whole call.
+  - Sections 3.4 and 3.1 against CONVENTIONS §3.15 (M2) are left to CH1.3d.
 
 ## Appendix B. The stability check behind Section 3.6
 

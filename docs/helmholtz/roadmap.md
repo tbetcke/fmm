@@ -55,7 +55,9 @@ Set by the user on 2026-11-12 at the H6 gate ("As proposed (Recommended)";
 the far field at kD = 500 is mostly the high-frequency levels' RCR. It replaces the list of
 2026-11-02, the path to H6, which finished with CH6.1h and H6.G. H4's follow-ups first, then
 the signatures' convention and trusted path, then H4's tasks, then the FFTW track that H4.G
-also needs.
+also needs. Amended on 2026-11-12 by the triage of the review after the H6 gate
+(`docs/reviews/2026-11-12-H6.md` §3; questions 1 and 3 of #209, the user, 2026-11-12, on #209: "I agree", to the
+recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
 
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
@@ -63,11 +65,10 @@ also needs.
 4. CH4.0d The Helmholtz leaf size (added on 2026-11-12, the user: "After CH4.0c
    (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and CH4.5's timings
    run on)
-5. CH4.0e The comparison under the default, and H4's expected gain (proposed on 2026-11-12
-   by the review's triage, `docs/reviews/2026-11-12-H6.md` §3, A1 and B2; pending the user's
-   sign-off, question 1 of its pull request)
+5. CH4.0e The comparison under the default, and H4's expected gain (review A1 and B2; its
+   sign-off is H4's go-ahead and order)
 6. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
-   configuration removed (proposed with CH4.0e; question 3)
+   configuration removed
 7. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
    trusted path)
 8. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
@@ -75,8 +76,8 @@ also needs.
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
-after every other milestone); CHA.4 to CHA.10 (CHA.6 before CH7.5d and CHA.7 before CH8.1,
-through their *Needs*).
+after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
+CHA.6 recommended before CH7.5d).
 
 ## Decisions
 
@@ -283,8 +284,11 @@ family, checked against FMM3D's fixtures.
   revision of §3.15: the stored expansions as CH3.1a built them (the level units r_l φ̃ and
   k̂_l = k r_l, the factor 4πik̂_l, the ½ of the L2L tables, P2L's charge scale), CH3.1a's
   deferred question 2; whether the "Exponential M2L" subsection stays unversioned inside a
-  versioned section; and F_k' stated in one convention with §3.14's. Proposed in the PR
-  description first, as every change to CONVENTIONS. *Needs:* CH0.6, CH1.3c.
+  versioned section; and F_k' stated in one convention with §3.14's; §3.9's tested range said for the M2L
+  (M10). Proposed in the PR description first, as every change to CONVENTIONS. With it the
+  proposal's §3.4 (the level scale on the half-width, where §3.15 has the circumradius) and
+  §3.1 ("no operator carries ik") corrected to CONVENTIONS, with their Appendix A line (M2;
+  question 5 of #209, the user, 2026-11-12, on #209: "I agree": left to this task). *Needs:* CH0.6, CH1.3c.
 - [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
 
 ## H2: Yukawa on the host
@@ -446,8 +450,9 @@ task's full line is in its record or report and its progress entry
   (§2, §4, §5). 0.24–0.61× Rotation's M2L at 10⁻⁶; level 2 slow at 1 × 40 (CH6.2f).
 - [x] **CH6.2d Beside FMM3D's exponential M2L.** Report:
   `fmm-validate/results/helmholtz-ch6-2d.md`. Per level FMM3D's over ours 0.44/0.89/1.11 at
-  10⁻⁶ on Kathleen; W1 at kD = 500 22.4 s, our evaluation with the build (10–15 s, H6 §8)
-  apart, against 61.6 and 43.2 s for FMM3D's whole call (review 2026-11-12, B1).
+  10⁻⁶ on Kathleen; W1 at kD = 500 22.4 s, our evaluation with the build apart
+  (not reported at 10⁻⁶; 10.6–14.8 s on this case at 10⁻⁷ and 10⁻⁸, H6 §8), against 61.6 and
+  43.2 s for FMM3D's whole call (review 2026-11-12, B1).
 - [x] **CH6.2e The counts' corner.** Report: `fmm-validate/results/helmholtz-ch6-2e.md`. The FMM
   held at reach 4.5; its adoption signed off 2026-11-07 and withdrawn by CH6.2g.
 - [x] **CH6.2g The counts' reach adopted.** Report: `fmm-validate/results/helmholtz-ch6-2g.md`.
@@ -505,7 +510,9 @@ task's full line is in its record or report and its progress entry
   10⁻⁶ and 10⁻⁸ under the default and on all-RCR, in ℓ2 and per box against the sampled
   direct sum: within ε, or the degrees (the plateau, p_w at 10⁻⁶ on the exponential M2L)
   that such a density needs, before CH4.3 calibrates on this rule. *Needs:* CH3.6.
-  *Machines:* Kathleen. *Sign-off:* the criterion; the charge model of the gates.
+  *Machines:* Kathleen. *Sign-off:* the criterion; the charge model of the gates (a check of this task only;
+  whether a smooth density becomes a standing workload, amending D12, is decided on its
+  result: question 4 of #209, the user, 2026-11-12, on #209: "I agree").
 - [ ] **CH4.0c The degree rule beyond its measured range.** Added on 2026-11-02 at the H3
   gate (question 4b; CH3.3's sign-off 2): the high-frequency branch is measured to x = 65
   and checked at x = 108 only, and falls below S7's per-pair p* above that at ε ≤ 10⁻⁷.
@@ -533,8 +540,9 @@ task's full line is in its record or report and its progress entry
     and W1 at kD = 500 and W3 at kD = 100.
   - The leaf size's effect on the degrees and the near field's share recorded, with the
     leaf rule's forced levels named where c_leaf binds before the points do.
-  - Proposed (review 2026-11-12, A2; question 2 of its pull request, as it reopens D11):
-    c_leaf swept as well, from 1 to 2, on the cases where it binds. On W1 at kD = 500 every
+  - Added on 2026-11-12 (review A2; question 2 of #209, the user, 2026-11-12, on #209: "I agree"):
+    c_leaf swept as well, from 1 to 2, on the cases where it binds. D11's c_leaf = 1 stays
+    the default until this task's sign-off says otherwise. On W1 at kD = 500 every
     leaf is forced to level 7 at about 27 points, so the sweep of the points alone cannot
     change that tree. The errors still within ε and CH3.4b's contract range checked at
     each c_leaf.
@@ -545,8 +553,9 @@ task's full line is in its record or report and its progress entry
   Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64
   stays best, and why `fastker`'s leaves do not carry over. *Needs:* CH6.2h, CH3.4c.
   *Machines:* Kathleen, locust (the M6 with the user's go-ahead). *Sign-off:* the default.
-- [ ] **CH4.0e The comparison under the default, and H4's expected gain.** Proposed on
-  2026-11-12 by the review's triage (`docs/reviews/2026-11-12-H6.md`, A1, B2, B5). CH3.6 is
+- [ ] **CH4.0e The comparison under the default, and H4's expected gain.** Added on
+  2026-11-12 by the review's triage (`docs/reviews/2026-11-12-H6.md`, A1, B2, B5; question 1
+  of #209, the user, 2026-11-12, on #209: "I agree"). CH3.6 is
   the only matrix with both codes at the same settings, and it is from before `Auto`, D8
   and the raised degree; the figures since are estimates across rank × thread splits. And
   the levels H4 can change are 35–40 % of W1's evaluation at kD = 500 and 10⁻⁶, about 20 %
@@ -698,7 +707,7 @@ task's full line is in its record or report and its progress entry
 - [ ] **CH7.5d Exponential M2L on the device**, if D8 adopted it on the host. On CH7.5a's
   merge and shift kernels, with the Helmholtz conversions (CH6.1c's pair chain) and the
   quadrature per level (CH6.1e). *Done when:* as CH6.1 on the device. *Needs:* CH7.5c,
-  CH6.2, CH7.1, D8, CHA.6 (proposed, question 3). *Machines:* locust.
+  CH6.2, CH7.1, D8. *Machines:* locust.
 - [ ] **CH7.5f CubeCL 0.11.3 and cubek 0.3.1.** Added on 2026-11-06 (the user: "Please
   schedule right before CH7.5e"; off the priority list), so that CH7.5e's device baselines
   are taken on the new releases. The workspace pins `cubecl` `=0.11.0`, `cubek-matmul` and
@@ -740,7 +749,7 @@ task's full line is in its record or report and its progress entry
 
 - [ ] **CH8.1 Byte cap for the replicated top; exchange of the high-frequency levels.**
   *Done when:* bit for bit the one-rank output on P ranks; memory per rank and per node
-  bounded. *Needs:* CH4.4, CHA.7 (proposed, question 3). *Machines:* Kathleen.
+  bounded. *Needs:* CH4.4, CHA.7. *Machines:* Kathleen.
 - [ ] **CH8.2 Kathleen scaling at kD of a few hundred.** *Done when:* efficiency and memory
   reported as in Phase 5S, at most 4 nodes per job. *Needs:* CH8.1. *Machines:* Kathleen.
 - [ ] **H8.G Gate.** `/milestone-gate H8`. *Needs:* every task above.
@@ -779,9 +788,11 @@ task's full line is in its record or report and its progress entry
 ## Architecture and cleanup (HA)
 
 From the architecture pass of the project reviews (`docs/reviews/`; the first,
-`docs/reviews/2026-11-12-H6.md` §2, after the H6 gate), proposed by its triage on 2026-11-12
-and pending the user's sign-off (question 3 of its pull request). Not a milestone: no gate,
-no issue, and `/milestone-gate` does not close it; each later review adds to it.
+`docs/reviews/2026-11-12-H6.md` §2, after the H6 gate), by its triage of 2026-11-12
+(questions 3 and 6 of #209, the user, 2026-11-12, on #209: "I agree": the section and its IDs as written,
+CHA.1 to CHA.3 on the priority list, CHA.7 a *Need* of CH8.1, CHA.6 recommended before
+CH7.5d but not a *Need* of it, no issue). Not a milestone: no gate, no issue, and
+`/milestone-gate` does not close it; each later review adds to it.
 
 Every task here keeps constraint 1 of the proposal's §2 in its own *Done when*: Laplace's
 outputs bit for bit, its benchmarks within D9's spread wherever a host or device path's code
@@ -830,7 +841,8 @@ item is removed only where the task names it.
   (outgoing, merge for the parent, convert for the child), as `HostKernel` is. *Done when:*
   both operators bit for bit; Laplace within D9 on the three machines; the two split
   thresholds (a quarter, a half) kept as each operator's own constant, or unified by a
-  measurement. *Machines:* locust, Kathleen.
+  measurement. Recommended before CH7.5d, which restates the traversal on the device
+  either way. *Machines:* locust, Kathleen.
 - [ ] **CHA.7 One distributed build for both facades.** Review L1, L3. The steps of
   `FmmBuilder::build` (the settings' agreement, the node split, the plan, the near rule and
   the second cut, the routing by node, the evaluator, the timings) in `pipeline`, behind a
@@ -850,7 +862,8 @@ item is removed only where the task names it.
   the history in `progress.md` and the phase documents; each crate CLAUDE.md cut to its
   rules and checks (the time rule of `fmm-exec/CLAUDE.md` restated to what holds);
   `docs/design/workspace-structure.md` has the Helmholtz modules; the crate descriptions
-  and `fmm-exec/src/lib.rs` name Helmholtz. Comments and documents only, one crate per PR.
+  and `fmm-exec/src/lib.rs` name Helmholtz; `laplace-fmm-plan.md` §2.5's 0.76ᵖ named as
+  the M2L's ratio (M10). Comments and documents only, one crate per PR.
 - [ ] **CHA.10 Housekeeping.** Review K2, U3. *Done when:* the one-off scripts of
   `tools/helmholtz/` and the task-named cases of `tools/scaling/run.sh` are apart from the
   living tools, each report's reproduction line still valid; `octree/Cargo.toml` takes its
