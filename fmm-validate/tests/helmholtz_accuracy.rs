@@ -32,7 +32,6 @@ use nd_fmm_exec::helmholtz::{
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
-use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
     Case, Density, Oracle, PLANE_WAVE_DIRECTION, Problem, Row, checksum, complex_k, run,
@@ -45,6 +44,7 @@ use nd_fmm_validate::helmholtz_fmm3d::{
     sample_errors, sampled_bytes,
 };
 use nd_fmm_validate::helmholtz_workloads::Workload;
+use nd_fmm_validate::{SplitMix64, points};
 
 /// An output of `n` targets, 2 complex vectors with gradients, filled with random values.
 fn random_output(n: usize, rng: &mut SplitMix64) -> Output<f64> {
@@ -657,11 +657,11 @@ fn helmholtz_accuracy_harness() {
 /// domain and the leaves as named.
 fn check_densities(world: &SimpleCommunicator) {
     let case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
-    let random = Case {
-        density: Density::Random,
-        ..case.clone()
-    };
-    assert_eq!(Problem::new(&random), Problem::new(&case));
+    // §9.1's charges as before the field: Re q then Im q from the generator of seed + 1.
+    let random = Problem::new(&case);
+    let mut rng = SplitMix64::new(case.seed + 1);
+    assert_eq!(random.re[0], points::charges(&mut rng, random.len()));
+    assert_eq!(random.im[0], points::charges(&mut rng, random.len()));
     let wave = Case {
         density: Density::PlaneWave,
         ..case.clone()
@@ -682,6 +682,8 @@ fn check_densities(world: &SimpleCommunicator) {
     assert!(problem.re[0].iter().all(|&q| q == 1.0));
     let oracle = Oracle::sharded(complex_k(&constant), &problem, true, 2, world);
     let row = run(&constant, &problem, &oracle, 2, world).expect("the FMM runs");
+    let one = run(&constant, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(one.checksum, row.checksum, "threads change the output");
     assert!(
         row.errors[0][0] <= 1e-3 && row.errors[0][1] <= 1e-3,
         "{:?}",

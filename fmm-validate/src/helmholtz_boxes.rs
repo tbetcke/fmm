@@ -393,19 +393,18 @@ mod tests {
             targets.contains(&7) && targets.contains(&3),
             "the samples kept"
         );
+        // Outside the boxes of the samples 3 and 7, exactly min(held, 4) per box.
+        let kept = [grid.box_of(points[3]), grid.box_of(points[7])];
         let mut counts: HashMap<u64, (usize, usize)> = HashMap::new();
         for (i, &x) in points.iter().enumerate() {
             let entry = counts.entry(grid.box_of(x)).or_default();
             entry.0 += 1;
-            if targets.binary_search(&i).is_ok() && i != 3 && i != 7 {
-                entry.1 += 1;
-            }
+            entry.1 += usize::from(targets.binary_search(&i).is_ok());
         }
-        for (held, taken) in counts.values() {
-            assert!(
-                *taken <= 4 && *taken >= (*held).min(4).saturating_sub(2),
-                "{held} {taken}"
-            );
+        for (key, (held, taken)) in &counts {
+            if !kept.contains(key) {
+                assert_eq!(*taken, (*held).min(4), "box {key}");
+            }
         }
         // A box with fewer points than s gives all of them.
         let all = box_sample(&points[..3], &[], &unit_grid(0), 10, 1);

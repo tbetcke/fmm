@@ -380,12 +380,12 @@ fn worst_table(
 fn faces_table(base: &Measured, reference: &Reference, problem: &Problem, grid: &Grid, eps: f64) {
     let deepest = grid.level;
     let rms = reference.rms();
-    let mut bins = vec![(0usize, [0.0f64; 2], [0.0f64; 2]); deepest];
+    let mut bins = vec![(0usize, [0.0f64; 2], [0.0f64; 2]); deepest.max(1)];
     for (j, &i) in reference.targets.iter().enumerate() {
         let closeness = face_closeness(&offsets(problem.points[i], grid, deepest));
         let faces = closeness.iter().skip(2).filter(|&&v| v >= 0.9).count();
         let e = base.errors.norms(j);
-        let bin = &mut bins[faces.min(deepest - 1)];
+        let bin = &mut bins[faces.min(deepest.saturating_sub(1))];
         bin.0 += 1;
         for (f, e) in e.into_iter().enumerate() {
             bin.1[f] += e * e;
@@ -561,7 +561,7 @@ fn main() {
         let degrees = base.run.row.degrees.clone();
         let mut parts = vec![None; degrees.len()];
         for l in 2..degrees.len() {
-            if base.run.row.v_pairs[l] == 0 && l + 1 < degrees.len() {
+            if base.run.row.v_pairs[l] == 0 {
                 continue;
             }
             let mut named = degrees.clone();
