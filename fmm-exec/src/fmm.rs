@@ -2154,6 +2154,9 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // that every rank returns here alike.
         let start = Instant::now();
         let mut device_time = open_time + tuning_time;
+        // Without the `gpu` feature `OpenedDevice` has no value, so this branch never runs
+        // and rustc (from 1.100) reports the arguments after `device` as unreachable.
+        #[cfg_attr(not(feature = "gpu"), allow(unreachable_code))]
         if let Some(device) = device {
             let attached = self.attach_device(
                 &mut evaluator,

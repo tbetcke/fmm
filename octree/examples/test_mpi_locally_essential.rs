@@ -353,8 +353,8 @@ fn check<C: CommunicatorCollectives>(name: &str, tree: &Octree<'_, C>, comm: &C)
     // The partition map against the gathered blocks, leaves and owners.
     let mut ok = map.blocks() == gathered.blocks.as_slice() && map.nranks() == size;
     ok &= map.rank() == rank;
-    for r in 0..size {
-        ok &= map.rank_blocks(r).len() == gathered.nblocks[r];
+    for (r, &nblocks) in gathered.nblocks[..size].iter().enumerate() {
+        ok &= map.rank_blocks(r).len() == nblocks;
     }
     for (b, &block) in gathered.blocks.iter().enumerate() {
         ok &= map.is_leaf_block(b) == gathered.is_leaf(block);

@@ -534,8 +534,9 @@ fn evaluate<T: RealScalar, F: Field<T>>(
         harmonics(p, v, buffers.harmonics);
         for n in 0..=p {
             let mut sum = F::zero();
-            for i in n * n..(n + 1) * (n + 1) {
-                sum = sum + coefficient(i) * buffers.harmonics[i];
+            let degree = &buffers.harmonics[n * n..(n + 1) * (n + 1)];
+            for (i, &y) in (n * n..).zip(degree) {
+                sum = sum + coefficient(i) * y;
             }
             phi = phi + buffers.values[n] * sum;
         }
