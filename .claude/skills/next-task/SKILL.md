@@ -79,6 +79,12 @@ Say in one line which task you take and why it is next.
 
 ## 3. Plan
 
+If the task's roadmap text cites a review ("review <date>, <ID>"), read that finding in
+`docs/reviews/<date>-<milestone>.md` first, and check it against the tree as it is now: a
+finding is a reviewer's claim from that date, and its line numbers move. A task of the
+section "Architecture and cleanup (HA)" (CHA.<n>) has no proposal §10 entry and no issue:
+its acceptance is the roadmap's *Done when* with constraint 1, and its PR has no `Part of`.
+
 Write `docs/helmholtz/tasks/<ID>.md`:
 
 ```
