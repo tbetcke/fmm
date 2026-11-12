@@ -61,6 +61,10 @@ sign-off 2 also names the plane wave's trace.
 
 - `tools/helmholtz/ch4-0c-runs.sh`: the task's stages (below), one `helmholtz_boxes` launch per
   case, as CH4.0b's script.
+- `fmm-validate/examples/helmholtz_boxes.rs`: a line on stderr per run as it finishes (the
+  degrees, the build, the evaluation and its M2L by level, the error bookkeeping) and one for
+  the problem's setup. The tables print only after the last run, so a long launch showed no
+  progress (the user, 2026-11-12, during jobs 633320 and 633321).
 - `fmm-exec/src/helmholtz/degree.rs`, module docs only: the measured range stated as D1's
   10⁻³ ≤ ε ≤ 10⁻⁸ (the plateau to 10⁻¹⁰), with S7's comparison over 10⁻¹⁸ ≤ ε ≤ 10⁻¹ named as an
   algebraic bound, not a measured range (review M6); the high-frequency branch checked at
