@@ -37,6 +37,10 @@ concurrency:
 # grown from about 2 m 50 s to 3 m 31 s – 4 m 49 s over Helmholtz H3 (CH3.4a and CH3.4b's
 # tests), and main's runs of #166, #169 and #172 were cancelled at 5 in the ignored release
 # tests, no test failed.
+# run-tests rose from 30 to 45 on 2026-11-12 (the H6 gate): a cold-cache run after a Rust
+# release (the cache key holds the rustc version) took 4 minutes to install Rust and 25 to
+# build, and main's run of #188 was cancelled at 30 a minute into its tests, no test failed;
+# its warm runs over Helmholtz H6 took 5.8–10.3 minutes.
 # Test builds at opt-level 1 (2026-10-31): the tests ran unoptimised, which made the
 # numeric tests 2–20 times slower (M6: mpi_exec 160 s → 8–11 s, invariance 71 → 14 s at
 # one rank). `CARGO_PROFILE_DEV_OPT_LEVEL=1` keeps the dev profile's debug assertions and
@@ -48,7 +52,7 @@ jobs:
   run-tests-rust:
     name: run-tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       APT_PACKAGES: libclang-dev libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
     steps:
