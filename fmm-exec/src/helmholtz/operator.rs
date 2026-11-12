@@ -515,21 +515,46 @@ impl LevelShape {
 
 /// m*, the fewest columns per table read at which [`HelmholtzM2l::Auto`] runs Batched on a
 /// level of degree p (Helmholtz CH4.0), for the column kernel's ISA and the multipole's
-/// planes: the smallest column count at which the fused Batched M2L per pair reaches 1.1×
-/// Rotation's speed in `helmholtz_m2l` (fmm-validate/results/helmholtz-ch4-0.md, §1).
-/// Auto runs Batched on a level only where [`LevelShape::batched_columns`] is at least this,
-/// and p_l at most its crossover ([`auto_batched_max_degree`] or the degree named), which
-/// stays a condition of its own. A function of the machine class and p alone (proposal §2,
-/// constraint 9).
+/// planes (fmm-validate/results/helmholtz-ch4-0.md, §1–§2): the column count c at which the
+/// fused Batched M2L per pair reaches the class's margin over Rotation's speed in
+/// `helmholtz_m2l`, from a fit of Batched's cost as a/c + b per degree, the margin the
+/// level call needs over the pair (1.45 on AVX-512 and AVX2 with two planes, 1.2 with one,
+/// 1.15 on NEON, from the FMM's per-level times at one thread); never falling as p grows;
+/// 64 (a full block's columns, which no level reaches) from p = 16 and where Batched never
+/// reaches the margin. NEON's is the larger of the M6's and locust's; the scalar kernel
+/// (the reference path) takes NEON's, unmeasured. Auto runs Batched on a level only where
+/// [`LevelShape::batched_columns`] is at least this and p_l at most its crossover
+/// ([`auto_batched_max_degree`] or the degree named), a condition of its own. A function of
+/// the machine class and p alone (proposal §2, constraint 9).
 pub fn auto_batched_min_columns(isa: Isa, planes: usize, p: usize) -> f64 {
-    let _ = (isa, planes);
-    // Provisional until the pair evidence: about two columns per read to p = 8, more
-    // towards the crossover.
-    match p {
-        0..=8 => 2.0,
-        9..=11 => 4.0,
-        _ => 8.0,
-    }
+    const AVX512_ONE: [f64; 16] = [
+        0.4, 0.4, 0.4, 0.4, 0.6, 0.8, 0.9, 1.1, 1.6, 2.5, 3.1, 3.8, 4.6, 5.4, 9.1, 11.8,
+    ];
+    const AVX512_TWO: [f64; 16] = [
+        0.7, 0.7, 0.7, 0.7, 0.9, 1.2, 1.3, 1.6, 2.4, 3.9, 4.6, 5.7, 7.0, 10.4, 15.9, 28.2,
+    ];
+    const AVX2_ONE: [f64; 16] = [
+        0.3, 0.3, 0.3, 0.3, 0.5, 0.7, 0.9, 1.2, 1.9, 3.1, 3.9, 10.6, 14.5, 16.3, 32.3, 41.3,
+    ];
+    const AVX2_TWO: [f64; 16] = [
+        0.6, 0.6, 0.6, 0.6, 0.8, 1.0, 1.4, 2.1, 3.1, 5.6, 7.5, 37.5, 64.0, 64.0, 64.0, 64.0,
+    ];
+    const NEON_ONE: [f64; 16] = [
+        0.3, 0.3, 0.3, 0.3, 0.6, 0.8, 1.3, 2.1, 3.2, 8.0, 13.7, 64.0, 64.0, 64.0, 64.0, 64.0,
+    ];
+    const NEON_TWO: [f64; 16] = [
+        0.4, 0.4, 0.4, 0.4, 0.8, 1.2, 2.1, 3.9, 7.5, 23.7, 64.0, 64.0, 64.0, 64.0, 64.0, 64.0,
+    ];
+    let table = match (isa, planes == 1) {
+        (Isa::Avx512, true) => &AVX512_ONE,
+        (Isa::Avx512, false) => &AVX512_TWO,
+        (Isa::Avx2, true) => &AVX2_ONE,
+        (Isa::Avx2, false) => &AVX2_TWO,
+        // NEON, the scalar kernel (unmeasured) and any later ISA until measured.
+        (_, true) => &NEON_ONE,
+        (_, false) => &NEON_TWO,
+    };
+    table.get(p).copied().unwrap_or(M2L_BLOCK_TARGETS as f64)
 }
 
 /// The narrowest block of Batched's level call under the split of

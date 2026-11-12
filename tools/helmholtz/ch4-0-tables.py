@@ -4,6 +4,7 @@
 
     tools/helmholtz/ch4-0-tables.py pairs <machine>=<out-dir> [...]
     tools/helmholtz/ch4-0-tables.py fmm <machine>=<out-dir> [...]
+    tools/helmholtz/ch4-0-tables.py rule <machine>:<isa>=<out-dir> [...]
 
 `pairs` reads every `pairs-<isa>-c<c>-<a|b>.md` (helmholtz_m2l at c pairs per offset) and
 prints, per machine, ISA and planes, Rotation's time per pair over fused Batched's at each
@@ -18,7 +19,16 @@ Rotation, Batched at either width and the waves where the rule ran them), the de
 (the term on, the library's widths) and the old rule's (the term off, blocks of 64; on
 `ch3-2d` the term off) M2L sums and evaluations over it, the largest spread between the two
 launches, and the levels where the default's method is more than 1.10× the level's
-fastest, with m̂ and the exact columns per read. Python 3.9 standard library only.
+fastest, with m̂ and the exact columns per read.
+
+`rule` reads the `ch3-2d` launches (one thread) of each directory and evaluates, per case, the
+rule with the term at the constants of `MIN_COLUMNS` (which mirror
+`nd_fmm_exec::helmholtz::auto_batched_min_columns`) and without it (CH3.2d's rule) on the
+measured per-level times: a level runs Batched where the rule says so and Batched ran there
+(its tables fit the budget), else Rotation, each at its time in the Rotation and the
+Batched run (the mean of the two launches); the evaluation is Rotation's with its M2L
+replaced. Against the per-level best of the two, as CH3.2d evaluated its crossovers. Python
+3.9 standard library only.
 """
 
 import os
@@ -224,11 +234,104 @@ def fmm(machines):
               f"{r['spread']:.2f} | {losses} |")
 
 
+# `auto_batched_max_degree` and `auto_batched_min_columns` of nd-fmm-exec, by (ISA, planes).
+MAX_DEGREE = {("avx512", 1): 15, ("avx512", 2): 15, ("avx2", 1): 12, ("avx2", 2): 11,
+              ("neon", 1): 12, ("neon", 2): 10}
+MIN_COLUMNS = {
+    ("avx512", 1): [0.4, 0.4, 0.4, 0.4, 0.6, 0.8, 0.9, 1.1, 1.6, 2.5, 3.1, 3.8, 4.6, 5.4, 9.1, 11.8],
+    ("avx512", 2): [0.7, 0.7, 0.7, 0.7, 0.9, 1.2, 1.3, 1.6, 2.4, 3.9, 4.6, 5.7, 7.0, 10.4, 15.9,
+                    28.2],
+    ("avx2", 1): [0.3, 0.3, 0.3, 0.3, 0.5, 0.7, 0.9, 1.2, 1.9, 3.1, 3.9, 10.6, 14.5, 16.3, 32.3,
+                  41.3],
+    ("avx2", 2): [0.6, 0.6, 0.6, 0.6, 0.8, 1.0, 1.4, 2.1, 3.1, 5.6, 7.5, 37.5] + [64.0] * 4,
+    ("neon", 1): [0.3, 0.3, 0.3, 0.3, 0.6, 0.8, 1.3, 2.1, 3.2, 8.0, 13.7] + [64.0] * 5,
+    ("neon", 2): [0.4, 0.4, 0.4, 0.4, 0.8, 1.2, 2.1, 3.9, 7.5, 23.7] + [64.0] * 6,
+}
+
+
+def min_columns(isa, planes, p):
+    table = MIN_COLUMNS[(isa, planes)]
+    return table[p] if p < len(table) else 64.0
+
+
+def batched_columns(pairs, targets):
+    """`LevelShape::batched_columns`."""
+    if pairs == 0 or targets == 0:
+        return 0.0
+    blocks = -(-targets // 64)
+    per_block = targets / blocks
+    row = min(pairs / targets, 316.0)
+    visited = 316.0 * (1.0 - (1.0 - row / 316.0) ** per_block)
+    return pairs / (blocks * visited)
+
+
+def rule(machines):
+    print("| machine | ISA | case | charges | p by level | term: Batched levels | rule s "
+          "| best s | rule ÷ best | without the term: levels | ÷ best | Rotation s |")
+    print("| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | ---: | ---: |")
+    for spec, directory in machines:
+        machine, isa = spec.split(":")
+        data = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+        info, evaluate = {}, defaultdict(list)
+        for name in sorted(os.listdir(directory)):
+            m = re.fullmatch(r"ch3-2d-(.+)-(forward|reverse)\.md", name)
+            if not m:
+                continue
+            planes = 1 if m.group(1).endswith("real") else 2
+            _, levels = read(os.path.join(directory, name))
+            for row in levels:
+                if len(row) < 24:
+                    continue
+                key = (row[0], row[2], row[3], planes)
+                if row[6] == "Σ":
+                    if row[4] == "rotation":
+                        evaluate[key].append(float(re.search(r"evaluate ([0-9.]+) s",
+                                                             row[8]).group(1)))
+                    continue
+                level = int(row[6])
+                if row[4] in ("rotation", "batched-fused"):
+                    method = "batched" if row[8].startswith("batched") else "rotation"
+                    data[key][level][(row[4], method)].append(float(row[10]))
+                info[(key, level)] = (int(row[7]), int(row[9]), int(row[20]))
+        for key in sorted(data):
+            mean = lambda xs: sum(xs) / len(xs)
+            planes = key[3]
+            rows = []
+            for level in sorted(data[key]):
+                times = data[key][level]
+                p, pairs, targets = info[(key, level)]
+                rotation = mean(times[("rotation", "rotation")])
+                batched = times.get(("batched-fused", "batched"))
+                rows.append((level, p, pairs, targets, rotation,
+                             mean(batched) if batched else None))
+            def chosen(term):
+                levels, total = [], 0.0
+                for level, p, pairs, targets, rotation, batched in rows:
+                    on = (batched is not None and p <= MAX_DEGREE[(isa, planes)]
+                          and (not term or batched_columns(pairs, targets)
+                               >= min_columns(isa, planes, p)))
+                    total += batched if on else rotation
+                    if on:
+                        levels.append(str(level))
+                return levels, total
+            best = sum(min(r[4], r[5]) if r[5] is not None else r[4] for r in rows)
+            rotation_m2l = sum(r[4] for r in rows)
+            base = mean(evaluate[key]) - rotation_m2l
+            new_levels, new = chosen(True)
+            old_levels, old = chosen(False)
+            ps = ", ".join(str(r[1]) for r in rows)
+            print(f"| {machine} | {isa} | {key[0]} kD = {key[1]}, {key[2]} | "
+                  f"{'real' if planes == 1 else 'complex'} | {ps} | {','.join(new_levels) or '–'} | "
+                  f"{base + new:.3f} | {base + best:.3f} | {(base + new) / (base + best):.3f} | "
+                  f"{','.join(old_levels) or '–'} | {(base + old) / (base + best):.3f} | "
+                  f"{base + rotation_m2l:.3f} |")
+
+
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ("pairs", "fmm"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("pairs", "fmm", "rule"):
         sys.exit(__doc__)
     machines = [tuple(a.split("=", 1)) for a in sys.argv[2:]]
-    {"pairs": pairs, "fmm": fmm}[sys.argv[1]](machines)
+    {"pairs": pairs, "fmm": fmm, "rule": rule}[sys.argv[1]](machines)
 
 
 if __name__ == "__main__":

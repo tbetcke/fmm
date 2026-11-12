@@ -66,7 +66,7 @@ others() {
 launch() {
     local name=$1
     shift
-    [[ "$name" =~ ${ONLY:-.} ]] || return
+    [[ "$name" =~ ${ONLY:-.} ]] || return 0
     local attempt=0
     while :; do
         if $gate; then
