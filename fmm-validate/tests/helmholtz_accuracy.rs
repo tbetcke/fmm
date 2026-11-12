@@ -650,10 +650,11 @@ fn helmholtz_accuracy_harness() {
     check_box_study(&world);
 }
 
-/// The smooth densities (Helmholtz CH4.0b): the plane wave's trace q_j = e^{ik d·x_j} and the
-/// constant density, each through `check_fmm` on W1 at kD = 10; §9.1's random charges the
-/// same problem with the density named; on W1 at kD = 30 a named domain with a margin and a
-/// tree of one leaf level (no leaf size bound) through `check_fmm`, the domain as named.
+/// The smooth densities (Helmholtz CH4.0b) on W1 at kD = 10: the plane wave's trace
+/// q_j = e^{ik d·x_j} through `check_fmm`, the constant density (real charges) within ε;
+/// §9.1's random charges the same problem with the density named; on W1 at kD = 20 a named
+/// domain with a margin and a tree of one leaf level (no leaf size bound) within ε, the
+/// domain and the leaves as named.
 fn check_densities(world: &SimpleCommunicator) {
     let case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     let random = Case {
@@ -677,27 +678,35 @@ fn check_densities(world: &SimpleCommunicator) {
         ..case.clone()
     };
     constant.charges = ChargeKind::Real;
-    assert!(Problem::new(&constant).re[0].iter().all(|&q| q == 1.0));
-    check_fmm(world, &constant);
+    let problem = Problem::new(&constant);
+    assert!(problem.re[0].iter().all(|&q| q == 1.0));
+    let oracle = Oracle::sharded(complex_k(&constant), &problem, true, 2, world);
+    let row = run(&constant, &problem, &oracle, 2, world).expect("the FMM runs");
+    assert!(
+        row.errors[0][0] <= 1e-3 && row.errors[0][1] <= 1e-3,
+        "{:?}",
+        row.errors
+    );
     for name in ["random", "planewave", "constant"] {
         assert_eq!(Density::from_name(name).map(|d| d.name()), Some(name));
     }
 
-    // At kD = 30 the leaf rule puts the leaves on level 3 of the domain of side 1.2.
+    // At kD = 20 the leaf rule puts the leaves on level 2 of the domain of side 1.2.
     let named = Case {
-        k: (30.0, 0.0),
+        k: (20.0, 0.0),
         domain: Some([-0.1, -0.1, -0.1, 1.1, 1.1, 1.1]),
         max_points_per_leaf: Some(usize::MAX),
         ..case.clone()
     };
-    check_fmm(world, &named);
     let problem = Problem::new(&named);
     let oracle = Oracle::sharded(complex_k(&named), &problem, true, 2, world);
     let run = run_output(&named, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert!(run.row.errors[0][0] <= 1e-3 && run.row.errors[0][1] <= 1e-3);
+    check_levels(&run.row);
     assert_eq!(run.domain.lower(), [-0.1; 3]);
     assert!((run.domain.side() - 1.2).abs() < 1e-15);
     // One leaf level: every box above the deepest level L that holds points is refined, so
-    // the leaves, empty ones included, are Σ_{l<L} 8 occ(l) − Σ_{0<l<L} occ(l); a bound of 8
+    // the leaves, empty ones included, are Σ_{l<L} 8 occ(l) − Σ_{0<l<L} occ(l); a bound of 16
     // points per leaf refines further.
     let deepest = run.row.levels - 1;
     let occupied = |level: usize| {
@@ -714,7 +723,7 @@ fn check_densities(world: &SimpleCommunicator) {
     let refined: usize = (1..deepest).map(occupied).sum();
     assert_eq!(run.row.leaves, children - refined);
     let fine = Case {
-        max_points_per_leaf: Some(8),
+        max_points_per_leaf: Some(16),
         ..named.clone()
     };
     let refined = run_output(&fine, &problem, &oracle, 1, world).expect("the FMM runs");

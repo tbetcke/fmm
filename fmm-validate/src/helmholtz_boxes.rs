@@ -318,7 +318,7 @@ pub fn level_shares(base: &Errors, raised: &[Option<Errors>]) -> Vec<[f64; 2]> {
     shares
 }
 
-/// Level l's part of the error at reference target j, |base − raised[l]| per field, over
+/// Level l's part of the error at reference target j, |base − raised\[l\]| per field, over
 /// |base| at j.
 pub fn level_parts_at(base: &Errors, raised: &[Option<Errors>], j: usize) -> Vec<[f64; 2]> {
     let b = base.norms(j);
