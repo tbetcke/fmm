@@ -11,7 +11,9 @@
 //! FMM's full-target error its error at the samples (which are every point), the same on
 //! one rank and on several. The M2L rule per level (Helmholtz CH3.2d): `Auto` at a named
 //! crossover reported in the row, within ε at 1 and 2 threads and on one rank; below every
-//! degree Rotation's checksum, above every degree Batched on every level with tables. The
+//! degree Rotation's checksum, above every degree Batched on every level with tables (the
+//! term of the levels' V lists off, Helmholtz CH4.0; with it on, reported, and the levels'
+//! boxes, estimate and visits consistent with their pairs). The
 //! exponential M2L (Helmholtz CH6.1e): under the precision rule within
 //! [`PLANE_WAVE_RATIO`] of Rotation's errors on small cases of CH3.1c's matrix, each level's
 //! precision in the row, within ε at 1 and 2 threads and on one rank, and Rotation's output
@@ -24,8 +26,8 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, Wavenumber, WavenumberKind, auto_m2l_mul_add, s7_degree,
+    ChargeKind, Degrees, Densities, HelmholtzM2l, LevelShape, Output, PlaneWavePrecision,
+    PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -159,6 +161,31 @@ fn check_levels(row: &Row) {
     }
     assert_eq!(row.v_pairs.len(), row.levels);
     assert_eq!(&row.v_pairs[..2], &[0, 0], "no V pairs on levels 0 and 1");
+    // The shapes (Helmholtz CH4.0): a box per target, a visit for at most 64 pairs (a block
+    // of 64 targets) and at least one pair, m̂ from the shape.
+    assert_eq!(row.v_targets.len(), row.levels);
+    assert_eq!(row.block_visits.len(), row.levels);
+    assert_eq!(row.batched_columns.len(), row.levels);
+    assert_eq!(row.v_targets[0], 1, "the root");
+    for l in 0..row.levels {
+        let (pairs, visits) = (row.v_pairs[l], row.block_visits[l]);
+        assert!(
+            visits <= pairs && pairs <= 64 * visits,
+            "level {l}: {pairs} pairs in {visits} visits"
+        );
+        assert!(
+            pairs <= 189 * row.v_targets[l],
+            "level {l}: V rows of at most 189"
+        );
+        assert_eq!(
+            row.batched_columns[l],
+            LevelShape {
+                pairs: pairs as u64,
+                targets: row.v_targets[l] as u64
+            }
+            .batched_columns()
+        );
+    }
     assert_eq!(row.m2l_seconds[0], 0.0, "no M2L on level 0");
     assert!(
         row.v_pairs.iter().any(|&n| n > 0),
@@ -249,6 +276,10 @@ fn check_auto(world: &SimpleCommunicator) {
     // CH3.2d's rule: the exponential M2L, the default since D8, named off (with it below).
     assert!(case.auto_plane_wave);
     case.auto_plane_wave = false;
+    // And without the term of the levels' V lists (Helmholtz CH4.0), so that every level
+    // runs Batched above every degree; with it, below.
+    assert!(case.batched_term);
+    case.batched_term = false;
     case.m2l_max_degree = Some(smallest - 1);
     let below = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
     assert_eq!(below.m2l, HelmholtzM2l::Auto);
@@ -268,6 +299,17 @@ fn check_auto(world: &SimpleCommunicator) {
     let fused = run(&batched, &problem, &oracle, 1, world).expect("the FMM runs");
     assert_eq!(every.checksum, fused.checksum, "Auto above every degree");
     assert_eq!(every.m2l_plane_wave_min_degree, None, "off");
+    assert!(!every.batched_term);
+    // The term on: reported, each level Batched or not as its estimate says, at named block
+    // widths the same output.
+    let mut term = case.clone();
+    term.batched_term = true;
+    let on = run(&term, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert!(on.batched_term);
+    term.m2l_block_targets = Some(3);
+    let narrow = run(&term, &problem, &oracle, 2, world).expect("the FMM runs");
+    assert_eq!(narrow.m2l_block_targets, Some(3));
+    assert_eq!(narrow.checksum, on.checksum, "blocks of 3 at 2 threads");
     // With waves from degree 0 and no Batched level: PlaneWave's output.
     let mut plane_wave = case.clone();
     (plane_wave.m2l, plane_wave.m2l_max_degree) = (HelmholtzM2l::PlaneWave, None);

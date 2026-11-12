@@ -25,10 +25,11 @@
 #   `--block auto,64`, beside Rotation and (`matrix` only) Batched at both widths: the new
 #   default against CH6.2h's (term off, blocks of 64) and the per-level best.
 # Each launch's output in <out-dir>/<stage>-<case>-<order>.md, a line per launch in
-# <out-dir>/runs.log. BLAS threads 1. On macOS every launch waits until the other processes
-# use at most QUIET % CPU (default 150), samples them every 5 s during the launch, and
-# repeats a launch above DURING % (default 200) up to RETRIES times (default 2), as CH6.2h's
-# gate. TIMEOUT (default 3600) bounds a launch; ONLY (a regular expression on the launch
+# <out-dir>/runs.log. BLAS threads 1. On macOS (and with GATE=1 elsewhere) every launch
+# waits until the other processes use at most QUIET % CPU (default 150), samples them every
+# 5 s during the launch, and repeats a launch above DURING % (default 200) up to RETRIES
+# times (default 2), as CH6.2h's gate; on Linux `ps`'s %CPU is each process's average over
+# its lifetime, so the gate there sees a long-running process's new load late. TIMEOUT (default 3600) bounds a launch; ONLY (a regular expression on the launch
 # names) runs a subset.
 set -u
 mode=$1
@@ -50,6 +51,8 @@ if [ "$(uname)" = Darwin ]; then
     macos=true
     export HWLOC_COMPONENTS=${HWLOC_COMPONENTS:--darwin}
 fi
+gate=$macos
+[ "${GATE:-0}" = 1 ] && gate=true
 
 # The CPU percentage of every process but ps itself outside this script's process group
 # and the launch's (`others <pid>`: `timeout` runs the command in a group of its own).
@@ -66,14 +69,14 @@ launch() {
     [[ "$name" =~ ${ONLY:-.} ]] || return
     local attempt=0
     while :; do
-        if $macos; then
+        if $gate; then
             while [ "$(others)" -gt "$QUIET" ]; do sleep 10; done
         fi
         local before start=$SECONDS
-        before=$($macos && others || echo -)
+        before=$($gate && others || echo -)
         timeout "$TIMEOUT" "$@" < /dev/null > "$out/$name.md" 2> "$out/$name.err" &
         local pid=$! peak=0
-        if $macos; then
+        if $gate; then
             while kill -0 "$pid" 2> /dev/null; do
                 sleep 5
                 local now
@@ -85,7 +88,7 @@ launch() {
         local status=$?
         echo "$name: exit $status, $((SECONDS - start)) s, others ${before}% before," \
             "${peak}% peak during, $(date +%T)" | tee -a "$out/runs.log"
-        if $macos && [ "$peak" -gt "$DURING" ] && [ "$attempt" -lt "$RETRIES" ]; then
+        if $gate && [ "$peak" -gt "$DURING" ] && [ "$attempt" -lt "$RETRIES" ]; then
             attempt=$((attempt + 1))
             echo "$name: contended, repeat $attempt" | tee -a "$out/runs.log"
             continue
