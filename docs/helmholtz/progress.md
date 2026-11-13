@@ -3004,7 +3004,9 @@ request, using this template:
   24), `mpi_regressions` at 8; `helmholtz_fmm` again at 1, 2 and 4 after the last change. The
   opt-level 0 one-rank times: `helmholtz_fmm` 460 s (`main` 524 s), `mpi_regressions` 3.9 s
   (`main` 2.0 s). Nothing pending.
-- Decisions: questions for sign-off in the PR: (1) the default on; (2) CH4.0d1b's place, next.
+- Decisions: signed off (the user, 2026-11-13, on #216, "Please sign off both questions as
+  recommended"): (1) the rule on by default under `HelmholtzFmmBuilder`, as built; (2)
+  CH4.0d1b next on the priority list, before CH4.0d2.
 - Laplace: `Plan::new` unchanged (every Laplace test; counts without a zero give its plan);
   `plan_build_cost` on Kathleen job 633567 within `main`'s spread; no D9 evaluation runs (the
   user, 2026-11-13: "Tests + build time (Recommended)").

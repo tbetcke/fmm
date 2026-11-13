@@ -252,3 +252,7 @@ answered on 2026-11-13 by the user:
 4. Constraint 1's evidence: "Tests + build time (Recommended)": every Laplace test bit for bit,
    `Plan::new`'s views unchanged, `plan_build_cost` on Kathleen before and after; no D9
    evaluation runs.
+
+For sign-off (the report's §5), signed off 2026-11-13 (the user, on #216, "Please sign off both
+questions as recommended"): 1. the rule on by default under `HelmholtzFmmBuilder`, as built;
+2. CH4.0d1b (one plan build) next on the priority list, before CH4.0d2.

@@ -389,6 +389,9 @@ Within the run-to-run spread of `main` (the branch's medians 7.02, 80.69 and 94.
 
 ## 5. Questions for sign-off
 
+Signed off by the user on 2026-11-13 (#216): "Please sign off both questions as recommended".
+The rule stays on by default; CH4.0d1b is next on the priority list, before CH4.0d2.
+
 1. **The default.** (a) On, as built (recommended): the evaluation is never slower beyond
    noise and 0.2–0.66 of the rule off's where boxes are empty, and an FMM is built once and
    evaluated many times in the solvers it serves; with CH4.0d1b (one plan build) next on the

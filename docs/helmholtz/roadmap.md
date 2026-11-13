@@ -11,9 +11,9 @@ Status (2026-11-13): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0, CH4.0b and CH4.0c are merged;
 CH4.0d was split into CH4.0d1–d3 and CH4.0d1b added. CH4.0d1 (the empty-box rule of
 `nd-fmm-plan`, on under the Helmholtz builder: the evaluation 0.2–0.56 of before on sparse
-trees, the build 1.1–1.7× from a second plan) waits for its sign-off on the default. HR, H0,
-H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next:
-CH4.0d1b, then CH4.0d2 (as the PR proposes).
+trees, the build 1.1–1.7× from a second plan) is signed off with the rule on by default. HR,
+H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next:
+CH4.0d1b, then CH4.0d2 (#216's question 2).
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -63,7 +63,8 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
 4. CH4.0d1, CH4.0d1b, CH4.0d2, CH4.0d3 The Helmholtz leaf size (added on 2026-11-12, the user:
    "After CH4.0c (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and
    CH4.5's timings run on; split on 2026-11-13): the empty boxes, their build cost (added at
-   CH4.0d1; its place here is the PR's question 2), the V pairs of few points, the sweep
+   CH4.0d1, next after it: #216's question 2, signed off 2026-11-13), the V pairs of few
+   points, the sweep
 5. CH4.0e The comparison under the default, and H4's expected gain (review A1 and B2; its
    sign-off is H4's go-ahead and order)
 6. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
@@ -530,7 +531,7 @@ task's full line is in its record or report and its progress entry
   the M2L per level agreed; the evaluation 0.20–0.56 of the rule off's on W1 at kD = 500 and
   the under-resolved W3, noise on uniform trees; the build 1.1–1.7× (a second serial plan,
   CH4.0d1b). `Plan::new` and Laplace unchanged (plan build within spread on Kathleen).
-  *Sign-off pending* (the PR's question 1): the default.
+  Signed off (the user, 2026-11-13, on #216: "Please sign off both questions as recommended"): (1) the rule on by default; (2) CH4.0d1b next, before CH4.0d2.
 - [ ] **CH4.0d1b The empty-box rule's build cost.** Added at CH4.0d1 (report §0, §5): the rule
   builds the plan twice (`Plan::new` for the counts' exchange lists, then `Plan::with_rules`),
   and a plan is built serially at about 17 µs per box on Kathleen, so the build with the rule is
