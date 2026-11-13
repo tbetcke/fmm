@@ -102,7 +102,7 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_plan::evaluator::Evaluator;
 use nd_fmm_plan::evaluator::EvaluatorError;
 use nd_fmm_plan::index::BoxIndex;
-use nd_fmm_plan::near::LeafCounts;
+use nd_fmm_plan::near::{LeafCounts, LeafPair, NearRule, VPair};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair,
 };
@@ -165,9 +165,35 @@ pub enum HelmholtzFmmError {
     /// The charges of an evaluation do not fit the build.
     #[error("the charges: {0}")]
     Charges(#[from] DensityError),
+    /// A named V crossover ([`VNear::Crossover`]) is negative or not a number.
+    #[error("the V crossover must be at least 0, got {0}")]
+    VCrossover(f64),
     /// The input is invalid on another rank.
     #[error("the input is invalid on another rank")]
     OtherRank,
+}
+
+/// Which V pairs between two leaves the plan makes near pairs (Helmholtz CH4.0d2;
+/// [`HelmholtzFmmBuilder::near_v`]; `nd_fmm_plan::near::NearRule::with_v_pairs`): a V pair
+/// (t, s) of two leaves converts where n_s n_t, the source points of s times the target
+/// points of t, is below the crossover; its M2L is replaced by the exact P2P.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum VNear {
+    /// No V pair converts (the default until CH4.0d2's sign-off).
+    #[default]
+    Off,
+    /// The pairs with n_s n_t below this crossover on every level, for the measurements;
+    /// `f64::INFINITY` converts every V pair between leaves.
+    Crossover(f64),
+}
+
+impl std::fmt::Display for VNear {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Off => write!(f, "off"),
+            Self::Crossover(n) => write!(f, "{n}"),
+        }
+    }
 }
 
 impl From<FmmError> for HelmholtzFmmError {
@@ -211,6 +237,7 @@ pub struct HelmholtzFmmBuilder {
     c_leaf: f64,
     p2p: P2pChoice,
     empty_boxes: bool,
+    near_v: VNear,
     pair_calls: bool,
 }
 
@@ -252,6 +279,7 @@ impl HelmholtzFmmBuilder {
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             empty_boxes: true,
+            near_v: VNear::Off,
             pair_calls: false,
         }
     }
@@ -399,6 +427,22 @@ impl HelmholtzFmmBuilder {
         self
     }
 
+    /// Which V pairs between two leaves become near pairs (Helmholtz CH4.0d2, [`VNear`];
+    /// default [`VNear::Off`]). The plan applies `nd_fmm_plan`'s near rule with V pairs on
+    /// the counts the empty-box rule reads (the routes' points per local leaf, every held
+    /// ghost leaf's from its owner; counted even with the empty-box rule off): each pair is
+    /// decided on its target's rank from counts by key, so every rank count makes the
+    /// one-rank rows, and the output on P ranks is the one-rank FMM's of the same setting
+    /// bit for bit. A converted pair is exact (its M2L's truncation error gone), so the
+    /// output is not the rule off's; the source exchange then delivers the converted ghost
+    /// leaves' points too, and a multipole no row reads is no longer sent.
+    /// [`HelmholtzFmm::plan`]'s `near_pairs` reports the pairs offered and converted. W and
+    /// X pairs are never converted here.
+    pub fn near_v(mut self, choice: VNear) -> Self {
+        self.near_v = choice;
+        self
+    }
+
     /// The width of Batched's blocks in its level call (default: by the level's boxes and
     /// the threads, `batched_block_targets`; Helmholtz CH4.0), for the measurements and the
     /// tests (0 is taken as 1). The output does not depend on it.
@@ -542,6 +586,11 @@ impl HelmholtzFmmBuilder {
         if !(self.c_leaf > 0.0 && self.c_leaf.is_finite()) {
             return Err(HelmholtzFmmError::LeafWidth(self.c_leaf));
         }
+        if let VNear::Crossover(n) = self.near_v
+            && !(n >= 0.0)
+        {
+            return Err(HelmholtzFmmError::VCrossover(n));
+        }
         if let Degrees::Tolerance(_) = self.degrees {
             // The tolerance's own check; the levels come with the plan.
             self.degrees.resolve(&self.k, &unit_domain(), 0)?;
@@ -651,10 +700,10 @@ impl HelmholtzFmmBuilder {
         )?;
         drop(keys);
         drop(coordinates);
-        // The plan, once, on the index: with the empty-box rule from the routes' points per
-        // local leaf. Every plan of the octree has the index's local leaves, so the routes
-        // and the leaf ranges hold for it.
-        let counts = if self.empty_boxes {
+        // The plan, once, on the index: with the empty-box rule and the V pairs' near rule
+        // (Helmholtz CH4.0d2) from the routes' points per local leaf. Every plan of the
+        // octree has the index's local leaves, so the routes and the leaf ranges hold for it.
+        let counts = if self.empty_boxes || self.near_v != VNear::Off {
             Some(
                 LeafCounts::exchange_with_boxes(
                     &octree,
@@ -667,9 +716,21 @@ impl HelmholtzFmmBuilder {
         } else {
             None
         };
+        let no_leaf_pairs = |_: LeafPair| false;
+        let v_crossover = match self.near_v {
+            VNear::Off => 0.0,
+            VNear::Crossover(n) => n,
+        };
+        let v_pairs = |pair: VPair| ((pair.sources * pair.targets) as f64) < v_crossover;
+        let near = match (&counts, self.near_v) {
+            (Some(counts), VNear::Crossover(_)) => {
+                Some(NearRule::new(counts, &no_leaf_pairs).with_v_pairs(&v_pairs))
+            }
+            _ => None,
+        };
         let rules = PlanRules {
-            empty_boxes: counts.as_ref(),
-            ..PlanRules::default()
+            near: near.as_ref(),
+            empty_boxes: counts.as_ref().filter(|_| self.empty_boxes),
         };
         let plan = Plan::with_rules_on(&octree, index, &rules).map_err(FmmError::Plan)?;
 
@@ -832,6 +893,7 @@ impl HelmholtzFmmBuilder {
             points,
             ranks_per_node,
             empty_boxes: self.empty_boxes,
+            near_v: self.near_v,
         })
     }
 }
@@ -942,6 +1004,7 @@ where
     ranks_per_node: usize,
     /// Whether the plan has the empty-box rule.
     empty_boxes: bool,
+    near_v: VNear,
 }
 
 impl<'o, T, C> HelmholtzFmm<'o, T, C>
@@ -1149,6 +1212,21 @@ where
     /// what it left out on this rank is [`plan`](Self::plan)'s `empty_boxes`.
     pub fn empty_boxes(&self) -> bool {
         self.empty_boxes
+    }
+
+    /// The source points the source exchange moves on this rank per evaluation, (sent,
+    /// received): every ghost leaf's points (those of the U, X and converted W and V
+    /// entries, [`HelmholtzFmmBuilder::near_v`]), a point sent to two ranks counted twice.
+    pub fn source_points_exchanged(&self) -> (usize, usize) {
+        let exchange = self.evaluator.source_exchange();
+        let sent = exchange.traffic().values_sent / exchange.point_size().max(1);
+        (sent, exchange.ghost_counts().iter().sum())
+    }
+
+    /// The V pairs' near rule as built ([`HelmholtzFmmBuilder::near_v`]); the pairs offered
+    /// and converted on this rank are [`plan`](Self::plan)'s `near_pairs`.
+    pub fn near_v(&self) -> VNear {
+        self.near_v
     }
 
     /// The domain.

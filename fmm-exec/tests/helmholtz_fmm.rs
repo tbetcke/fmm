@@ -96,7 +96,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
     DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber,
     auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
     auto_plane_wave_min_degree,
 };
@@ -2103,6 +2103,18 @@ fn check_errors(comm: &SimpleCommunicator) {
         "rank {rank}: c_leaf = 0: {error:?}"
     );
 
+    // A V crossover below 0 or not a number (CH4.0d2).
+    for n in [-1.0, f64::NAN] {
+        let error = builder(scenario)
+            .near_v(VNear::Crossover(n))
+            .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+            .err();
+        assert!(
+            matches!(error, Some(HelmholtzFmmError::VCrossover(_))),
+            "rank {rank}: a V crossover of {n}: {error:?}"
+        );
+    }
+
     // An ISA this machine lacks, on every rank: its own error everywhere.
     if let Some(isa) = Isa::all().find(|isa| !isa.is_available()) {
         let error = builder(scenario)
@@ -2298,6 +2310,95 @@ fn check_empty_boxes(scenario: &Scenario, comm: &SimpleCommunicator) -> [usize; 
         );
     }
     left_out
+}
+
+/// The errors of the V pairs' near rule may be this many times the rule off's (Helmholtz
+/// CH4.0d2; the near rule's bound of Phase 6 T12, `NEAR_ERROR_BOUND` of `tests/mpi_exec.rs`):
+/// a converted pair is exact, but the truncation errors of pairs may cancel.
+const NEAR_ERROR_BOUND: f64 = 1.1;
+
+/// The V pairs between leaves as near pairs (Helmholtz CH4.0d2;
+/// `HelmholtzFmmBuilder::near_v`), under Rotation and the default, at a crossover of n_s n_t
+/// that converts some pairs and keeps others and at one that converts every V pair between
+/// leaves: the errors against the direct sum within [`NEAR_ERROR_BOUND`] of the rule off's,
+/// 2 threads the one-thread output bit for bit, on P ranks the one-rank FMM's of the same
+/// rule bit for bit, and the ghost leaves' points received at least the rule off's. A
+/// crossover of 0 converts nothing: the rule off's output bit for bit. Returns the V pairs
+/// between leaves offered and converted at the middle crossover under Rotation, and the
+/// source points received beyond the rule off's, over every rank.
+fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) -> [usize; 3] {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let mut totals = [0usize; 3];
+    for (setting, off) in [
+        ("Rotation", builder(scenario)),
+        ("the default", default_builder(scenario)),
+    ] {
+        let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
+        assert_eq!(fmm_off.near_v(), VNear::Off, "the rule is off by default");
+        let (phi_off, grad_off) = errors(scenario, &inputs, &output_off, 0, comm);
+        let received_off = fmm_off.source_points_exchanged().1;
+        drop(fmm_off);
+
+        let name = &format!("{}, V pairs at 0, {setting}", scenario.name);
+        let (fmm, output) = run(
+            &off.clone().near_v(VNear::Crossover(0.0)),
+            &inputs,
+            kind,
+            comm,
+        );
+        assert_eq!(fmm.plan().near_pairs().v_converted, 0, "{name}");
+        assert_same(name, &output, &output_off, comm);
+        drop(fmm);
+
+        for n in [crossover, f64::INFINITY] {
+            let name = &format!("{}, V pairs below {n}, {setting}", scenario.name);
+            let on = off.clone().near_v(VNear::Crossover(n));
+            let (fmm, output) = run(&on, &inputs, kind, comm);
+            assert_eq!(fmm.near_v(), VNear::Crossover(n), "{name}");
+            let pairs = fmm.plan().near_pairs();
+            let (offered, converted) = (pairs.v_leaf_pairs, pairs.v_converted);
+            if n == f64::INFINITY {
+                assert_eq!(converted, offered, "{name}: every V pair between leaves");
+            }
+            assert_eq!(
+                pairs.w_converted + pairs.x_converted,
+                0,
+                "{name}: V pairs only"
+            );
+            let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
+            if comm.rank() == 0 {
+                println!(
+                    "{name}: relative L2 φ {phi:.3e} (off {phi_off:.3e}), ∇φ {grad:.3e} \
+                     (off {grad_off:.3e})"
+                );
+            }
+            assert!(
+                phi <= NEAR_ERROR_BOUND * phi_off && grad <= NEAR_ERROR_BOUND * grad_off,
+                "{name}: φ {phi:.3e}, ∇φ {grad:.3e} against the rule off's {phi_off:.3e}, \
+                 {grad_off:.3e}"
+            );
+            let received = fmm.source_points_exchanged().1;
+            assert!(
+                everywhere(received >= received_off, comm),
+                "{name}: fewer ghost points than the rule off's"
+            );
+            let (_, threaded) = run(&on.clone().threads(2), &inputs, kind, comm);
+            assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+            check_one_rank(name, &on, &inputs, kind, &output, comm);
+            if setting == "Rotation" && n == crossover {
+                let local = [offered, converted, received - received_off];
+                comm.all_reduce_into(&local[..], &mut totals[..], SystemOperation::sum());
+            }
+        }
+    }
+    if comm.rank() == 0 {
+        println!(
+            "{}, V pairs below {crossover}: {} of {} converted, {} more source points received",
+            scenario.name, totals[1], totals[0], totals[2]
+        );
+    }
+    totals
 }
 
 /// The scenario of [`check_empty_boxes`] whose leaves the leaf rule fills with empty boxes:
@@ -2508,6 +2609,21 @@ fn helmholtz_fmm() {
         sphere[0] > 0 && sphere[1] > 0 && clusters[0] > 0 && clusters[1] > 0,
         "the empty-box rule left out nothing: sphere {sphere:?}, clusters {clusters:?}"
     );
+    // The V pairs between leaves as near pairs (CH4.0d2): the cube with rank 0 empty and
+    // the sphere under the leaf rule.
+    for scenario in [&scenarios()[0], &sphere_scenario()] {
+        let [offered, converted, received] = check_near_v(scenario, 100.0, &comm);
+        assert!(
+            0 < converted && converted < offered,
+            "{}: the V rule converted nothing or everything ({converted} of {offered})",
+            scenario.name
+        );
+        assert!(
+            comm.size() == 1 || received > 0,
+            "{}: no ghost leaf's points for a converted V pair",
+            scenario.name
+        );
+    }
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);
     check_vectors(&scenarios()[2], &comm);
