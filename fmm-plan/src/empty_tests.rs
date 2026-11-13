@@ -243,7 +243,7 @@ fn predicate(pair: LeafPair) -> bool {
 /// The V rule of these tests (Helmholtz CH4.0d2): about half the V pairs between leaves, by
 /// their keys.
 fn v_predicate(pair: VPair) -> bool {
-    (pair.source ^ pair.target).count_ones() % 2 == 0 && pair.sources * pair.targets < 10
+    (pair.source ^ pair.target).count_ones().is_multiple_of(2) && pair.sources * pair.targets < 10
 }
 
 #[test]
