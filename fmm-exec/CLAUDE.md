@@ -582,7 +582,22 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   without the term (and under the default where every level's M2L agrees), 2 threads and the
   one-rank FMM bit for bit; `check_plane_wave` names the rule off, so that the clusters'
   finest level still chunks at the waves buffer's floor. `FmmBuilder` (Laplace) has no rule
-  (CH4.0g decides). `tests/helmholtz_fmm.rs`
+  (CH4.0g decides).
+  Since Helmholtz CH4.0d2 (docs/helmholtz/tasks/CH4.0d2.md) `HelmholtzFmmBuilder::near_v`
+  (`VNear`: `Off`, the default until its sign-off, or `Crossover(n)`, n_s n_t below n on every
+  level; negative or NaN is `HelmholtzFmmError::VCrossover`) makes V pairs between two leaves
+  near pairs through `nd_fmm_plan`'s `NearRule::with_v_pairs` on the counts the empty-box rule
+  reads (counted even with that rule off), in the one plan build; W and X pairs never convert
+  here. A converted pair is exact, so the output is not the rule off's; it stays deterministic
+  and on P ranks the one-rank FMM's of the same setting bit for bit. `HelmholtzFmm::{near_v,
+  source_points_exchanged, near_interactions}` report the setting, the source exchange's points
+  (sent, received) and each level's Σ_t n_t Σ_s n_s; `HelmholtzOperator::p2p_times` times every
+  P2P level call per level (two clock reads, as `m2l_times`). `check_near_v` in
+  `tests/helmholtz_fmm.rs` (the cube with rank 0 empty and the sphere, at n_s n_t < 100 and
+  every V pair, under Rotation and the default): the errors within `NEAR_ERROR_BOUND` (1.1) of
+  the rule off's, 2 threads and the one-rank FMM bit for bit, crossover 0 the rule off's bits,
+  more near interactions and ghost points, the P2P timed on every level with near rows;
+  `check_errors` the refused crossovers. `tests/helmholtz_fmm.rs`
   (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,
