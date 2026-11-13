@@ -2207,7 +2207,6 @@ fn check_errors(comm: &SimpleCommunicator) {
     }
 }
 
-/// The scenarios, small trees (a few thousand points, at most 32 per leaf).
 /// Asserts on every rank that `got` equals `want` as values (−0 and +0 equal) on every
 /// rank: the empty-box rule leaves out exact zeros only.
 fn assert_same_values(
@@ -2319,6 +2318,7 @@ fn sphere_scenario() -> Scenario {
     }
 }
 
+/// The scenarios, small trees (a few thousand points, at most 32 per leaf).
 fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {

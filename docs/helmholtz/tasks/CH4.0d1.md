@@ -46,23 +46,56 @@ points of b's subtree.
 
 - **No target (t(b) = 0)**: b's V, X and W rows are emptied, and the L2L row into b. Its local is
   then zero and no point reads it; its L2P (zero targets) and near row stay.
-- **No source (s(b) = 0)**: b leaves every V and W row that names it, and the local M2M row of
-  its parent. Its multipole is zero (P2M of no point, M2M of zeros). Its P2M row (no point), the
+- **No source (s(b) = 0)**: b leaves every V and W row that names it, and the M2M row of its
+  parent (local, or global on the parent's owner). Its multipole is zero (P2M of no point, M2M of zeros). Its P2M row (no point), the
   X and U rows naming it (P2L and P2P of no source) stay.
-- **Never left out**: the top-tree keys (`Plan::is_top`: the `Global` boxes and the ghosts of
-  top-tree keys). They have no single owner of their subtree, lie on coarse levels, and the
-  reduction, the global M2M rows and the replicated top stay unchanged.
+- **Every box**, `Global` boxes included (amended 2026-11-13, below): the counts of a top-tree
+  key (a coarse block or an ancestor of one) are the sums of every rank's blocks below it, so
+  the rule leaves out the same entries on every rank count, and the global M2M rows, the
+  reduction and the replicated top follow the rows. The design of #214 exempted the top-tree
+  keys; which keys those are depends on the rank count (on one rank the root alone), so the
+  P-rank plan would keep zero terms the one-rank plan drops, and the one-rank comparison would
+  hold for values only.
 - Every row keeps its order; rows are only shortened, never reordered, so every remaining sum is
   the rule off's sum without terms that are exact zeros. A sum s + (±0) is s, except −0 + (+0),
   so the output equals the rule off's with −0 and +0 equal (compared as values, not bits).
 - The exchanges follow the rows: the multipole exchange requests what V and W rows name
-  (`multipole_ghosts`), so the empty boxes' multipoles are not sent; the source exchange (U and X
-  rows) is unchanged.
+  (`multipole_ghosts`), so the empty boxes' multipoles are not sent; the source exchange follows
+  the U and X rows, so a ghost leaf named only by an X entry of a box without targets is no
+  longer sent.
 - The counts: s(b) and t(b) of every local box from the local leaves' counts summed up the tree
-  (every descendant of a local box is local); s(b) of every ghost box a V or W row names that is
-  not a top-tree key, fetched from its owner (its `ghost_rank`, which holds b as a local box) in
-  the same ghost communicator as the near rule's W-row leaves, so a build with both rules makes
-  one exchange.
+  (every descendant of a local box is local); of every top-tree key from the coarse blocks'
+  counts, all-gathered once; s(b) of every other ghost box a V or W row names, fetched from its
+  owner (its `ghost_rank`, which holds b as a local box) in the same ghost communicator as the
+  near rule's W-row leaves, so a build with both rules makes one exchange.
+
+## As built (2026-11-13)
+
+- The top-tree keys are not exempt (the user, 2026-11-13, asked when the one-rank comparison
+  showed the exemption rank-dependent: "Global counts (Recommended)"). `LeafCounts::
+  exchange_with_boxes` all-gathers (block, s, t) of every rank's coarse blocks
+  (`exchange::gather_all`) and sums them into every ancestor; the `Global` M2M rows drop the
+  children without sources as the local ones do.
+- `LeafCounts`' setters are `set_box_sources` and `set_box_targets` (a ghost has a source
+  count only). `ghost_source_counts` is now a length check around `exchange::ghost_key_counts`,
+  which takes the owners' answer as a closure: Laplace's `LeafCounts::exchange` sends the same
+  keys and counts as before.
+- An M2M view's octant batches are no longer complete under the rule (a parent without one of
+  its children has no entry in that octant's batch). No driver reads them for M2M (the drivers
+  walk rows); `mpi_regressions`' recorder asserted completeness and now asserts that batch o
+  holds the parents whose rows have an octant-o child, which is the old check without the rule.
+- `HelmholtzFmm` has no build timings; the harness's build time includes the counts and the
+  second plan. The harness reports what the rule left out and the multipoles read from other
+  ranks (`Row::{left_out, remote_multipoles}`), not empty leaves per level; V pairs per level
+  with the rule on and off are in `--levels`.
+- `check_plane_wave` in `tests/helmholtz_fmm.rs` now names the rule off: with the rule the
+  clusters' finest level has fewer V sources than the waves buffer's floor holds, so the floor
+  no longer chunked it and the test's "the floor bound chunks a level call" failed. Its tree
+  is CH6.2a's again; `check_empty_boxes` runs PlaneWave with the rule.
+- No M6 count run: the Kathleen launches print the same table ("Empty boxes").
+- Under the default (Auto with the term) the rule changed a level's M2L on both test cases:
+  the term reads the rule's V pairs. The test compares values there only where every level's
+  M2L agrees, and the four named settings always.
 
 ## Read first
 
@@ -116,8 +149,8 @@ Conventions: none. Dependencies: none. `FmmBuilder` (Laplace): unchanged (CH4.0g
 
 Serial (`fmm-plan/src/empty_tests.rs`, on `plan_tests.rs`'s key maps, no MPI):
 - with counts that empty some boxes: exactly the rows and entries of the rule emptied, every
-  other row equal to `from_key_types`' row entry for entry and in order; top-tree keys never
-  touched; `EmptyBoxes` the counts by brute force;
+  other row equal to `from_key_types`' row entry for entry and in order (`Global` boxes
+  included, since the amendment of 2026-11-13); `EmptyBoxes` the counts by brute force;
 - counts with no zero give `from_key_types`' plan; a missing count is `MissingCount`;
 - with the near rule as well, the near rule's conversions as without the empty-box rule on the
   boxes it keeps.
@@ -180,6 +213,15 @@ time of `helmholtz_fmm` and `mpi_regressions` before and after.
   every rank.
 
 ## Pending runs
+
+Kathleen, branch tree synced at 8631669 (`tools/kathleen/sync.sh`), outputs in
+`/scratch/scratch/ucahtbe/fmm/logs/ch4-0d1/<stage>/`, one node each (`singlenode`, 6 h):
+
+- job 633564: the release build, `tools/helmholtz/ch4-0d1-runs.sh … matrix`, then `traffic`;
+- job 633565: `large`;
+- job 633566: `w3`;
+- job 633567: `plan_build_cost` of `main` (f32e5ba, `src/base-ch4-0d1`) and of the branch,
+  alternately three times each on one node (constraint 1, the user's "Tests + build time").
 
 ## Open questions
 

@@ -644,7 +644,8 @@ pub struct Row {
     /// What the empty-box rule left out, summed over the ranks, in the order of
     /// `nd_fmm_plan::empty::EmptyBoxes`' fields: boxes without targets, their V, X and W
     /// entries and L2L rows, then the V, W and M2M entries naming a box without sources (all
-    /// zero with the rule off).
+    /// zero with the rule off). A box with rows on several ranks (a `Global` box) counts on
+    /// each.
     pub left_out: [usize; 8],
     /// The multipoles each rank reads from other ranks (the boxes its V and W rows name that
     /// it does not compute, each once), summed over the ranks: what the reduction, the

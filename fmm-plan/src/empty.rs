@@ -70,7 +70,8 @@ pub struct EmptyBoxes {
     pub v_without_sources: usize,
     /// W entries of the other boxes that name such a box.
     pub w_without_sources: usize,
-    /// Local M2M entries that name such a box.
+    /// M2M entries that name such a box: the local rows', and the global rows' on the
+    /// owner of the parent.
     pub m2m_without_sources: usize,
 }
 

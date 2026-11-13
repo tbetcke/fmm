@@ -300,7 +300,8 @@ impl Plan {
     ///
     /// # Errors
     /// Those of [`new`](Self::new), and [`PlanError::MissingCount`] where a rule's counts
-    /// lack a count it reads, on every rank alike.
+    /// lack a count it reads: on the rank that found it, [`PlanError::OtherRank`] on the
+    /// others.
     pub fn with_rules<C: CommunicatorCollectives>(
         octree: &Octree<'_, C>,
         rules: &PlanRules<'_>,
@@ -904,22 +905,25 @@ fn first_pass(
                 .first_child(level, i)
                 .ok_or(PlanError::MissingChild { key })?;
             let children = (0..NOCTANTS as u8).map(|o| (o, first + o as u32));
-            // The empty-box rule leaves out the children whose subtrees hold no source.
-            let children = children_with_sources(
-                children,
-                level,
-                occupancies.map(|o| (index, o)),
-                &mut empty_boxes.m2m_without_sources,
-            )?;
+            // The empty-box rule leaves out the children whose subtrees hold no source, and
+            // counts them on the rows this rank keeps.
+            let mut kept = |children| {
+                children_with_sources(
+                    children,
+                    level,
+                    occupancies.map(|o| (index, o)),
+                    &mut empty_boxes.m2m_without_sources,
+                )
+            };
             if kind == KeyType::Global {
                 partial.m2m_local.push_row([]);
                 if owned(i) {
-                    partial.m2m_global.push_row(children);
+                    partial.m2m_global.push_row(kept(children)?);
                 } else {
                     partial.m2m_global.push_row([]);
                 }
             } else {
-                partial.m2m_local.push_row(children);
+                partial.m2m_local.push_row(kept(children)?);
                 partial.m2m_global.push_row([]);
             }
         } else {
