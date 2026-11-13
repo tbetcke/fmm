@@ -564,10 +564,11 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `reference_output` (the pass of `Densities::write_leaf_output`).
   Since Helmholtz CH4.0d1 (docs/helmholtz/tasks/CH4.0d1.md) the builder's plan has the
   empty-box rule of `nd_fmm_plan::empty` by default (`HelmholtzFmmBuilder::empty_boxes`,
-  `HelmholtzFmm::empty_boxes`; what it left out is `plan().empty_boxes()`): step 4 counts
-  every local leaf's points where they are (`cost::leaf_point_counts`, used, not changed),
-  takes every box's subtree counts (`LeafCounts::exchange_with_boxes`) and builds the plan
-  again with `Plan::with_rules`. A box whose subtree holds no target loses its V, X, W and
+  `HelmholtzFmm::empty_boxes`; what it left out is `plan().empty_boxes()`): after the routes
+  (steps 5 and 6) the build takes every box's subtree counts from the points the routes
+  deliver to each local leaf (`LeafCounts::exchange_with_boxes`) and builds the plan again
+  with `Plan::with_rules`; the rule changes no local leaf, so the routes hold
+  (`cost::leaf_point_counts`, a pass over every point, is not needed). A box whose subtree holds no target loses its V, X, W and
   L2L rows, one with no source leaves the V, W and M2M rows naming it; only exact zeros go,
   so the output is the rule off's as values (−0 and +0 equal), and on P ranks the one-rank
   FMM's of the same setting bit for bit. Auto's term counts the rule's V pairs, so under
