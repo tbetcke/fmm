@@ -171,6 +171,8 @@ pub(super) struct PlaneBuffer<T> {
     pub(super) counts: PlaneWaveCounts,
     /// How merge and shift splits a chunk over the pool.
     pub(super) split: PlaneWaveSplit,
+    /// The most bytes `waves` held ([`HelmholtzOperator::plane_wave_buffer_peak_bytes`]).
+    pub(super) peak: usize,
 }
 
 /// The counts of the exponential M2L's level calls since the operator was built or its M2L
@@ -224,6 +226,7 @@ impl<T> Default for PlaneBuffer<T> {
             level_boxes: Vec::new(),
             counts: PlaneWaveCounts::default(),
             split: PlaneWaveSplit::Auto,
+            peak: 0,
         }
     }
 }
@@ -256,6 +259,7 @@ impl<T: SimdScalar> PlaneBuffer<T> {
         self.waves = vec![T::zero(); values];
         self.position = vec![NO_POSITION; boxes];
         self.sources = vec![0; sources];
+        self.peak = self.peak.max(self.wave_bytes());
     }
 
     /// Its bytes: the waves, the positions and the sources.
@@ -273,6 +277,7 @@ impl<T: SimdScalar> PlaneBuffer<T> {
     fn reserve(&mut self, boxes: usize, capacity: usize, box_waves: usize) {
         if self.waves.len() < capacity * box_waves {
             self.waves.resize(capacity * box_waves, T::zero());
+            self.peak = self.peak.max(self.wave_bytes());
         }
         if self.position.len() < boxes {
             self.position.resize(boxes, NO_POSITION);

@@ -1050,7 +1050,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// Sizes the buffers of the exponential M2L's level call for levels of `boxes[l]` boxes
     /// (each level's own and ghost boxes), so that no level call grows them; nothing unless
     /// a level has waves ([`HelmholtzM2l::PlaneWave`], or [`HelmholtzM2l::Auto`] with
-    /// waves). `HelmholtzFmmBuilder` sizes them from the plan.
+    /// waves). `HelmholtzFmmBuilder` sizes them from the plan, after the bound
+    /// ([`with_plane_wave_buffer`](Self::with_plane_wave_buffer)): sized before it, the
+    /// buffer holds every box of the largest level until the bound is set.
     pub fn with_plane_wave_boxes(mut self, boxes: &[usize]) -> Self {
         self.plane_buffer.level_boxes = boxes.to_vec();
         self.plane_buffer.size(self.kernel.plane_waves.as_ref());
@@ -1092,6 +1094,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// [`plane_wave_bytes`](Self::plane_wave_bytes)).
     pub fn plane_wave_buffer_bytes(&self) -> usize {
         self.plane_buffer.wave_bytes()
+    }
+
+    /// The most bytes the waves buffer held since the operator was built: at least
+    /// [`plane_wave_buffer_bytes`](Self::plane_wave_buffer_bytes), more if it was sized for
+    /// the plan's boxes before its bound was set (Helmholtz CH4.0c).
+    pub fn plane_wave_buffer_peak_bytes(&self) -> usize {
+        self.plane_buffer.peak
     }
 
     /// The counts of the exponential M2L's level calls since its tables were last chosen:
