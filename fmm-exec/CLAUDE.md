@@ -594,14 +594,23 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   serves s to every child of P whose V list holds it by geometric masks, so a pair converted
   alone counts its source twice (W1 at kD = 500 erred 4·10⁵× before; the user, 2026-11-13:
   "Group per (parent, source)"); all those children convert if all are leaves and
-  n_s n_P < n m_s (n_P the targets under P, m_s the children reading s). A converted pair is exact, so the output is not the rule off's; it stays deterministic
+  n_s n_P < n m_s (n_P the targets under P, m_s the children reading s; `v_group` caches the
+  parent's leaf mask for its siblings). `VNear::CostModel`'s crossover per level is
+  `v_crossover(&v_costs(isa), m2l, p, gradients)`: the cheapest M2L the setting may run on the
+  level (the waves at their degree where predicted, Batched to Auto's crossover degree, else
+  Rotation; a named M2L its own) per pair over the P2P per interaction, from `VCosts` per
+  machine class (`V_COSTS_X86` from Kathleen, `V_COSTS_NEON` from locust; the M6 takes NEON's
+  unmeasured), agreed over the ranks (all-reduce min); fitted in
+  fmm-validate/results/helmholtz-ch4-0d2.md. Left off by default (signed off 2026-11-13: decided
+  with CH4.0d3's leaf size). `check_near_v`'s debug cost: the one-rank run at opt-level 0
+  766 s at load 16–20 on the M6 (CH4.0d1b 701 s at load 17–20). A converted pair is exact, so the output is not the rule off's; it stays deterministic
   and on P ranks the one-rank FMM's of the same setting bit for bit. `HelmholtzFmm::{near_v,
   source_points_exchanged, near_interactions}` report the setting, the source exchange's points
   (sent, received) and each level's Σ_t n_t Σ_s n_s; `HelmholtzOperator::p2p_times` times every
   P2P level call per level (two clock reads, as `m2l_times`). `check_near_v` in
-  `tests/helmholtz_fmm.rs` (the cube with rank 0 empty and the sphere, at n_s n_t < 100 and
-  every V pair, under Rotation, PlaneWave and the default; on the sphere PlaneWave's groups
-  convert in part): the errors within `NEAR_ERROR_BOUND` (1.1) of
+  `tests/helmholtz_fmm.rs` (the cube with rank 0 empty and the sphere, at n_s n_t < 100, every
+  V pair and the cost model, under Rotation, PlaneWave, the default and Auto with waves from
+  degree 0; on the sphere PlaneWave's groups convert in part): the errors within `NEAR_ERROR_BOUND` (1.1) of
   the rule off's, 2 threads and the one-rank FMM bit for bit, crossover 0 the rule off's bits,
   more near interactions and ghost points, the P2P timed on every level with near rows;
   `check_errors` the refused crossovers. `tests/helmholtz_fmm.rs`

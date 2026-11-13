@@ -177,16 +177,27 @@ opt-level 1; the MPI list at 2 and 4 ranks; `mpi_regressions` at 8), `cargo deny
 
 ## Pending runs
 
-Kathleen, `singlenode` (6 h cap per job), one rank × 40 threads, tree e6ea63e, outputs in
-`/scratch/scratch/ucahtbe/fmm/logs/ch4-0d2/<job>/`, `tools/helmholtz/ch4-0d2-runs.sh`:
-- 633813 (a): `matrix`, W1 and W3; 633814 (b): `matrix`, W4's cube and sphere; 633815 (c):
-  `matrix`, W4's Plummer sphere and clusters: the named crossovers swept, both orders;
-- 633811 (d): `large` (W1 at kD = 500, W3 at kD = 100);
-- 633812 (e): `w3` (the under-resolved W3 at kD = 500) and `traffic` (4 × 10 against 1 × 40);
-- 633816: `plan_build_cost`, `main` (7f4466c, `src/main`) and the branch alternately three
-  times (constraint 1).
-They decide the cost model's constants (`ch4-0d2-tables.py levels`), then a second round runs
-the cost model on the same cases (`custom`), which decides the default's proposal.
+None. Done (the report's §1 lists them): Kathleen 633811–633816 (round 1, named crossovers,
+tree e6ea63e, and `plan_build_cost` against `main` 7f4466c), 633849 (round 2), 633854–633855
+(round 3, the final code 3ead76a; 633850 of round 2 cancelled for it), and locust rounds 2 and
+3 (detached, `/data/ucahtbe/fmm/logs/ch4-0d2/`). Raw outputs in
+`~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0d2/`.
+
+## Results
+
+- The errors within 1.1× the rule off's on every case of every round (worst 1.095); the
+  one-rank FMM bit for bit (tests at 2 and 4 ranks, `mpi_regressions` at 8); 4 × 10 = 1 × 40
+  on Kathleen with the rule on (checksums); the multipoles read from other ranks 47–66 % of the
+  rule off's, the source points moved 2×.
+- Build plus one evaluation over the rule off's (Kathleen, the cost model, median by ε
+  10⁻³/10⁻⁶/10⁻⁸): Rotation 0.94/0.66/0.52, the default 1.03/1.01/0.85; locust: Rotation
+  –/0.87/0.69, the default 1.05/1.04/1.00. Large trees under Rotation 0.23–0.90.
+- Not the default (question 4); `plan_build_cost` within `main`'s spread.
+- Checks: fmt, Clippy (default, examples, workspace), docs; the default and workspace tests at
+  opt-level 1 (1,256 and 1,370 passed, on the final code); the MPI list at 2 and 4 ranks (24 of 24),
+  `helmholtz_fmm` again at 2 and 4 on the final code (64 s, 71 s), `mpi_regressions` at 1, 2,
+  4 and 8. One-rank opt-level 0 times on the M6 at load 16–20: `mpi_regressions` 4.2 s,
+  `helmholtz_fmm` 766 s (CH4.0d1b 5.6 s and 701 s at load 17–20).
 
 ## Open questions
 

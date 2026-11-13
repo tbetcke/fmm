@@ -35,6 +35,11 @@ user on 2026-11-13 ("Group per (parent, source) (Recommended)", §3). Proposal �
   0.87 and 0.69 at 10⁻⁶ and 10⁻⁸. Under Rotation nearly every V pair between leaves of 64
   points pays from p ≈ 11; under the default (Batched to p = 11, the waves above) the gain is
   small or negative except at 10⁻⁸ on Kathleen.
+- **On the large trees** (W1 at kD = 500, W3 at N = 4·10⁶ and kD = 100, the under-resolved W3
+  at kD = 500; 10⁻⁶ and 10⁻⁸) every V pair between leaves converts under the cost model. Under
+  Rotation build plus evaluation is 0.23–0.90 of the rule off's; under the default the
+  evaluation is 0.43–0.90, but the build rises by up to 1.29 (the decisions over 46 million
+  pairs), so build plus one evaluation is 0.69–1.01 (§4.1).
 - **The errors** stay within 1.1× the rule off's on every case of every round (worst 1.095,
   W4's Plummer sphere at 10⁻⁸ under the default; converted pairs are exact, most errors fall).
 - **Rank-count invariance**: the checksums at 4 × 10 equal those at 1 × 40 with the rule on
@@ -42,8 +47,8 @@ user on 2026-11-13 ("Group per (parent, source) (Recommended)", §3). Proposal �
 - **Traffic** (§5): on the under-resolved W3 at kD = 500 on 4 ranks, every V pair between
   leaves converted, the multipoles read from other ranks fall from 95,284 to 44,901, the
   source points exchanged rise from 31,288 to 63,259.
-- **Not proposed as the default** (§6, question 1, signed off 2026-11-13 as recommended): the gains say leaves of 64 points are too
-  small for the degrees of ε ≤ 10⁻⁶ under Rotation, and under the default the rule only pays
+- **Not proposed as the default** (§6, question 1, signed off 2026-11-13 as recommended): the
+  gains say leaves of 64 points are too small for the degrees of ε ≤ 10⁻⁶ under Rotation, and under the default the rule only pays
   at 10⁻⁸ on one machine class. CH4.0d3 (the leaf size) should sweep the leaf size with the
   rule off and with `CostModel`, and propose the two together.
 - **Laplace**: `Plan::new` unchanged (`plan_build_cost` on Kathleen within `main`'s spread),
@@ -155,11 +160,79 @@ first.
 
 ### 4.1 Round 3 on Kathleen
 
-ROUND3_K
+Job 633854 (`matrix`) and 633855 (`large`, `w3`): build plus one evaluation over the rule off's,
+median (range) over the cases of at least 0.3 s (the matrix's both orders averaged).
+
+| M2L | ε | cases | cost model: build + evaluate ÷ off | every V pair between leaves | evaluate ÷ off (cost model) | worst error ÷ off (cost model) |
+| --- | --- | ---: | --- | --- | --- | ---: |
+| Rotation | 10⁻3 | 9 | 0.94 (0.71–1.00) | 0.95 (0.70–0.99) | 0.81 (0.54–0.93) | 0.984 |
+| Rotation | 10⁻6 | 14 | 0.66 (0.43–0.84) | 0.66 (0.43–0.84) | 0.57 (0.26–0.74) | 0.987 |
+| Rotation | 10⁻8 | 14 | 0.52 (0.23–0.66) | 0.52 (0.23–0.65) | 0.48 (0.17–0.58) | 1.000 |
+| the default | 10⁻3 | 14 | 1.03 (0.55–1.06) | 0.94 (0.52–0.98) | 1.00 (0.82–1.00) | 1.000 |
+| the default | 10⁻6 | 14 | 1.01 (0.93–1.14) | 1.00 (0.90–1.02) | 0.90 (0.77–1.00) | 0.987 |
+| the default | 10⁻8 | 15 | 0.85 (0.72–0.95) | 0.85 (0.73–0.96) | 0.74 (0.45–0.90) | 1.095 |
+
+The large cases (job 633855; one order, two evaluations, the second's time):
+
+| case | ε | M2L | V crossover | V pairs converted | build s | evaluate s | build ÷ off | evaluate ÷ off | (build + evaluate) ÷ off | φ ÷ off |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| W1, N = 1989437, kD = 500 | 1e-6 | default | off | – | 9.45 | 9.830 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W1, N = 1989437, kD = 500 | 1e-6 | default | cost | 3067716 of 3298824 | 10.12 | 8.870 | 1.071 | 0.902 | 0.985 | 0.979 |
+| W1, N = 1989437, kD = 500 | 1e-6 | default | inf | 3298824 of 3298824 | 9.94 | 8.100 | 1.052 | 0.824 | 0.936 | 0.979 |
+| W1, N = 1989437, kD = 500 | 1e-6 | rotation | off | – | 9.06 | 11.430 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W1, N = 1989437, kD = 500 | 1e-6 | rotation | cost | 3298824 of 3298824 | 9.17 | 9.200 | 1.012 | 0.805 | 0.897 | 0.987 |
+| W1, N = 1989437, kD = 500 | 1e-6 | rotation | inf | 3298824 of 3298824 | 9.30 | 8.930 | 1.026 | 0.781 | 0.890 | 0.987 |
+| W1, N = 1989437, kD = 500 | 1e-8 | default | off | – | 13.45 | 19.450 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W1, N = 1989437, kD = 500 | 1e-8 | default | cost | 3298824 of 3298824 | 13.84 | 13.300 | 1.029 | 0.684 | 0.825 | 1.000 |
+| W1, N = 1989437, kD = 500 | 1e-8 | default | inf | 3298824 of 3298824 | 14.04 | 14.400 | 1.044 | 0.740 | 0.864 | 1.000 |
+| W1, N = 1989437, kD = 500 | 1e-8 | rotation | off | – | 9.52 | 23.960 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W1, N = 1989437, kD = 500 | 1e-8 | rotation | cost | 3298824 of 3298824 | 9.78 | 13.640 | 1.027 | 0.569 | 0.700 | 1.000 |
+| W1, N = 1989437, kD = 500 | 1e-8 | rotation | inf | 3298824 of 3298824 | 9.48 | 13.460 | 0.996 | 0.562 | 0.685 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-6 | default | off | – | 74.25 | 59.220 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-6 | default | cost | 55193392 of 55193392 | 84.61 | 33.680 | 1.140 | 0.569 | 0.886 | 0.973 |
+| W3, N = 1000000, kD = 500 | 1e-6 | default | inf | 55193392 of 55193392 | 81.24 | 33.520 | 1.094 | 0.566 | 0.860 | 0.973 |
+| W3, N = 1000000, kD = 500 | 1e-6 | rotation | off | – | 73.66 | 141.770 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-6 | rotation | cost | 55193392 of 55193392 | 75.18 | 97.730 | 1.021 | 0.689 | 0.803 | 0.973 |
+| W3, N = 1000000, kD = 500 | 1e-6 | rotation | inf | 55193392 of 55193392 | 75.18 | 91.630 | 1.021 | 0.646 | 0.774 | 0.973 |
+| W3, N = 1000000, kD = 500 | 1e-8 | default | off | – | 77.94 | 165.690 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-8 | default | cost | 55193392 of 55193392 | 85.17 | 82.620 | 1.093 | 0.499 | 0.689 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-8 | default | inf | 55193392 of 55193392 | 86.32 | 82.020 | 1.108 | 0.495 | 0.691 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-8 | rotation | off | – | 75.27 | 383.480 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-8 | rotation | cost | 55193392 of 55193392 | 77.37 | 209.100 | 1.028 | 0.545 | 0.624 | 1.000 |
+| W3, N = 1000000, kD = 500 | 1e-8 | rotation | inf | 55193392 of 55193392 | 75.73 | 227.950 | 1.006 | 0.594 | 0.662 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-6 | default | off | – | 15.88 | 10.140 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-6 | default | cost | 46298352 of 46298376 | 20.48 | 5.850 | 1.290 | 0.577 | 1.012 | 0.990 |
+| W3, N = 4031442, kD = 100 | 1e-6 | default | inf | 46298376 of 46298376 | 20.49 | 5.500 | 1.290 | 0.542 | 0.999 | 0.990 |
+| W3, N = 4031442, kD = 100 | 1e-6 | rotation | off | – | 15.45 | 48.810 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-6 | rotation | cost | 46298376 of 46298376 | 16.95 | 9.850 | 1.097 | 0.202 | 0.417 | 0.988 |
+| W3, N = 4031442, kD = 100 | 1e-6 | rotation | inf | 46298376 of 46298376 | 16.60 | 9.850 | 1.074 | 0.202 | 0.412 | 0.988 |
+| W3, N = 4031442, kD = 100 | 1e-8 | default | off | – | 16.07 | 35.340 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-8 | default | cost | 46298376 of 46298376 | 20.79 | 15.160 | 1.294 | 0.429 | 0.699 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-8 | default | inf | 46298376 of 46298376 | 21.34 | 15.280 | 1.328 | 0.432 | 0.712 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-8 | rotation | off | – | 15.40 | 174.750 | 1.000 | 1.000 | 1.000 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-8 | rotation | cost | 46298376 of 46298376 | 16.95 | 27.020 | 1.101 | 0.155 | 0.231 | 1.000 |
+| W3, N = 4031442, kD = 100 | 1e-8 | rotation | inf | 46298376 of 46298376 | 16.58 | 26.780 | 1.077 | 0.153 | 0.228 | 1.000 |
+
+Under Rotation every case gains from 10⁻⁶ on (to 0.23 on W3 at N = 4·10⁶, 10⁻⁸). Under the
+default the evaluation falls to 0.43–0.90 on these trees, but the build rises by up to 1.29
+(the grouped decision's lookups over 46 million pairs on W3 at N = 4·10⁶, and the larger near
+rows), so build plus one evaluation is 0.69–1.01; on the matrix's small trees the default at
+10⁻³ and 10⁻⁶ converts few pairs (Batched's and the waves' crossovers) and pays the build.
 
 ### 4.2 Round 3 on locust
 
-ROUND3_L
+locust, 1 × 72 (load 1.7 before), `matrix` and `large`, as §4.1:
+
+| M2L | ε | cases | cost model: build + evaluate ÷ off | every V pair between leaves | evaluate ÷ off (cost model) | worst error ÷ off (cost model) |
+| --- | --- | ---: | --- | --- | --- | ---: |
+| Rotation | 10⁻6 | 8 | 0.87 (0.71–0.98) | 0.89 (0.72–0.99) | 0.77 (0.40–0.91) | 1.009 |
+| Rotation | 10⁻8 | 16 | 0.69 (0.40–0.85) | 0.69 (0.39–0.86) | 0.60 (0.21–0.68) | 1.005 |
+| the default | 10⁻3 | 9 | 1.05 (1.01–1.06) | 0.98 (0.90–1.17) | 1.00 (0.94–1.06) | 1.002 |
+| the default | 10⁻6 | 11 | 1.04 (0.99–1.12) | 1.07 (0.97–1.19) | 1.00 (0.94–1.05) | 1.004 |
+| the default | 10⁻8 | 16 | 1.00 (0.98–1.07) | 0.98 (0.92–1.02) | 0.96 (0.88–1.03) | 1.000 |
+
+On NEON the waves and Batched are cheap against the P2P (§2): the default's crossovers are
+small, and converting every pair loses (1.07 at 10⁻⁶).
 
 ### 4.3 Round 1: the named crossovers (Kathleen)
 
@@ -183,7 +256,40 @@ points, n_s n_t ≤ 4,096 against Rotation's crossover of 1,700 at p = 11, 3,900
 
 ## 5. Traffic and rank-count invariance
 
-TRAFFIC
+Job 633855 (final code), the default at 10⁻⁶, 4 ranks × 10 threads (`--map-by slot:PE=10
+--bind-to core`) against one rank × 40 threads on the same node. The V pairs, the multipoles
+the ranks read from other ranks (each rank's distinct V- and W-row boxes it does not compute,
+summed), the source points the source exchange moves per evaluation (sent = received, summed),
+and the checksum of the whole output:
+
+| case | rule | V pairs converted | V pairs left | remote multipoles | source points moved | checksum 4 × 10 | checksum 1 × 40 | evaluate s 4 × 10 / 1 × 40 |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| W3, N = 10⁶, kD = 500 | off | 0 | 105,510,916 | 95,284 | 31,288 | b8196d7f1fe12151 | b8196d7f1fe12151 | 61.0 / 58.8 |
+| W3, N = 10⁶, kD = 500 | cost | 55,193,392 | 50,317,524 | 44,901 | 63,259 | 31d2d4a548cfda3c | 31d2d4a548cfda3c | 34.1 / 33.5 |
+| W3, N = 10⁶, kD = 500 | every pair | 55,193,392 | 50,317,524 | 44,901 | 63,259 | 31d2d4a548cfda3c | 31d2d4a548cfda3c | 34.0 / 33.4 |
+| W1, kD = 500 | off | 0 | 4,476,464 | 8,193 | 62,482 | 30d1687b75dca4d0 | 30d1687b75dca4d0 | 11.2 / 9.8 |
+| W1, kD = 500 | cost | 3,067,716 | 1,408,748 | 5,389 | 125,598 | 472c4bb27b46dc7a | 472c4bb27b46dc7a | 10.2 / 8.9 |
+| W1, kD = 500 | every pair | 3,298,824 | 1,177,640 | 4,109 | 125,598 | 37ea6f9e41bd425b | 37ea6f9e41bd425b | 9.5 / 8.2 |
+
+Every checksum at 4 ranks equals one rank's: rank-count invariance with the rule on, also where
+the cost model converts the groups of a level with waves in part (W1). The multipoles read
+from other ranks fall to 47–66 % of the rule off's, the source points moved double (the halo
+of the converted V leaves). The tests check the same at 2 and 4 ranks against the one-rank FMM
+bit for bit (`tests/helmholtz_fmm.rs`, `check_near_v`; `tests/mpi_regressions.rs`,
+`check_near_v_rule`, also at 8).
+
+**Laplace** (job 633816, `plan_build_cost`, one rank, the best of five builds per tree, ms;
+`main` 7f4466c and the branch alternately):
+
+| tree | `main` runs 1–3 | branch runs 1–3 |
+| --- | --- | --- |
+| graded corner blob | 7.13, 7.08, 7.24 | 7.03, 7.11, 7.11 |
+| 10⁵ uniform, level 4 | 81.26, 81.55, 81.82 | 80.66, 81.52, 81.34 |
+| 10⁵ uniform, 32 per leaf | 96.13, 95.83, 96.08 | 96.08, 94.84, 95.81 |
+
+Medians 7.13, 81.55 and 96.08 on `main`, 7.11, 81.34 and 95.81 on the branch: within `main`'s
+spread. `Plan::new` and `Plan::with_near_rule` without a V predicate run the code they ran (an
+`Option` test per V entry of a local leaf, with a rule only); Laplace's `Fmm` is unchanged.
 
 ## 6. Questions for sign-off
 

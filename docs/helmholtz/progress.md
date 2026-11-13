@@ -3050,3 +3050,55 @@ request, using this template:
   the same index; every Laplace test; `plan_build_cost` on Kathleen job 633735 within `main`'s
   spread). No D9 evaluation runs: no evaluation code changed.
 - Follow-ups: none new; CH4.0d2 next on the priority list.
+
+## 2026-11-13: CH4.0d2 V pairs between leaves of few points as near pairs
+- Done:
+  - The design approved before the code (the user, 2026-11-13: "Approve (Recommended)", the
+    interface; "As planned (Recommended)", the crossover): `nd-fmm-plan`'s near rule offers V
+    pairs between leaves to an opt-in predicate (`NearRule::with_v_pairs`, `VPair`;
+    `NearPairs::{v_leaf_pairs, v_converted}`); a converted V entry joins the near row in
+    (level, key) order, a ghost one the leaf numbering. `NearRule::new` offers none: Laplace's
+    rule and plans unchanged.
+  - `nd-fmm-exec`: `HelmholtzFmmBuilder::near_v` (`VNear::{Off, Crossover(n), CostModel}`, off
+    by default) on the empty-box rule's counts in the one plan build; `VCosts` per machine class
+    (`V_COSTS_X86` from Kathleen, `V_COSTS_NEON` from locust, by the ISA), `v_crossover` (the
+    cheapest M2L the setting may run on the level over the P2P per interaction), the crossovers
+    agreed over the ranks; `HelmholtzFmm::{near_v, source_points_exchanged, near_interactions}`,
+    `HelmholtzOperator::p2p_times`; `operator::auto_plane_wave_levels` (Auto's levels with waves
+    as a function, `select_tables`' choice).
+  - A defect found in round 1 (job 633811) and fixed: under the exponential M2L merge and shift
+    serves a parent's sources to its children by geometric masks, so a pair converted alone
+    counted its source twice (φ 4·10⁵× the rule off's). On levels with waves the rule decides
+    per (parent, source) (`v_group`; the user, 2026-11-13: "Group per (parent, source)
+    (Recommended)"), the builder's levels with waves asserted against the operator's.
+  - `nd-fmm-validate`: `Case::near_v`, `Row::{near_v, v_near, source_points, p2p_seconds,
+    near_interactions}`, `--near-v off|cost|n|inf` and the table "Near pairs";
+    `tools/helmholtz/ch4-0d2-runs.sh`, `ch4-0d2-tables.py`.
+  - Kathleen (three rounds) and locust (two): under Rotation build plus evaluation 0.94, 0.66,
+    0.52 of the rule off's at 10⁻³, 10⁻⁶, 10⁻⁸ (median; large trees 0.23–0.90); under the default
+    1.03, 1.01, 0.85 on Kathleen, 1.05, 1.04, 1.00 on locust; errors within 1.1× (worst 1.095);
+    4 × 10 = 1 × 40; remote multipoles 47–66 %, source points moved 2×. Report
+    `fmm-validate/results/helmholtz-ch4-0d2.md`; raw outputs in
+    `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0d2/`.
+- Tests: `src/near_tests.rs` (7, two new) and `src/empty_tests.rs` (V with the empty-box rule,
+  on a prebuilt index); `check_near_v_rule` in `tests/mpi_regressions.rs` (every scenario at 1,
+  2, 4 and 8 ranks: the oracle with V conversions, ghost V leaves' points, the exchanges, the
+  multipoles read only fewer, the recorder, the one-rank plan bit for bit); `check_near_v` in
+  `tests/helmholtz_fmm.rs` (the cube with rank 0 empty and the sphere; Rotation, PlaneWave, the
+  default and Auto with waves; crossovers 0, 100, inf and the cost model: errors within 1.1×,
+  2 threads and the one-rank FMM bit for bit, crossover 0 the rule off's bits; the refused
+  crossovers in `check_errors`); `tests/helmholtz/v_crossover.rs`; `check_near_v` in
+  nd-fmm-validate's `tests/helmholtz_accuracy.rs`.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and
+  workspace tests at opt-level 1 (1,256 and 1,370 passed), the MPI list at 2 and 4 ranks (24 of
+  24), `mpi_regressions` at 8. One-rank opt-level 0 times at load 16–20: `mpi_regressions` 4.2 s, `helmholtz_fmm` 766 s
+  (CH4.0d1b 5.6 s and 701 s at load 17–20). Nothing pending.
+- Decisions: the report's question 1, the default: signed off 2026-11-13 (the user: "I agree
+  with your recommendation"): `VNear::Off` stays the default; CH4.0d3 sweeps the leaf size with
+  the rule off and with `VNear::CostModel` and proposes the two together.
+- Laplace: `Plan::new` and `Plan::with_near_rule` without a V predicate unchanged (every Laplace
+  test, `mpi_exec`, `invariance` at 2 and 4 ranks); `plan_build_cost` on Kathleen job 633816
+  within `main`'s spread; Laplace's `fmm.rs`, the drivers and the pipeline untouched; no D9
+  evaluation runs (no Laplace evaluation code changed).
+- Follow-ups: CH4.0d3 (roadmap: the leaf size swept with the V rule off and with its cost
+  model, the two proposed together).
