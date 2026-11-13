@@ -51,6 +51,9 @@ fn counts_of(
     counts
 }
 
+/// The rows of every box with rows, by key ([`rows_by_key`]).
+type RowsByKey = HashMap<MortonKey, Vec<Vec<(MortonKey, usize)>>>;
+
 fn plan_with(map: &HashMap<MortonKey, KeyType>, rules: &PlanRules<'_>) -> Result<Plan, PlanError> {
     Plan::from_key_types_with_rules(map, nlevels(map), &one_rank_map(map), rules)
 }
@@ -64,10 +67,7 @@ fn empty_rule(counts: &LeafCounts) -> PlanRules<'_> {
 
 /// The rows of `without` (by key, [`rows_by_key`]'s order: V, X, L2L, local M2M, global
 /// M2M, near, W) with the empty-box rule of `counts` applied, and what it left out.
-fn expected_rows(
-    without: &Plan,
-    counts: &LeafCounts,
-) -> (HashMap<MortonKey, Vec<Vec<(MortonKey, usize)>>>, EmptyBoxes) {
+fn expected_rows(without: &Plan, counts: &LeafCounts) -> (RowsByKey, EmptyBoxes) {
     let has_sources = |key: MortonKey| counts.box_sources(key).unwrap() > 0;
     let mut empty = EmptyBoxes::default();
     let mut rows = rows_by_key(without);
