@@ -93,6 +93,7 @@
 //! println!("Re φ = {}, Im φ = {:?}", phi.re[0], phi.im.map(|im| im[0]));
 //! ```
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -825,17 +826,23 @@ impl HelmholtzFmmBuilder {
                         };
                         (cheapest, p)
                     };
-                    v_crossover(m2l, p, self.gradients)
+                    v_crossover(&v_costs(isa), m2l, p, self.gradients)
                 }
             })
             .collect();
+        // Agreed over the ranks (the smallest), so that ranks of different ISAs decide alike
+        // (constraints 2 and 9).
+        let mut agreed = vec![0.0f64; crossovers.len()];
+        comm.all_reduce_into(&crossovers[..], &mut agreed[..], SystemOperation::min());
+        let crossovers = agreed;
         let all_keys = octree.all_keys();
+        let parent = Cell::new(None);
         let v_pairs = |pair: VPair| {
             let level = morton::level(pair.target);
             if waves[level] {
-                counts
-                    .as_ref()
-                    .is_some_and(|counts| v_group(pair, crossovers[level], all_keys, counts))
+                counts.as_ref().is_some_and(|counts| {
+                    v_group(pair, crossovers[level], (all_keys, counts), &parent)
+                })
             } else {
                 ((pair.sources * pair.targets) as f64) < crossovers[level]
             }
@@ -989,43 +996,71 @@ impl HelmholtzFmmBuilder {
     }
 }
 
-/// The P2P's thread-nanoseconds per interaction in [`VNear::CostModel`] (Helmholtz CH4.0d2):
-/// complex charges with gradients in f64, fitted on Kathleen (AVX-512, one rank × 40 threads)
-/// from the P2P times per level added by the V pairs converted
-/// (fmm-validate/results/helmholtz-ch4-0d2.md; 5–9 over the levels, smaller leaves dearer).
-pub const V_P2P_NS: f64 = 6.5;
+/// The constants of [`VNear::CostModel`] for one machine class (Helmholtz CH4.0d2), in
+/// thread-nanoseconds: the P2P's per interaction (complex charges with gradients, f64), and
+/// per V pair Rotation's a + b (p + 1)³, Batched's (also Dense's and Classes') b (p + 1)⁴ and
+/// the exponential M2L's b (p_w + 1)² at the degree its level runs. Fitted from the P2P and
+/// M2L times per level that the converted pairs added and saved
+/// (fmm-validate/results/helmholtz-ch4-0d2.md); the waves' constant from levels whose pairs
+/// all converted, where the level's waves go too.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VCosts {
+    /// The P2P per interaction, with gradients.
+    pub p2p: f64,
+    /// Rotation per pair, [a, b] of a + b (p + 1)³.
+    pub rotation: [f64; 2],
+    /// Batched per pair, b of b (p + 1)⁴.
+    pub batched: f64,
+    /// The exponential M2L per pair, b of b (p_w + 1)².
+    pub plane_wave: f64,
+}
 
-/// The share of [`V_P2P_NS`] without gradients: the P2P kernel's potential over its
-/// potential and gradient (Helmholtz CH3.4b, Laplace's AVX-512 f64 0.40 against 0.60 ns).
+/// [`VCosts`] of x86 (AVX-512 and AVX2; measured on Kathleen, Xeon Gold 6248, one rank ×
+/// 40 threads).
+pub const V_COSTS_X86: VCosts = VCosts {
+    p2p: 6.5,
+    rotation: [800.0, 6.0],
+    batched: 0.25,
+    plane_wave: 30.0,
+};
+
+/// [`VCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads; the M6 takes
+/// them unmeasured).
+pub const V_COSTS_NEON: VCosts = VCosts {
+    p2p: 14.0,
+    rotation: [600.0, 2.5],
+    batched: 0.07,
+    plane_wave: 6.0,
+};
+
+/// The share of the P2P's time per interaction without gradients: the P2P kernel's
+/// potential over its potential and gradient (Helmholtz CH3.4b, Laplace's AVX-512 f64 0.40
+/// against 0.60 ns).
 pub const V_P2P_POTENTIAL_SHARE: f64 = 0.67;
 
-/// Rotation's thread-nanoseconds per V pair in [`VNear::CostModel`], a + b (p + 1)³, fitted
-/// as [`V_P2P_NS`] from the M2L time per level saved per pair removed (p = 7 to 24).
-pub const V_ROTATION_NS: [f64; 2] = [800.0, 6.0];
-
-/// Batched's thread-nanoseconds per V pair in [`VNear::CostModel`], b (p + 1)⁴ (about 1 µs at
-/// p = 7, fitted as [`V_P2P_NS`]); also Dense's and Classes'.
-pub const V_BATCHED_NS: f64 = 0.25;
-
-/// The exponential M2L's thread-nanoseconds per V pair in [`VNear::CostModel`], b (p_w + 1)²
-/// at the degree its level runs (fitted as [`V_P2P_NS`] at p_w = 15 and 32, where removing
-/// the pairs removes most of the level's waves too).
-pub const V_PLANE_WAVE_NS: f64 = 11.0;
+/// The [`VCosts`] of the machine class of `isa` (NEON's for NEON, x86's otherwise).
+pub fn v_costs(isa: Isa) -> VCosts {
+    match isa {
+        Isa::Neon => V_COSTS_NEON,
+        _ => V_COSTS_X86,
+    }
+}
 
 /// The crossover of n_s n_t on a level of degree `p` whose cheapest M2L is `m2l` (the
-/// waves' degree for the exponential M2L), with or without gradients (Helmholtz CH4.0d2,
-/// [`VNear::CostModel`]): the M2L's thread time per pair over the P2P's per interaction.
-pub fn v_crossover(m2l: HelmholtzM2l, p: usize, gradients: bool) -> f64 {
+/// waves' degree for the exponential M2L), with or without gradients, under `costs`
+/// (Helmholtz CH4.0d2, [`VNear::CostModel`]): the M2L's thread time per pair over the
+/// P2P's per interaction.
+pub fn v_crossover(costs: &VCosts, m2l: HelmholtzM2l, p: usize, gradients: bool) -> f64 {
     let q = (p + 1) as f64;
     let m2l = match m2l {
-        HelmholtzM2l::Rotation => V_ROTATION_NS[0] + V_ROTATION_NS[1] * q.powi(3),
-        HelmholtzM2l::PlaneWave => V_PLANE_WAVE_NS * q * q,
-        _ => V_BATCHED_NS * q.powi(4),
+        HelmholtzM2l::Rotation => costs.rotation[0] + costs.rotation[1] * q.powi(3),
+        HelmholtzM2l::PlaneWave => costs.plane_wave * q * q,
+        _ => costs.batched * q.powi(4),
     };
     let p2p = if gradients {
-        V_P2P_NS
+        costs.p2p
     } else {
-        V_P2P_NS * V_P2P_POTENTIAL_SHARE
+        costs.p2p * V_P2P_POTENTIAL_SHARE
     };
     m2l / p2p
 }
@@ -1037,34 +1072,57 @@ pub fn v_crossover(m2l: HelmholtzM2l, p: usize, gradients: bool) -> f64 {
 /// if every such child is a leaf and n_s n_P < `crossover` m_s, with n_P the target points
 /// of P's subtree and m_s the children reading s (n_P / m_s bounds the mean target count
 /// of those children). From keys and counts by key, so every rank decides as one rank.
+/// `parent` caches P's leaf mask and n_P for the next pair: the plan offers a target's V
+/// entries, and the targets of a level, in key order, so siblings come together.
 fn v_group(
     pair: VPair,
     crossover: f64,
-    keys: &HashMap<MortonKey, KeyType>,
-    counts: &LeafCounts,
+    (keys, counts): (&HashMap<MortonKey, KeyType>, &LeafCounts),
+    parent: &Cell<Option<(MortonKey, u8, Option<usize>)>>,
 ) -> bool {
-    let (Some(parent), (_, s)) = (morton::parent(pair.target), morton::decode(pair.source)) else {
+    let Some(p) = morton::parent(pair.target) else {
         return false;
     };
-    let Some(children) = morton::children(parent) else {
+    let (leaves, targets) =
+        match parent.get() {
+            Some((key, leaves, targets)) if key == p => (leaves, targets),
+            _ => {
+                let Some(children) = morton::children(p) else {
+                    return false;
+                };
+                let leaves = children.iter().enumerate().fold(0u8, |mask, (o, child)| {
+                    match keys.get(child) {
+                        Some(KeyType::LocalLeaf | KeyType::GhostLeaf(_)) => mask | (1 << o),
+                        _ => mask,
+                    }
+                });
+                let targets = counts.box_targets(p);
+                parent.set(Some((p, leaves, targets)));
+                (leaves, targets)
+            }
+        };
+    let Some(targets) = targets else {
         return false;
     };
+    // The cheap bound first: at most eight children read s.
+    let n = (pair.sources * targets) as f64;
+    if n >= 8.0 * crossover {
+        return false;
+    }
     // s's parent is a neighbour of P, so s is in the V list of every child of P it does
     // not touch.
-    let mut readers = 0usize;
-    for child in children {
+    let (_, s) = morton::decode(pair.source);
+    let Some(children) = morton::children(p) else {
+        return false;
+    };
+    let mut readers = 0u8;
+    for (o, &child) in children.iter().enumerate() {
         let (_, c) = morton::decode(child);
-        if (0..3).all(|i| c[i].abs_diff(s[i]) <= 1) {
-            continue;
-        }
-        match keys.get(&child) {
-            Some(KeyType::LocalLeaf | KeyType::GhostLeaf(_)) => readers += 1,
-            _ => return false,
+        if (0..3).any(|i| c[i].abs_diff(s[i]) > 1) {
+            readers |= 1 << o;
         }
     }
-    counts
-        .box_targets(parent)
-        .is_some_and(|targets| ((pair.sources * targets) as f64) < crossover * readers as f64)
+    readers & !leaves == 0 && n < crossover * f64::from(readers.count_ones())
 }
 
 /// The unit cube, for the tolerance's own check.

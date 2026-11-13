@@ -103,7 +103,7 @@ def mean(values):
 
 
 def order(v):
-    return -1.0 if v == "off" else float(v)
+    return {"off": -2.0, "cost": -1.0}.get(v) or float(v)
 
 
 def case_order(case):
