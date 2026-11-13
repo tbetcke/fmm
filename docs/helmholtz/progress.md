@@ -2968,5 +2968,7 @@ request, using this template:
 - Laplace: not touched (the Helmholtz builder and operator, nd-fmm-validate's example, docs).
 - Follow-ups: CH4.0d (roadmap: the under-resolved W3's leaves of about one point and the M2L
   of its empty boxes, 61 % of 2.06 million leaves, every V pair run; level 7's M2L 86 % of the
-  evaluation at kD = 500); CH4.3 (the high-frequency recalibration; the tightest level at
+  evaluation at kD = 500; the design of 2026-11-13: empty boxes left out by an opt-in plan rule,
+  then V pairs of few points as near pairs); CH4.0g (roadmap: Laplace's empty boxes counted,
+  the rule adopted only if it pays); CH4.3 (the high-frequency recalibration; the tightest level at
   kD = 1000 is where the branch leaves the plateau).
