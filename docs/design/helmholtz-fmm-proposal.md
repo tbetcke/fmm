@@ -343,7 +343,9 @@ p(x, \varepsilon) = \max\!\left(\lceil 0.30 L^2 + 0.25 L + 2.60 \rceil,\;
 
 Every degree is the smallest that keeps the relative ℓ2 errors of φ and ∇φ over 1,000
 sampled targets within ε/2 on W1, W3 and W4, measured over 0.14 ≤ x ≤ 65 and
-10⁻⁸ ≤ ε ≤ 10⁻³ and checked in the full FMM at x = 108 (W1 at kD = 500). Beyond that it is
+10⁻⁸ ≤ ε ≤ 10⁻³ and checked in the full FMM at x = 108 (W1 at kD = 500) and at x = 216 and
+108 (W1 at kD = 1000, within ε at 10⁻⁸ to 10⁻³, at most 0.83 ε; raising either level moves the
+error by under 1 %; amended at CH4.0c). Beyond that it is
 an extrapolation, below S7's per-pair p* as x grows and ε falls; CH4.3 recalibrates the
 high-frequency levels. The low-frequency plateau is 7, 9, 12, 15, 20 and 24 at
 10⁻³ … 10⁻⁸, about half of S7's 16 … 46. On the example above (CH3.6's W1 tree at kD = 500,
@@ -1857,6 +1859,11 @@ these.
   the user on PR #212, "Sign off 1 and 2 as recommended"): Section 9.1, the box measure a gate bound
   of 100 ε beside the ℓ2 tolerance, which ε stays (question 1); the charges of §9.1 unchanged
   (D12), with the smooth densities in the verification of CH4.0c, CH4.3 and CH4.4 (question 2).
+- **Amended at CH4.0c, 2026-11-13** (fmm-validate/results/helmholtz-ch4-0c.md; PR #214, its
+  question 1, signed off by the user after the merge, "Sign off as recommended"): Section 3.5,
+  the degree rule also checked at x = 216 and 108 (W1 at kD = 1000): within ε, and the levels
+  beyond the measured x ≤ 65 move the error by under 1 % when raised. A check of accuracy, not
+  of the smallest degrees: CH4.3's recalibration stays.
 
 ## Appendix B. The stability check behind Section 3.6
 
