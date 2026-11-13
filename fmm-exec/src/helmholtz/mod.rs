@@ -68,7 +68,8 @@ pub use degree::{DegreeError, DegreeRule, Degrees, degree, s7_degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 pub use fmm::{
     DEFAULT_DENSE_NODE_BUDGET, DEFAULT_PLANE_WAVE_NODE_BUDGET, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError,
+    HelmholtzFmmError, V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VCosts, VNear, v_costs,
+    v_crossover,
 };
 pub use operator::{
     AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator,

@@ -508,6 +508,16 @@ harness code: `tools/helmholtz/ch4-0d1b-runs.sh` reruns CH4.0d1's `large`, `w3` 
 both orders) and `traffic`, and `ch4-0d1b-tables.py` compares the builds and checksums with
 CH4.0d1's launches. Its report is `results/helmholtz-ch4-0d1b.md`.
 
+Helmholtz CH4.0d2 (V pairs between leaves as near pairs; docs/helmholtz/tasks/CH4.0d2.md)
+added `helmholtz_accuracy::Case::near_v` (`HelmholtzFmmBuilder::near_v`, `VNear::Off` in
+`Case::new`) and `Row::{near_v, v_near, source_points, p2p_seconds, near_interactions}` (the V
+pairs offered and converted and the source points sent and received, summed over the ranks;
+per level the P2P's seconds, the slowest rank's, and its near interactions, summed), and to the
+example `--near-v off|n|inf,…` (inside `--empty-boxes`' loop; the column "M2L" ending `/v<n>`)
+and a last table "Near pairs" (with `--levels` a row per level with P2P: thread-nanoseconds per
+interaction). `tests/helmholtz_accuracy.rs` (`check_near_v`) checks the columns on W1 at
+kD = 30. `tools/helmholtz/ch4-0d2-runs.sh` runs the task's sweeps.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
