@@ -107,7 +107,7 @@ use super::index::BoxIndex;
 use super::lists::{
     CsrBuilder, GroupedBuilder, LevelLists, NOCTANTS, NOFFSETS, Overflow, offset, offset_index,
 };
-use super::near::{LeafCounts, LeafPair, NearPairs, NearRule};
+use super::near::{LeafCounts, LeafPair, NearPairs, NearRule, VPair};
 use crate::interaction_manager::{is_interior, is_leaf, key_lists, valid_neighbours};
 
 /// The box index and the interaction lists of an octree on one rank.
@@ -868,6 +868,7 @@ fn first_pass(
         };
 
         v_row.clear();
+        let mut v_near = Vec::new();
         for source in v {
             let (source_level, j) = resolve(source)?;
             if source_level != level {
@@ -884,6 +885,24 @@ fn first_pass(
             if !has_sources((source_level, j))? {
                 empty_boxes.v_without_sources += 1;
                 continue;
+            }
+            // The near rule's V pairs (Helmholtz CH4.0d2): a converted leaf joins the
+            // U-entries.
+            if let Some(rule) = rule.filter(|rule| rule.offers_v_pairs())
+                && is_leaf_box((source_level, j))
+            {
+                near_pairs.v_leaf_pairs += 1;
+                let pair = VPair {
+                    target: key,
+                    source,
+                    sources: rule.counts().sources(source).ok_or(missing(source))?,
+                    targets: rule.counts().targets(key).ok_or(missing(key))?,
+                };
+                if rule.converts_v(pair) {
+                    near_pairs.v_converted += 1;
+                    v_near.push((source_level, j));
+                    continue;
+                }
             }
             v_row.push((d as u16, j));
         }
@@ -941,7 +960,7 @@ fn first_pass(
                 ghost_leaves.push(entry);
             }
         }
-        for entry in w_near {
+        for entry in w_near.into_iter().chain(v_near) {
             partial.u_entries.push(entry);
             if index.kind(entry.0, entry.1 as usize).is_ghost() {
                 ghost_leaves.push(entry);

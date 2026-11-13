@@ -13,7 +13,7 @@ use nd_fmm_plan::{
     index::BoxIndex,
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
-    near::{LeafCounts, LeafPair, NearPairs, NearRule},
+    near::{LeafCounts, LeafPair, NearPairs, NearRule, VPair},
     operator::{
         FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
         PerPair, UpwardPass,
@@ -1626,6 +1626,18 @@ fn check_against_one_rank<C: CommunicatorCollectives>(
             Plan::with_rules_on(&single, index, &rules)
                 .unwrap_or_else(|error| panic!("{name}: one rank, empty boxes: {error}"))
         }
+        Some((ScenarioRule::NearV, points)) => {
+            let index = BoxIndex::of_octree(&single)
+                .unwrap_or_else(|error| panic!("{name}: one rank, index: {error}"));
+            let counts = box_counts(name, &single, &index, points);
+            let rule = NearRule::new(&counts, &near_predicate).with_v_pairs(&near_v_predicate);
+            let rules = PlanRules {
+                near: Some(&rule),
+                ..PlanRules::default()
+            };
+            Plan::with_rules_on(&single, index, &rules)
+                .unwrap_or_else(|error| panic!("{name}: one rank, near rule with V: {error}"))
+        }
     };
 
     let ((outputs, multipoles, locals, _), received) = mixed(plan, comm);
@@ -2396,6 +2408,9 @@ enum ScenarioRule {
     Near,
     /// The empty-box rule (Helmholtz CH4.0d1).
     EmptyBoxes,
+    /// The near rule with [`near_predicate`] and the V pairs of [`near_v_predicate`]
+    /// (Helmholtz CH4.0d2), on the counts of `LeafCounts::exchange_with_boxes`.
+    NearV,
 }
 
 /// The predicate of the near-rule checks (Phase 6 T12): kernel-agnostic, and converting
@@ -2405,6 +2420,12 @@ fn near_predicate(pair: LeafPair) -> bool {
         LeafPair::W { sources, .. } => sources % 3 != 1,
         LeafPair::X { targets, .. } => targets % 2 == 0,
     }
+}
+
+/// The V predicate of the near-rule checks (Helmholtz CH4.0d2): kernel-agnostic, and
+/// converting some pairs and keeping others.
+fn near_v_predicate(pair: VPair) -> bool {
+    (pair.sources * 7 + pair.targets) % 3 != 1
 }
 
 /// The near rule's counts on `plan` (without a rule): every local leaf's points of the
@@ -2434,6 +2455,7 @@ fn near_oracle(
     oracle: &OracleLists,
     global_leaves: &[u64],
     (sources, targets): ScenarioPoints<'_>,
+    v_pairs: bool,
 ) -> (OracleLists, NearPairs) {
     let mut pairs = NearPairs::default();
     let mut converted = OracleLists::new();
@@ -2442,7 +2464,26 @@ fn near_oracle(
             converted.insert(key, [u.clone(), v.clone(), w.clone(), x.clone()]);
             continue;
         }
-        let (mut u, mut w_kept, mut x_kept) = (u.clone(), Vec::new(), Vec::new());
+        let (mut u, mut v_kept, mut w_kept, mut x_kept) =
+            (u.clone(), Vec::new(), Vec::new(), Vec::new());
+        // With V pairs (Helmholtz CH4.0d2): a V entry that is a leaf moves to the U-list
+        // where [`near_v_predicate`] holds.
+        for &s in v {
+            if v_pairs && global_leaves.binary_search(&s).is_ok() {
+                pairs.v_leaf_pairs += 1;
+                if near_v_predicate(VPair {
+                    target: key,
+                    source: s,
+                    sources: points_in(sources, s),
+                    targets: points_in(targets, key),
+                }) {
+                    pairs.v_converted += 1;
+                    u.push(s);
+                    continue;
+                }
+            }
+            v_kept.push(s);
+        }
         for &s in w {
             if global_leaves.binary_search(&s).is_ok() {
                 pairs.w_leaf_pairs += 1;
@@ -2472,7 +2513,7 @@ fn near_oracle(
             }
         }
         u.sort_unstable();
-        converted.insert(key, [u, v.clone(), w_kept, x_kept]);
+        converted.insert(key, [u, v_kept, w_kept, x_kept]);
     }
     (converted, pairs)
 }
@@ -2518,7 +2559,7 @@ fn check_near_rule<C: CommunicatorCollectives>(
     }
     let rule_plan = Plan::with_near_rule(octree, &NearRule::new(&counts, &near_predicate))
         .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
-    let (rule_oracle, pairs) = near_oracle(held, oracle, global_leaves, points);
+    let (rule_oracle, pairs) = near_oracle(held, oracle, global_leaves, points, false);
     check_plan(
         rule_name,
         held,
@@ -2602,6 +2643,173 @@ fn check_near_rule<C: CommunicatorCollectives>(
         ghost_w,
     ];
     let mut total = [0usize; 5];
+    comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
+    total
+}
+
+/// The distinct multipoles `plan`'s V and W rows read that this rank does not compute
+/// (through any exchange), by key.
+fn remote_reads(plan: &Plan) -> Vec<u64> {
+    let index = plan.index();
+    let mut keys: Vec<u64> = (0..plan.nlevels())
+        .flat_map(|level| {
+            let lists = plan.level(level);
+            let v = lists.v().sources().iter().map(move |&j| (level, j));
+            let w = lists.w().entries().iter().map(move |&j| (level + 1, j));
+            v.chain(w)
+        })
+        .filter(|&(level, j)| !plan.computes(level, j as usize))
+        .map(|(level, j)| index.key(level, j as usize))
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// Check the near rule with V pairs (Helmholtz CH4.0d2; `NearRule::with_v_pairs`) on a
+/// scenario, with [`near_predicate`] and [`near_v_predicate`] on the counts of
+/// `LeafCounts::exchange_with_boxes` (every V row's ghost leaf's from its owner): the plan
+/// of one build on `BoxIndex::of_octree` is `Plan::with_near_rule`'s with the same rule;
+/// it has the oracle's lists with the W, X and V conversions applied ([`near_oracle`]) and
+/// passes every check of [`check_plan`], its ghost leaves among them; the source exchange
+/// delivers every ghost leaf, the converted V entries included (a halo of up to three
+/// leaves), with its owner's count; the reduction, the replicated top and the multipole
+/// exchange follow the converted rows, and the multipoles this rank reads from others are
+/// among those it reads without V pairs; the evaluator issues every converted pair as P2P
+/// and no M2L for it, and gives one rank's bits on a one-rank plan of the same rule; and a
+/// V predicate that converts nothing gives the plan of the rule without V pairs. Returns
+/// the V pairs of leaves and the converted ones, the converted ghost V leaves and the
+/// multipoles from other ranks no longer read, summed over the ranks. Collective.
+fn check_near_v_rule<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    (held, oracle, global_leaves): (&HashMap<u64, KeyType>, &OracleLists, &[u64]),
+    plan: &Plan,
+    points: ScenarioPoints<'_>,
+    (fine_keys, options): (&[u64], OctreeOptions),
+) -> [usize; 4] {
+    let comm = octree.comm();
+    let rule_name = &format!("{name}, near rule with V");
+    let index_of =
+        BoxIndex::of_octree(octree).unwrap_or_else(|error| panic!("{name}: index: {error}"));
+    let counts = box_counts(name, octree, &index_of, points);
+    let rule = NearRule::new(&counts, &near_predicate).with_v_pairs(&near_v_predicate);
+    let rules = PlanRules {
+        near: Some(&rule),
+        ..PlanRules::default()
+    };
+    let rule_plan = Plan::with_rules_on(octree, index_of.clone(), &rules)
+        .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    let reference =
+        Plan::with_near_rule(octree, &rule).unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    assert!(rule_plan == reference, "{rule_name}: the plan of one build");
+    let (rule_oracle, pairs) = near_oracle(held, oracle, global_leaves, points, true);
+    check_plan(
+        rule_name,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        octree.coarse_tree_leafs(),
+        |key| computes(octree, held, key),
+        None,
+    );
+    assert_eq!(
+        rule_plan.near_pairs(),
+        pairs,
+        "{rule_name}: pairs converted"
+    );
+
+    // The ghost leaves that only a converted V pair names: not those of the rule without V.
+    let without_v = Plan::with_near_rule(octree, &NearRule::new(&counts, &near_predicate))
+        .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    let named: Vec<u64> = without_v
+        .index()
+        .leaves()
+        .ghosts()
+        .map(|j| without_v.index().leaf_key(j))
+        .collect();
+    let leaves = rule_plan.index().leaves();
+    let ghost_v = leaves
+        .ghosts()
+        .filter(|&j| named.binary_search(&leaves.key(j)).is_err())
+        .count();
+    let points_of = |key| points_in(points.0, key);
+    check_source_exchange(rule_name, comm, &rule_plan, points_of);
+
+    let sizes: Vec<usize> = (0..rule_plan.nlevels()).map(|level| level + 1).collect();
+    let (reduction, _) = check_reduction(rule_name, octree, held, &rule_plan, &sizes, None);
+    let (top, _) = check_top(
+        rule_name,
+        octree,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        &sizes,
+        &reduction,
+    );
+    check_multipole_exchange(
+        rule_name,
+        octree,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        &sizes,
+        (&reduction, &top),
+    );
+    // The multipoles read from other ranks are among those read without V pairs.
+    let (with_v, without) = (remote_reads(&rule_plan), remote_reads(&without_v));
+    assert!(
+        with_v.iter().all(|key| without.binary_search(key).is_ok()),
+        "{rule_name}: a multipole read only with V pairs"
+    );
+    let reads_left_out = without.len() - with_v.len();
+    check_batches(
+        rule_name,
+        octree,
+        (&rule_oracle, None),
+        &rule_plan,
+        false,
+        default_routing(comm),
+    );
+    check_against_one_rank(
+        rule_name,
+        octree,
+        &rule_plan,
+        fine_keys,
+        options,
+        Some((ScenarioRule::NearV, points)),
+    );
+
+    // A V predicate that converts nothing gives the rule's plan without V pairs, and with
+    // no W or X conversion `Plan::new`'s.
+    let never_v = |_: VPair| false;
+    let unchanged = Plan::with_near_rule(
+        octree,
+        &NearRule::new(&counts, &near_predicate).with_v_pairs(&never_v),
+    )
+    .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    assert!(
+        unchanged.index() == without_v.index() && unchanged.levels() == without_v.levels(),
+        "{rule_name}: never converted"
+    );
+    let never = |_: LeafPair| false;
+    let unchanged = Plan::with_near_rule(
+        octree,
+        &NearRule::new(&counts, &never).with_v_pairs(&never_v),
+    )
+    .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    assert!(
+        unchanged.index() == plan.index() && unchanged.levels() == plan.levels(),
+        "{rule_name}: nothing converted"
+    );
+
+    let local = [
+        pairs.v_leaf_pairs,
+        pairs.v_converted,
+        ghost_v,
+        reads_left_out,
+    ];
+    let mut total = [0usize; 4];
     comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
     total
 }
@@ -2888,23 +3096,7 @@ fn check_empty_boxes<C: CommunicatorCollectives>(
     );
     // The multipoles this rank reads from other ranks (through any exchange) are among
     // those it reads without the rule.
-    let reads = |plan: &Plan| -> Vec<u64> {
-        let index = plan.index();
-        let mut keys: Vec<u64> = (0..plan.nlevels())
-            .flat_map(|level| {
-                let lists = plan.level(level);
-                let v = lists.v().sources().iter().map(move |&j| (level, j));
-                let w = lists.w().entries().iter().map(move |&j| (level + 1, j));
-                v.chain(w)
-            })
-            .filter(|&(level, j)| !plan.computes(level, j as usize))
-            .map(|(level, j)| index.key(level, j as usize))
-            .collect();
-        keys.sort_unstable();
-        keys.dedup();
-        keys
-    };
-    let (with_rule, without) = (reads(&rule_plan), reads(plan));
+    let (with_rule, without) = (remote_reads(&rule_plan), remote_reads(plan));
     assert!(
         with_rule
             .iter()
@@ -3464,6 +3656,7 @@ fn distributed_tree_regressions() {
     // The near rule's W and X pairs kept and converted, and the converted ghost leaves,
     // over every scenario, summed over the ranks (Phase 6 T12).
     let mut near_totals = [0usize; 5];
+    let mut near_v_totals = [0usize; 4];
     let mut empty_totals = [0usize; 9];
     for (name, sources, targets, max_level, capacity) in cases {
         eprintln!("rank {rank}: {name}");
@@ -3663,6 +3856,18 @@ fn distributed_tree_regressions() {
         for (total, count) in near_totals.iter_mut().zip(pairs) {
             *total += count;
         }
+        // With V pairs (Helmholtz CH4.0d2), on the counts of every held box.
+        let pairs = check_near_v_rule(
+            name,
+            &octree,
+            (&held, &oracle, &global_leaves),
+            &plan,
+            (&source_points, &target_points),
+            (&fine_keys, options),
+        );
+        for (total, count) in near_v_totals.iter_mut().zip(pairs) {
+            *total += count;
+        }
 
         // The empty-box rule (Helmholtz CH4.0d1), with the subtrees' points.
         let left_out = check_empty_boxes(
@@ -3719,6 +3924,26 @@ fn distributed_tree_regressions() {
     );
     if comm.size() > 1 {
         assert!(near_totals[4] > 0, "no converted ghost W leaf");
+    }
+    // With V pairs: some converted and some kept; on several ranks some converted V entry
+    // a ghost leaf.
+    if rank == 0 {
+        println!(
+            "near rule with V on {} ranks: V pairs of leaves {}, converted {}; converted ghost \
+             V leaves {}; multipoles from other ranks no longer read {}",
+            comm.size(),
+            near_v_totals[0],
+            near_v_totals[1],
+            near_v_totals[2],
+            near_v_totals[3]
+        );
+    }
+    assert!(
+        0 < near_v_totals[1] && near_v_totals[1] < near_v_totals[0],
+        "the V rule converted nothing or everything: {near_v_totals:?}"
+    );
+    if comm.size() > 1 {
+        assert!(near_v_totals[2] > 0, "no converted ghost V leaf");
     }
     // The empty-box rule left out every kind of entry over the scenarios.
     if rank == 0 {

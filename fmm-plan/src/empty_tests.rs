@@ -7,7 +7,7 @@ use nd_octree::{MortonKey, morton, octree::KeyType};
 
 use super::EmptyBoxes;
 use crate::interaction_manager::is_leaf;
-use crate::near::{LeafCounts, LeafPair, NearRule};
+use crate::near::{LeafCounts, LeafPair, NearRule, VPair};
 use crate::plan::{
     Plan, PlanError, PlanRules, index_from_keys,
     tests::{cases, nlevels, one_rank_map, rows_by_key},
@@ -240,11 +240,18 @@ fn predicate(pair: LeafPair) -> bool {
     }
 }
 
+/// The V rule of these tests (Helmholtz CH4.0d2): about half the V pairs between leaves, by
+/// their keys.
+fn v_predicate(pair: VPair) -> bool {
+    (pair.source ^ pair.target).count_ones() % 2 == 0 && pair.sources * pair.targets < 10
+}
+
 #[test]
 fn the_near_rule_sees_the_entries_the_rule_keeps() {
+    let mut v_converted = 0;
     for (name, map) in cases() {
         let counts = counts_of(&map, count);
-        let rule = NearRule::new(&counts, &predicate);
+        let rule = NearRule::new(&counts, &predicate).with_v_pairs(&v_predicate);
         let both = plan_with(
             &map,
             &PlanRules {
@@ -255,12 +262,28 @@ fn the_near_rule_sees_the_entries_the_rule_keeps() {
         .unwrap();
         let empty = plan_with(&map, &empty_rule(&counts)).unwrap();
         let is_leaf_key = |key: MortonKey| map.get(&key).copied().is_some_and(is_leaf);
-        // The empty rule's rows with the near rule applied to the W entries that are leaves
-        // and the X entries of local leaves.
-        let mut converted = (0, 0);
+        // The empty rule's rows with the near rule applied to the W and V entries that are
+        // leaves and the X entries of local leaves.
+        let mut converted = (0, 0, 0);
         let rows = rows_by_key(&both);
         for (key, mut expected) in rows_by_key(&empty) {
             if expected.len() > 5 {
+                let v = std::mem::take(&mut expected[0]);
+                for (s, d) in v {
+                    let near = is_leaf_key(s)
+                        && v_predicate(VPair {
+                            target: key,
+                            source: s,
+                            sources: counts.sources(s).unwrap(),
+                            targets: counts.targets(key).unwrap(),
+                        });
+                    if near {
+                        expected[5].push((s, 0));
+                        converted.2 += 1;
+                    } else {
+                        expected[0].push((s, d));
+                    }
+                }
                 let w = std::mem::take(&mut expected[6]);
                 for (s, g) in w {
                     let near = is_leaf_key(s)
@@ -296,8 +319,14 @@ fn the_near_rule_sees_the_entries_the_rule_keeps() {
         }
         assert_eq!(both.empty_boxes(), empty.empty_boxes(), "{name}");
         let pairs = both.near_pairs();
-        assert_eq!((pairs.w_converted, pairs.x_converted), converted, "{name}");
+        assert_eq!(
+            (pairs.w_converted, pairs.x_converted, pairs.v_converted),
+            converted,
+            "{name}"
+        );
+        v_converted += converted.2;
     }
+    assert!(v_converted > 0);
 }
 
 #[test]
@@ -307,6 +336,7 @@ fn a_plan_on_a_prebuilt_index_is_the_plan_and_another_index_is_not_one() {
         let partition = one_rank_map(&map);
         let counts = counts_of(&map, count);
         let rule = NearRule::new(&counts, &predicate);
+        let v_rule = NearRule::new(&counts, &predicate).with_v_pairs(&v_predicate);
         let near = PlanRules {
             near: Some(&rule),
             ..PlanRules::default()
@@ -315,11 +345,16 @@ fn a_plan_on_a_prebuilt_index_is_the_plan_and_another_index_is_not_one() {
             near: Some(&rule),
             empty_boxes: Some(&counts),
         };
+        let both_v = PlanRules {
+            near: Some(&v_rule),
+            empty_boxes: Some(&counts),
+        };
         for (label, rules) in [
             ("no rule", PlanRules::default()),
             ("near", near),
             ("empty", empty_rule(&counts)),
             ("both", both),
+            ("both with V", both_v),
         ] {
             let index = index_from_keys(&map, n).unwrap();
             assert!(index.is_index_of(&map, n), "{name}, {label}");

@@ -5,11 +5,11 @@ use std::{cell::RefCell, collections::HashMap};
 
 use nd_octree::{MortonKey, octree::KeyType};
 
-use super::{LeafCounts, LeafPair, NearPairs, NearRule};
+use super::{LeafCounts, LeafPair, NearPairs, NearRule, VPair};
 use crate::interaction_manager::{is_leaf, tests::ListMaps};
 use crate::plan::{
     Plan, PlanError,
-    tests::{cases, nlevels, one_rank_map},
+    tests::{cases, nlevels, one_rank_map, rows_by_key},
 };
 
 /// A count of 0–39 that mixes the bits of `key` and `salt`.
@@ -36,6 +36,11 @@ fn predicate(pair: LeafPair) -> bool {
         LeafPair::W { sources, .. } => sources < 20,
         LeafPair::X { targets, .. } => targets < 15,
     }
+}
+
+/// The V rule of these tests (Helmholtz CH4.0d2): pairs with n_s n_t below 300.
+fn v_predicate(pair: VPair) -> bool {
+    pair.sources * pair.targets < 300
 }
 
 fn plan_with(map: &HashMap<MortonKey, KeyType>, rule: &NearRule<'_>) -> Result<Plan, PlanError> {
@@ -261,11 +266,13 @@ fn duality_holds_for_the_pairs_not_converted() {
 
 #[test]
 fn near_rows_stay_ordered_by_level_and_key() {
-    let mut grown = 0;
+    let (mut grown, mut v_pairs) = (0, 0);
     for (name, map) in cases() {
         let counts = counts_of(&map);
         let always = |_: LeafPair| true;
-        let plan = plan_with(&map, &NearRule::new(&counts, &always)).unwrap();
+        let always_v = |_: VPair| true;
+        let rule = NearRule::new(&counts, &always).with_v_pairs(&always_v);
+        let plan = plan_with(&map, &rule).unwrap();
         let leaves = plan.index().leaves();
         for level in 0..plan.nlevels() {
             for view in [plan.level(level).near(), plan.level(level).x()] {
@@ -279,11 +286,16 @@ fn near_rows_stay_ordered_by_level_and_key() {
                     assert_eq!(by_key, row, "{name}: level {level}, row {t}");
                 }
             }
-            // Every X entry of a leaf converts, and every leaf W entry.
+            // Every X entry of a leaf converts, and every leaf W and V entry of a leaf.
             let lists = plan.level(level);
             for r in 0..lists.w().nrows() {
                 for &s in lists.w().row(r) {
                     assert!(!is_leaf(plan.index().kind(level + 1, s as usize)));
+                }
+            }
+            for i in (0..lists.v().nrows()).filter(|&i| plan.index().box_leaf(level, i).is_some()) {
+                for &s in lists.v().row(i).0 {
+                    assert!(!is_leaf(plan.index().kind(level, s as usize)));
                 }
             }
             grown += lists.near().entries().len();
@@ -291,8 +303,11 @@ fn near_rows_stay_ordered_by_level_and_key() {
         let pairs = plan.near_pairs();
         assert_eq!(pairs.w_converted, pairs.w_leaf_pairs, "{name}");
         assert_eq!(pairs.x_converted, pairs.x_leaf_pairs, "{name}");
+        assert_eq!(pairs.v_converted, pairs.v_leaf_pairs, "{name}");
+        v_pairs += pairs.v_leaf_pairs;
     }
     assert!(grown > 0);
+    assert!(v_pairs > 0);
 }
 
 #[test]
@@ -300,14 +315,20 @@ fn a_rule_that_converts_nothing_leaves_the_views_unchanged() {
     for (name, map) in cases() {
         let counts = counts_of(&map);
         let never = |_: LeafPair| false;
-        let plan = plan_with(&map, &NearRule::new(&counts, &never)).unwrap();
+        let never_v = |_: VPair| false;
         let without = plan_without(&map);
-        assert_eq!(plan.index(), without.index(), "{name}");
-        assert_eq!(plan.levels(), without.levels(), "{name}");
-        assert_eq!(
-            plan.near_pairs().w_converted + plan.near_pairs().x_converted,
-            0
-        );
+        let v_rule = NearRule::new(&counts, &never).with_v_pairs(&never_v);
+        for rule in [NearRule::new(&counts, &never), v_rule] {
+            let plan = plan_with(&map, &rule).unwrap();
+            assert_eq!(plan.index(), without.index(), "{name}");
+            assert_eq!(plan.levels(), without.levels(), "{name}");
+            let pairs = plan.near_pairs();
+            assert_eq!(pairs.w_converted + pairs.x_converted + pairs.v_converted, 0);
+            // V pairs are offered only by a rule with a V predicate.
+            if !rule.offers_v_pairs() {
+                assert_eq!(pairs.v_leaf_pairs, 0, "{name}");
+            }
+        }
     }
 }
 
@@ -332,4 +353,149 @@ fn a_missing_count_is_an_error() {
         checked += 1;
     }
     assert!(checked > 0);
+}
+
+#[test]
+fn a_missing_v_count_is_an_error() {
+    let mut checked = 0;
+    for (name, map) in cases() {
+        let full = counts_of(&map);
+        let never = |_: LeafPair| false;
+        let always = |_: VPair| true;
+        let rule = NearRule::new(&full, &never).with_v_pairs(&always);
+        if plan_with(&map, &rule).unwrap().near_pairs().v_leaf_pairs == 0 {
+            continue;
+        }
+        // Without counts, and with the target counts alone (the V sources' missing).
+        let mut targets = LeafCounts::new();
+        for (&key, &kind) in &map {
+            if is_leaf(kind) {
+                targets.set_targets(key, 1);
+            }
+        }
+        for counts in [LeafCounts::new(), targets] {
+            let rule = NearRule::new(&counts, &never).with_v_pairs(&always);
+            let error = plan_with(&map, &rule).unwrap_err();
+            let PlanError::MissingCount { key } = error else {
+                panic!("{name}: {error:?}");
+            };
+            assert!(is_leaf(map[&key]), "{name}: {key}");
+        }
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
+
+#[test]
+fn v_pairs_convert_exactly_those_the_v_predicate_names() {
+    let mut total = NearPairs::default();
+    let mut ghosts_converted = 0;
+    for (name, map) in cases() {
+        let counts = counts_of(&map);
+        let calls = RefCell::new(Vec::new());
+        let recording = |pair: VPair| {
+            calls.borrow_mut().push(pair);
+            v_predicate(pair)
+        };
+        let never = |_: LeafPair| false;
+        let plan = plan_with(
+            &map,
+            &NearRule::new(&counts, &never).with_v_pairs(&recording),
+        )
+        .unwrap();
+        let without = plan_without(&map);
+        let is_leaf_key = |key: MortonKey| map.get(&key).copied().is_some_and(is_leaf);
+
+        // The rows without the rule, with the V entries of local leaves that are leaves
+        // offered once each with both counts; the converted ones move to the near row.
+        let mut expected_calls = Vec::new();
+        let mut expected = NearPairs::default();
+        let mut converted_ghosts = Vec::new();
+        let mut expected_rows = rows_by_key(&without);
+        for (&key, rows) in expected_rows.iter_mut() {
+            if !matches!(map[&key], KeyType::LocalLeaf) {
+                continue;
+            }
+            let v = std::mem::take(&mut rows[0]);
+            for (s, d) in v {
+                if !is_leaf_key(s) {
+                    rows[0].push((s, d));
+                    continue;
+                }
+                let pair = VPair {
+                    target: key,
+                    source: s,
+                    sources: counts.sources(s).unwrap(),
+                    targets: counts.targets(key).unwrap(),
+                };
+                expected_calls.push(pair);
+                expected.v_leaf_pairs += 1;
+                if v_predicate(pair) {
+                    expected.v_converted += 1;
+                    rows[5].push((s, 0));
+                    if map[&s].is_ghost() {
+                        converted_ghosts.push(s);
+                    }
+                } else {
+                    rows[0].push((s, d));
+                }
+            }
+            rows[5].sort_unstable_by_key(|&(k, _)| (nd_octree::morton::level(k), k));
+        }
+        let rows = rows_by_key(&plan);
+        assert_eq!(rows.len(), expected_rows.len(), "{name}: boxes with rows");
+        for (key, expected) in &expected_rows {
+            assert_eq!(&rows[key], expected, "{name}: rows of {key}");
+        }
+        let mut calls = calls.into_inner();
+        calls.sort_unstable_by_key(|pair| (pair.target, pair.source));
+        expected_calls.sort_unstable_by_key(|pair| (pair.target, pair.source));
+        assert_eq!(calls, expected_calls, "{name}: the V predicate's calls");
+        let pairs = plan.near_pairs();
+        assert_eq!(
+            (
+                pairs.v_leaf_pairs,
+                pairs.v_converted,
+                pairs.w_converted,
+                pairs.x_converted
+            ),
+            (expected.v_leaf_pairs, expected.v_converted, 0, 0),
+            "{name}"
+        );
+
+        // The ghost leaves: those without the rule and the converted ghost V entries.
+        let mut ghosts: Vec<MortonKey> = without
+            .index()
+            .leaves()
+            .ghosts()
+            .map(|j| without.index().leaf_key(j))
+            .chain(converted_ghosts.iter().copied())
+            .collect();
+        ghosts.sort_unstable();
+        ghosts.dedup();
+        let numbered: Vec<MortonKey> = plan
+            .index()
+            .leaves()
+            .ghosts()
+            .map(|j| plan.index().leaf_key(j))
+            .collect();
+        assert_eq!(numbered, ghosts, "{name}: ghost leaves");
+        let local = plan.index().leaves().nlocal();
+        assert_eq!(local, without.index().leaves().nlocal(), "{name}");
+        assert_eq!(
+            plan.index().leaves().keys()[..local],
+            without.index().leaves().keys()[..local],
+            "{name}: local leaves"
+        );
+
+        total.v_leaf_pairs += expected.v_leaf_pairs;
+        total.v_converted += expected.v_converted;
+        ghosts_converted += converted_ghosts.len();
+    }
+    // Some pairs convert, some stay, and some converted entry is a ghost.
+    assert!(
+        0 < total.v_converted && total.v_converted < total.v_leaf_pairs,
+        "{total:?}"
+    );
+    assert!(ghosts_converted > 0);
 }

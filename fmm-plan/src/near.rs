@@ -1,5 +1,5 @@
 //! The near rule: W and X pairs between two leaves turned into near pairs (Phase 6 T12,
-//! C6.9; `docs/design/optimisation.md` §8a).
+//! C6.9; `docs/design/optimisation.md` §8a), and optionally V pairs (Helmholtz CH4.0d2).
 //!
 //! For a leaf t, the W-list holds boxes one level finer that do not touch t, and the
 //! X-list of a box s the leaves one level coarser that do not touch s; s ∈ W(t) iff
@@ -20,8 +20,15 @@
 //!   U-list leaf is, so the source exchange delivers its points.
 //! - **X.** For each X entry t of a local leaf s, the predicate sees [`LeafPair::X`] with
 //!   the target count of s. If it holds, s's near row gains t and s's X row loses it.
-//! - Nothing else: an interior W box keeps its M2P (its points lie in leaves that no
-//!   list names), the X entries of an interior box keep their P2L, and the two directions
+//! - **V** (Helmholtz CH4.0d2; only with [`NearRule::with_v_pairs`]). For each V entry s
+//!   of a local leaf t whose box s is a leaf (of t's level, not adjacent to t), the V
+//!   predicate sees [`VPair`] with the source count of s and the target count of t. If it
+//!   holds, t's near row gains s and t's V row loses it (the M2L from s's multipole to t's
+//!   local, which only t's L2P reads); a ghost leaf s is named in the leaf numbering, so
+//!   the source exchange delivers its points. The source exchange's halo then reaches the
+//!   V leaves too, up to three leaf widths from t's boundary.
+//! - Nothing else: an interior W or V box keeps its M2P or M2L (its points lie in leaves
+//!   that no list names), the X entries of an interior box keep their P2L, and the two directions
 //!   of a pair are decided separately, each on the rank of its target. A pair the rule
 //!   keeps stays in its W and X rows, so their duality holds for every pair not converted.
 //! - The near rows keep their (level, key) order (P1), so the sums of P2P are those of
@@ -39,7 +46,9 @@
 //! local leaves' counts and the plan without the rule: the W-row leaves of another rank
 //! are not always among the ghost leaves the source exchange delivers (U and X name
 //! those), so they are fetched from their owners. Counts are by key, so the same leaf
-//! has the same count on every rank.
+//! has the same count on every rank. With V pairs the rule also reads the source count of
+//! every leaf a V row names: [`LeafCounts::exchange_with_boxes`] holds that of every held
+//! ghost leaf, those of the V rows included ([`LeafCounts::exchange`] does not).
 
 #[cfg(test)]
 #[path = "near_tests.rs"]
@@ -354,23 +363,59 @@ impl LeafCounts {
     }
 }
 
-/// A rule that turns W and X pairs between two leaves into near pairs: a predicate the
-/// operator supplies and the counts it reads (the [module documentation](self)).
+/// A V pair between two leaves of one level that a [`NearRule`] with a V predicate
+/// ([`NearRule::with_v_pairs`]; Helmholtz CH4.0d2) may turn into a near pair: the multipole
+/// of `source` translated to a local of `target` (M2L), or, as a near pair, the sources of
+/// `source` at the target points of `target` (P2P). The level is the keys'.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VPair {
+    /// The local leaf whose V row names `source`.
+    pub target: MortonKey,
+    /// The leaf of the V entry, local or a ghost.
+    pub source: MortonKey,
+    /// The source points of `source`.
+    pub sources: usize,
+    /// The target points of `target`.
+    pub targets: usize,
+}
+
+/// A rule that turns W and X pairs between two leaves into near pairs, and with
+/// [`with_v_pairs`](Self::with_v_pairs) V pairs between two leaves too: the predicates the
+/// operator supplies and the counts they read (the [module documentation](self)).
 ///
 /// The plan calls the predicate once per W entry of a local leaf whose box is a leaf
-/// and once per X entry of a local leaf, with that pair's count from the counts; a pair
-/// whose count is missing is an error of the plan
+/// and once per X entry of a local leaf, with that pair's count from the counts, and the
+/// V predicate, if any, once per V entry of a local leaf whose box is a leaf, with both
+/// counts; a pair whose count is missing is an error of the plan
 /// ([`PlanError::MissingCount`](crate::plan::PlanError::MissingCount)).
 pub struct NearRule<'a> {
     counts: &'a LeafCounts,
     predicate: &'a dyn Fn(LeafPair) -> bool,
+    v_predicate: Option<&'a dyn Fn(VPair) -> bool>,
 }
 
 impl<'a> NearRule<'a> {
-    /// The rule of `predicate` over `counts`: a pair becomes a near pair where the
-    /// predicate holds.
+    /// The rule of `predicate` over `counts`: a W or X pair becomes a near pair where the
+    /// predicate holds. No V pair is offered.
     pub fn new(counts: &'a LeafCounts, predicate: &'a dyn Fn(LeafPair) -> bool) -> Self {
-        Self { counts, predicate }
+        Self {
+            counts,
+            predicate,
+            v_predicate: None,
+        }
+    }
+
+    /// The rule that also offers every V pair between two leaves to `predicate` (Helmholtz
+    /// CH4.0d2): a V entry s of a local leaf t, s a leaf (local or a ghost), becomes a near
+    /// pair where it holds. t's V row loses s and its near row gains it, in (level, key)
+    /// order; a ghost s is named in the leaf numbering, so the source exchange delivers its
+    /// points. Interior V entries are never offered (their points lie in leaves no list
+    /// names).
+    pub fn with_v_pairs(self, predicate: &'a dyn Fn(VPair) -> bool) -> Self {
+        Self {
+            v_predicate: Some(predicate),
+            ..self
+        }
     }
 
     /// The counts the rule reads.
@@ -382,17 +427,28 @@ impl<'a> NearRule<'a> {
     pub fn converts(&self, pair: LeafPair) -> bool {
         (self.predicate)(pair)
     }
+
+    /// Whether the rule offers V pairs ([`with_v_pairs`](Self::with_v_pairs)).
+    pub fn offers_v_pairs(&self) -> bool {
+        self.v_predicate.is_some()
+    }
+
+    /// Whether the V pair `pair` becomes a near pair; never without a V predicate.
+    pub fn converts_v(&self, pair: VPair) -> bool {
+        self.v_predicate.is_some_and(|predicate| predicate(pair))
+    }
 }
 
 impl std::fmt::Debug for NearRule<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NearRule")
             .field("counts", &self.counts)
+            .field("v_pairs", &self.offers_v_pairs())
             .finish_non_exhaustive()
     }
 }
 
-/// The W and X pairs between leaves a plan has, and those its near rule converted, on
+/// The W, X and V pairs between leaves a plan has, and those its near rule converted, on
 /// one rank ([`Plan::near_pairs`](crate::plan::Plan::near_pairs)).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NearPairs {
@@ -404,4 +460,9 @@ pub struct NearPairs {
     pub x_leaf_pairs: usize,
     /// Of those, the X pairs the rule made near pairs.
     pub x_converted: usize,
+    /// V entries of local leaves whose box is a leaf, before the rule, where the rule offers
+    /// V pairs ([`NearRule::with_v_pairs`]); zero otherwise.
+    pub v_leaf_pairs: usize,
+    /// Of those, the V pairs the rule made near pairs.
+    pub v_converted: usize,
 }
