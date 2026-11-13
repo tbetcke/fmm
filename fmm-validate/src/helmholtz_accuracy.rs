@@ -156,6 +156,9 @@ pub struct Case {
     /// The points per leaf (`HelmholtzFmmBuilder::max_points_per_leaf`, Helmholtz CH4.0b;
     /// `None` the library's); above N, a tree of leaves on the leaf rule's level alone.
     pub max_points_per_leaf: Option<usize>,
+    /// The maximum leaf width in wavelengths (`HelmholtzFmmBuilder::c_leaf`, Helmholtz
+    /// CH4.0d3; `None` the library's, `C_LEAF`).
+    pub c_leaf: Option<f64>,
     /// Whether the plan leaves out the work of empty boxes
     /// (`HelmholtzFmmBuilder::empty_boxes`, Helmholtz CH4.0d1; `true` in [`Case::new`], the
     /// library's default); named always, as `auto_plane_wave`.
@@ -198,6 +201,7 @@ impl Case {
             evaluations: 1,
             domain: None,
             max_points_per_leaf: None,
+            c_leaf: None,
             empty_boxes: true,
             near_v: VNear::Off,
         }
@@ -613,6 +617,15 @@ pub struct Row {
     pub leaves: usize,
     /// The most points in a leaf.
     pub max_leaf_points: usize,
+    /// The octree's refinement target as built (`HelmholtzFmm::max_points_per_leaf`;
+    /// Helmholtz CH4.0d3).
+    pub max_points_per_leaf: usize,
+    /// The maximum leaf width in wavelengths as built (`HelmholtzFmm::c_leaf`; Helmholtz
+    /// CH4.0d3).
+    pub c_leaf: f64,
+    /// Per level, its leaves and the leaves holding a source or a target, summed over the
+    /// ranks (`HelmholtzFmm::leaves_by_level`; Helmholtz CH4.0d3).
+    pub leaves_by_level: Vec<[usize; 2]>,
     /// The build, seconds (slowest rank).
     pub build: f64,
     /// The evaluation, seconds (slowest rank); the last of [`Case::evaluations`].
@@ -678,6 +691,27 @@ pub struct Row {
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
     pub checksum: u64,
+}
+
+impl Row {
+    /// The width of the widest leaf holding a point, in the FMM's domain (Helmholtz
+    /// CH4.0d3; from the level's circumradius √3 r_l, w = 2 r_l).
+    pub fn widest_occupied_leaf(&self) -> f64 {
+        self.leaves_by_level
+            .iter()
+            .position(|&[_, occupied]| occupied > 0)
+            .map_or(0.0, |l| 2.0 * self.circumradii[l] / 3f64.sqrt())
+    }
+
+    /// A bound on the phase Re(k) r of the P2P's pairs (Helmholtz CH4.0d3; proposal §5.7,
+    /// CH3.4b's contract range): a near pair's leaves are adjacent, or V leaves of one level
+    /// made near (`near_v`, at most three boxes apart per axis), and no leaf holding a point
+    /// is wider than [`widest_occupied_leaf`](Self::widest_occupied_leaf) w, so r ≤ 2√3 w,
+    /// or 4√3 w with V pairs converted.
+    pub fn phase_bound(&self, re_k: f64) -> f64 {
+        let span = if self.v_near[1] > 0 { 4.0 } else { 2.0 };
+        re_k * span * 3f64.sqrt() * self.widest_occupied_leaf()
+    }
 }
 
 /// The slowest rank's `seconds`.
@@ -791,6 +825,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(points) = case.max_points_per_leaf {
         builder = builder.max_points_per_leaf(points);
     }
+    if let Some(c_leaf) = case.c_leaf {
+        builder = builder.c_leaf(c_leaf);
+    }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -824,6 +861,10 @@ pub fn run_output<C: CommunicatorCollectives>(
     let checksum = reduce_checksum(checksum(&output, block.start), comm);
     let mut leaves = 0usize;
     comm.all_reduce_into(&fmm.nleaves(), &mut leaves, SystemOperation::sum());
+    let local: Vec<usize> = fmm.leaves_by_level().into_iter().flatten().collect();
+    let mut summed = vec![0usize; local.len()];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let leaves_by_level: Vec<[usize; 2]> = summed.chunks(2).map(|c| [c[0], c[1]]).collect();
     let nlevels = fmm.nlevels();
     let seconds: Vec<f64> = fmm
         .operator()
@@ -990,6 +1031,9 @@ pub fn run_output<C: CommunicatorCollectives>(
             .collect(),
         leaves,
         max_leaf_points: fmm.max_leaf_points(),
+        max_points_per_leaf: fmm.max_points_per_leaf(),
+        c_leaf: fmm.c_leaf(),
+        leaves_by_level,
         build,
         evaluate,
         first_evaluate,

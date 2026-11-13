@@ -983,6 +983,8 @@ impl HelmholtzFmmBuilder {
             degrees,
             min_leaf_level: leaf_level,
             max_leaf_points,
+            max_points_per_leaf: self.max_points_per_leaf,
+            c_leaf: self.c_leaf,
             pool,
             packed: Vec::new(),
             charges: vec![T::zero(); strengths * points.sources.nreceived()],
@@ -1225,6 +1227,10 @@ where
     degrees: Vec<usize>,
     min_leaf_level: usize,
     max_leaf_points: usize,
+    /// The octree's refinement target as built (Helmholtz CH4.0d3).
+    max_points_per_leaf: usize,
+    /// The maximum leaf width in wavelengths as built (Helmholtz CH4.0d3).
+    c_leaf: f64,
     pool: Option<Arc<ThreadPool>>,
     /// The caller's columns packed point-major (c m per source) for the forward move, when
     /// there is more than one column; allocated by the first evaluation that needs it.
@@ -1531,6 +1537,33 @@ where
     /// The largest number of sources in a leaf, over every rank.
     pub fn max_leaf_points(&self) -> usize {
         self.max_leaf_points
+    }
+
+    /// The octree's refinement target, points per leaf, as built
+    /// ([`HelmholtzFmmBuilder::max_points_per_leaf`]; Helmholtz CH4.0d3).
+    pub fn max_points_per_leaf(&self) -> usize {
+        self.max_points_per_leaf
+    }
+
+    /// The maximum leaf width in wavelengths as built ([`HelmholtzFmmBuilder::c_leaf`];
+    /// Helmholtz CH4.0d3).
+    pub fn c_leaf(&self) -> f64 {
+        self.c_leaf
+    }
+
+    /// This rank's local leaves per level of the plan (Helmholtz CH4.0d3): `[leaves,
+    /// leaves holding a source or a target]`. Summed over the ranks, the same on every rank
+    /// count.
+    pub fn leaves_by_level(&self) -> Vec<[usize; 2]> {
+        let leaves = self.evaluator.plan().index().leaves();
+        let mut counts = vec![[0usize; 2]; self.nlevels()];
+        for j in 0..self.nleaves() {
+            let count = &mut counts[leaves.level(j)];
+            count[0] += 1;
+            let points = self.points.source_leaves.counts[j] + self.points.target_leaves.counts[j];
+            count[1] += usize::from(points > 0);
+        }
+        counts
     }
 
     /// This rank's sources and targets, as passed to the build.

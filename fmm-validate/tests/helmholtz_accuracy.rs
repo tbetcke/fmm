@@ -650,6 +650,56 @@ fn helmholtz_accuracy_harness() {
     check_box_study(&world);
     check_empty_boxes(&world);
     check_near_v(&world);
+    check_leaves(&world);
+}
+
+/// The leaf size and c_leaf (Helmholtz CH4.0d3) on W1 at kD = 100 (leaves on the leaf
+/// rule's level at 64 points per leaf): the library's as built by default, named values
+/// as built, the leaves per level summing to the leaves and the occupied ones to at most
+/// those, the phase bound within 22 c_leaf without V pairs made near and twice that with
+/// them, and c_leaf = 2 putting the leaf rule's level one level coarser.
+fn check_leaves(world: &SimpleCommunicator) {
+    let default = Case::new(Workload::W1, (100.0, 0.0), Degrees::Tolerance(1e-3));
+    assert_eq!(default.max_points_per_leaf, None, "the library's");
+    assert_eq!(default.c_leaf, None, "the library's");
+    let problem = Problem::new(&default);
+    let oracle = Oracle::sharded(complex_k(&default), &problem, default.gradients, 2, world);
+    let row = run(&default, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row.c_leaf, nd_fmm_exec::helmholtz::C_LEAF);
+    let named = Case {
+        max_points_per_leaf: Some(256),
+        c_leaf: Some(2.0),
+        ..default.clone()
+    };
+    let wide = run(&named, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!((wide.max_points_per_leaf, wide.c_leaf), (256, 2.0));
+    assert_eq!(
+        wide.min_leaf_level + 1,
+        row.min_leaf_level,
+        "one level coarser"
+    );
+    let near = Case {
+        near_v: VNear::Crossover(f64::INFINITY),
+        ..default.clone()
+    };
+    let converted = run(&near, &problem, &oracle, 1, world).expect("the FMM runs");
+    for (row, span) in [(&row, 2.0), (&wide, 2.0), (&converted, 4.0)] {
+        assert_eq!(row.leaves_by_level.len(), row.levels);
+        let leaves: usize = row.leaves_by_level.iter().map(|c| c[0]).sum();
+        assert_eq!(leaves, row.leaves);
+        assert!(row.leaves_by_level.iter().all(|c| c[1] <= c[0]));
+        assert!(row.leaves_by_level.iter().map(|c| c[1]).sum::<usize>() > 0);
+        let phase = row.phase_bound(100.0);
+        assert!(
+            phase > 0.0 && phase <= span * 11.0 * row.c_leaf,
+            "{phase} at c_leaf {}",
+            row.c_leaf
+        );
+        for e in row.errors.last().expect("an entry over all vectors") {
+            assert!(*e < 1e-3, "{e:e}");
+        }
+    }
+    assert!(converted.v_near[1] > 0);
 }
 
 /// The V pairs as near pairs (Helmholtz CH4.0d2) on W1 at kD = 30 under Rotation: off by
