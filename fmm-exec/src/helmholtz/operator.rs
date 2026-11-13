@@ -465,6 +465,29 @@ pub fn auto_plane_wave_min_degree(isa: Isa, planes: usize) -> usize {
 /// such levels run Batched or RCR.
 pub const AUTO_PLANE_WAVE_MAX_IM_KAPPA: f64 = 5.0 * std::f64::consts::PI;
 
+/// The levels on which [`HelmholtzM2l::Auto`] with the exponential M2L takes it (Helmholtz
+/// CH6.2h, D8), each with its precision: the rule's quadratures (`merge::select` of k̂_0 =
+/// k r_0, the degrees `base` the levels were given and the tolerance) on the levels of degree
+/// at least `min_degree` with Im κ_l < [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`], κ_l = 2 k̂_0 / 2^l.
+/// A function of the settings and the degrees alone, so the builder knows the levels before
+/// the plan (Helmholtz CH4.0d2's cost model); the operator's choice is this one.
+pub(crate) fn auto_plane_wave_levels(
+    k_root: Complex<f64>,
+    base: &[usize],
+    tolerance: Option<f64>,
+    min_degree: usize,
+) -> Vec<Option<Precision>> {
+    select(k_root, base, tolerance)
+        .into_iter()
+        .enumerate()
+        .map(|(l, precision)| {
+            // `HelmholtzTables`' k̂_l, doubled.
+            let kappa = k_root * (0.5f64).powi(l as i32) * 2.0;
+            precision.filter(|_| base[l] >= min_degree && kappa.im < AUTO_PLANE_WAVE_MAX_IM_KAPPA)
+        })
+        .collect()
+}
+
 /// The column kernel's mode of [`HelmholtzM2l::Auto`] on `isa` unless one is named
 /// (Helmholtz CH3.2d): [`MulAdd::Fused`], where each step is one hardware fma, but
 /// [`MulAdd::Separate`] for the scalar kernel in a build whose target has no fma
@@ -1178,22 +1201,12 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             // Auto's levels with waves (Helmholtz CH6.2h): the rule's quadratures from the
             // smallest degree on, below the bound on Im κ_l (since CH6.1h's sign-off,
             // 2026-11-11, at every tolerance with a quadrature).
-            HelmholtzM2l::Auto if kernel.auto_takes_plane_waves() => {
-                let min_degree = kernel.auto_plane_wave_min_degree();
-                let precisions = select(k_root, &base, tolerance);
-                Some(
-                    precisions
-                        .into_iter()
-                        .enumerate()
-                        .map(|(l, precision)| {
-                            let kappa = kernel.tables.k_hat(l) * 2.0;
-                            precision.filter(|_| {
-                                base[l] >= min_degree && kappa.im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
-                            })
-                        })
-                        .collect(),
-                )
-            }
+            HelmholtzM2l::Auto if kernel.auto_takes_plane_waves() => Some(auto_plane_wave_levels(
+                k_root,
+                &base,
+                tolerance,
+                kernel.auto_plane_wave_min_degree(),
+            )),
             _ => None,
         };
         // The rule's resolving degree on the levels with waves (Helmholtz CH6.1g), under
