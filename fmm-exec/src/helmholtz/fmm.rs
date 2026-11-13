@@ -587,7 +587,7 @@ impl HelmholtzFmmBuilder {
             return Err(HelmholtzFmmError::LeafWidth(self.c_leaf));
         }
         if let VNear::Crossover(n) = self.near_v
-            && !(n >= 0.0)
+            && (n.is_nan() || n < 0.0)
         {
             return Err(HelmholtzFmmError::VCrossover(n));
         }
