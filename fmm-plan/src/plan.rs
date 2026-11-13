@@ -74,7 +74,11 @@
 //!   locally while the rows are built. A box whose subtree holds no target loses its V, X, W
 //!   and L2L rows; a box whose subtree holds no source leaves the V, W and M2M rows that
 //!   name it; `Global` boxes too, by the counts of whole subtrees. Rows are only shortened,
-//!   never reordered; [`Plan::new`] is the plan without the rule, bit for bit.
+//!   never reordered; [`Plan::new`] is the plan without the rule, bit for bit. Its counts
+//!   need the local leaves' points, so a caller builds the octree's index first
+//!   ([`BoxIndex::of_octree`]), routes the points and counts on it
+//!   ([`LeafCounts::exchange_with_boxes`]), and builds the plan once on the same index
+//!   ([`Plan::with_rules_on`]; Helmholtz CH4.0d1b).
 //! - The plan owns its arrays and borrows nothing from the octree. A new tree needs a new
 //!   plan: box indices, unlike keys, change when the tree changes.
 //!

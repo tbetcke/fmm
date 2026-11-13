@@ -566,9 +566,13 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   empty-box rule of `nd_fmm_plan::empty` by default (`HelmholtzFmmBuilder::empty_boxes`,
   `HelmholtzFmm::empty_boxes`; what it left out is `plan().empty_boxes()`): after the routes
   (steps 5 and 6) the build takes every box's subtree counts from the points the routes
-  deliver to each local leaf (`LeafCounts::exchange_with_boxes`) and builds the plan again
-  with `Plan::with_rules`; the rule changes no local leaf, so the routes hold
-  (`cost::leaf_point_counts`, a pass over every point, is not needed). A box whose subtree holds no target loses its V, X, W and
+  deliver to each local leaf (`LeafCounts::exchange_with_boxes`) and builds the plan with
+  the rule; the rule changes no local leaf, so the routes hold
+  (`cost::leaf_point_counts`, a pass over every point, is not needed). Since Helmholtz
+  CH4.0d1b (docs/helmholtz/tasks/CH4.0d1b.md) the plan is built once: step 4 builds the
+  octree's `BoxIndex::of_octree`, the routes run on it (`Points::route` takes the index;
+  `Fmm` passes its plan's, the same routes), and `Plan::with_rules_on` builds the plan on it,
+  with the rule or without. A box whose subtree holds no target loses its V, X, W and
   L2L rows, one with no source leaves the V, W and M2M rows naming it; only exact zeros go,
   so the output is the rule off's as values (−0 and +0 equal), and on P ranks the one-rank
   FMM's of the same setting bit for bit. Auto's term counts the rule's V pairs, so under
