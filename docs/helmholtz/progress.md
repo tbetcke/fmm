@@ -2964,7 +2964,8 @@ request, using this template:
   and workspace tests at opt-level 1, the MPI list at 2 and 4 ranks (`helmholtz_fmm` 43 s and
   75 s). The opt-level 0 debug time was not measured (one assertion added to an existing check).
   Nothing pending.
-- Decisions: question 1 of the PR, proposal §3.5's check at x = 216 (pending).
+- Decisions: question 1 of the PR, proposal §3.5's check at x = 216: signed off 2026-11-13
+  after the merge, "Sign off as recommended"; the proposal amended in its own PR.
 - Laplace: not touched (the Helmholtz builder and operator, nd-fmm-validate's example, docs).
 - Follow-ups: CH4.0d (roadmap: the under-resolved W3's leaves of about one point and the M2L
   of its empty boxes, 61 % of 2.06 million leaves, every V pair run; level 7's M2L 86 % of the

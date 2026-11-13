@@ -499,7 +499,8 @@ task's full line is in its record or report and its progress entry
   error at 10⁻⁸ by under 1 %. §9 item 8: the under-resolved W3 (N = 10⁶) within ε at kD = 200 and
   500 (at most 0.72 ε). The rule's measured range stated in its documentation (review M6, M7).
   Found and fixed: the builder sized the waves buffer before its bound (218 GB on W3 at
-  kD = 500). Proposal §3.5's check at x = 216: question 1 of the PR. *Needs:* CH3.6.
+  kD = 500). Proposal §3.5 amended with the check at x = 216 (#214's question 1, the user,
+  2026-11-13: "Sign off as recommended"). *Needs:* CH3.6.
 - [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
   "Can you add leaf size tuning to the roadmap?"). Also (CH4.0c, report §3.2): on the
   under-resolved W3 (N = 10⁶) at kD = 500 the leaf rule fills level 7 and the complete octree
