@@ -494,11 +494,11 @@ task's full line is in its record or report and its progress entry
 - [x] **CH4.0c The degree rule beyond its measured range.** Report:
   `fmm-validate/results/helmholtz-ch4-0c.md`. Within ε, no correction: W1 at kD = 1000 (levels 2
   and 3 at x = 216 and 108) at 10⁻⁸ to 10⁻³, all-RCR and the default, the random charges, the
-  plane wave's trace and the constant density, at most 0.83 ε; the levels beyond x = 65 about
-  1 % of the error at 10⁻⁸. §9 item 8: the under-resolved W3 (N = 10⁶) within ε at kD = 200 and
+  plane wave's trace and the constant density, at most 0.83 ε; raising level 2 or 3 moves the
+  error at 10⁻⁸ by under 1 %. §9 item 8: the under-resolved W3 (N = 10⁶) within ε at kD = 200 and
   500 (at most 0.72 ε). The rule's measured range stated in its documentation (review M6, M7).
   Found and fixed: the builder sized the waves buffer before its bound (218 GB on W3 at
-  kD = 500). Proposal §3.5's range: question 1 of the PR. *Needs:* CH3.6.
+  kD = 500). Proposal §3.5's check at x = 216: question 1 of the PR. *Needs:* CH3.6.
 - [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
   "Can you add leaf size tuning to the roadmap?"). Also (CH4.0c, report §3.2): on the
   under-resolved W3 (N = 10⁶) at kD = 500 the leaf rule gives 2.06 million leaves on level 7,

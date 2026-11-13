@@ -2942,7 +2942,7 @@ request, using this template:
     §9.1's ℓ2 at 10⁻⁸, 10⁻⁷, 10⁻⁶ and 10⁻³, under Rotation and the default, for the random
     charges, the plane wave's trace and the constant density; at most 0.83 ε (∇φ over the
     samples and one target per level-8 box, 10⁻⁸, Rotation). No correction, no S7 degrees.
-  - The levels at 10⁻⁸ (each raised to the rule at 10⁻¹¹): levels 2–4 about 1 % of Σ|e|² each,
+  - The levels at 10⁻⁸ (each raised to the rule at 10⁻¹¹): levels 2–4 0.6 %, 1.0 % and 0.6 % of Σ|e|² (φ),
     level 6 (x = 13.5, p = 27, where the high-frequency branch first exceeds the plateau) 85 %.
   - §9 item 8: the under-resolved W3 (N = 10⁶) within ε at kD = 200 (at most 0.61 ε) and 500
     (0.72 ε), the three densities, 10⁻⁸, 10⁻⁶, 10⁻³, both M2Ls.
@@ -2964,7 +2964,7 @@ request, using this template:
   and workspace tests at opt-level 1, the MPI list at 2 and 4 ranks (`helmholtz_fmm` 43 s and
   75 s). The opt-level 0 debug time was not measured (one assertion added to an existing check).
   Nothing pending.
-- Decisions: question 1 of the PR, proposal §3.5's statement of the rule's range (pending).
+- Decisions: question 1 of the PR, proposal §3.5's check at x = 216 (pending).
 - Laplace: not touched (the Helmholtz builder and operator, nd-fmm-validate's example, docs).
 - Follow-ups: CH4.0d (roadmap: the under-resolved W3's empty leaves, level 7's M2L 86 % of the
   evaluation at kD = 500); CH4.3 (the high-frequency recalibration; the tightest level at

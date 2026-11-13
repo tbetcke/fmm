@@ -17,7 +17,7 @@
 //! ∇φ over 1,000 sampled targets within ε/2, on W1, W3 and W4 of proposal §9.1, one level
 //! scanned at a time (the plateau on trees with every level at x ≤ 2.2, all levels together),
 //! over 0.14 ≤ x ≤ 65 and 10⁻⁸ ≤ ε ≤ 10⁻³ (the plateau to 10⁻¹⁰); the rule is at least
-//! every measured degree. That is the range the rule is measured on, D1's 10⁻³ ≤ ε ≤ 10⁻⁸
+//! every measured degree. That is the range the rule is measured on, D1's 10⁻⁸ ≤ ε ≤ 10⁻³
 //! (Helmholtz CH4.0c, review 2026-11-12 M6); outside it the rule is an extrapolation. Below
 //! 10⁻⁸ the constant density on W1 at kD = 100 misses ε in ℓ2, 1.5× at 10⁻⁹ and 3.4× at
 //! 10⁻¹⁰, all from level 2 on the high-frequency branch (CH4.0b, report §4), although the
@@ -42,7 +42,8 @@
 //! in the full FMM at x = 108 (W1 at kD = 500, 0.63 ε at ε = 10⁻⁸; CH3.3) and at x = 216 and
 //! 108 (W1 at kD = 1000, levels 2 and 3, at 10⁻⁸ to 10⁻³, all-RCR and the default, random
 //! charges, the plane wave's trace and the constant density: within ε in ℓ2, at most 0.83 ε,
-//! the levels beyond x = 65 about 1 % of the error at 10⁻⁸; and the under-resolved W3 at
+//! raising either level beyond x = 65 moves the error at 10⁻⁸ by under 1 %; and the
+//! under-resolved W3 at
 //! N = 10⁶, x = 108 at kD = 500, at most 0.72 ε; Helmholtz CH4.0c,
 //! `fmm-validate/results/helmholtz-ch4-0c.md`). Beyond, it is an extrapolation that falls
 //! increasingly below S7's per-pair p* as x grows and ε falls (157 against 161 at x = 128,

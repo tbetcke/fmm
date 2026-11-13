@@ -66,12 +66,12 @@ sign-off 2 also names the plane wave's trace.
   the problem's setup. The tables print only after the last run, so a long launch showed no
   progress (the user, 2026-11-12, during jobs 633320 and 633321).
 - `fmm-exec/src/helmholtz/degree.rs`, module docs only: the measured range stated as D1's
-  10⁻³ ≤ ε ≤ 10⁻⁸ (the plateau to 10⁻¹⁰), with S7's comparison over 10⁻¹⁸ ≤ ε ≤ 10⁻¹ named as an
+  10⁻⁸ ≤ ε ≤ 10⁻³ (the plateau to 10⁻¹⁰), with S7's comparison over 10⁻¹⁸ ≤ ε ≤ 10⁻¹ named as an
   algebraic bound, not a measured range (review M6); the high-frequency branch checked at
   x = 216 and 108 with this task's result (or the correction); CH4.0b's below-D1 miss of the
   constant density named. `fmm-exec/CLAUDE.md`'s bullet the same.
-- Proposal §3.5: the calibrated rule's paragraph states the range and this task's check, as an
-  amendment for sign-off ("(amended at CH4.0c)", Appendix A line).
+- Proposal §3.5: not edited. It already states the measured range (10⁻⁸ ≤ ε ≤ 10⁻³, x ≤ 65); adding
+  this task's check at x = 216 is question 1 of the PR, for sign-off.
 - The report `fmm-validate/results/helmholtz-ch4-0c.md`.
 - No library code change unless the runs miss ε. If they do: the correction (stage D) changes
   `DegreeRule`'s high-frequency branch, or names S7's per-pair degrees above a stated x, as a
@@ -165,4 +165,5 @@ W3 at kD = 500 with the fix, one job per density: 633429 (random), 633430 (plane
 
 ## Open questions
 
-(filled when they arise)
+1. Proposal §3.5: add this task's check at x = 216 and 108 (W1 at kD = 1000) to the calibrated
+   rule's paragraph, "(amended at CH4.0c)" with an Appendix A line? (The report's §4.)

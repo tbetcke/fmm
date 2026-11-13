@@ -24,8 +24,8 @@ item 8 (the under-resolved W3), §9.1 (workloads, norms, the box measure), §10 
 - **The under-resolved W3** (N = 10⁶): at kD = 200 within ε on every case, the three densities,
   10⁻⁸, 10⁻⁶ and 10⁻³, both M2Ls (at most 0.61 ε, ∇φ of the plane wave's trace at the samples,
   10⁻⁸, Rotation); at kD = 500 too (at most 0.72 ε, the plane wave's trace, the same case),
-after a defect it found. So §9 item 8 holds. Its tree there has 2.06 million leaves for 10⁶
-points, and level 7's M2L takes 86 % of the evaluation under Rotation (§3.2), CH4.0d's.
+  after a defect it found. So §9 item 8 holds. Its tree there has 2.06 million leaves for 10⁶
+  points, and level 7's M2L takes 86 % of the evaluation under Rotation (§3.2), CH4.0d's.
 - **A defect in the default M2L, fixed here.** On W3 at kD = 500 the default's build asked
   for 218 GB and aborted (all three densities): `HelmholtzFmmBuilder` sized the exponential
   M2L's waves buffer for the plan's boxes before it set the buffer's bound (CH6.2a's 8 GiB
@@ -112,8 +112,8 @@ exponential M2L's resolving degree (CH6.1g, CH6.1h). The constant density, the c
 kD = 100 in CH4.0b (0.66 ε), is 0.46 ε here; the plane wave's trace is no harder than the
 random charges.
 
-The over-all-targets error of the random charges is 2–3× the samples' (0.83 against 0.30 ε
-for ∇φ at 10⁻⁸): the one-per-box sample weighs the boxes the sphere clips at a corner as
+The over-all-targets error of the random charges is 1.4–2.8× the samples' (most for ∇φ at
+10⁻⁸ to 10⁻⁶, 0.83 against 0.30 ε at 10⁻⁸): the one-per-box sample weighs the boxes the sphere clips at a corner as
 much as full ones, and those hold the worst targets (CH4.0b §2.3). It stays within ε.
 
 ### 2.2 The levels
@@ -145,7 +145,7 @@ From the per-run lines of the smooth densities (job 633323; the random charges' 
 before the lines existed): under Rotation at 10⁻⁸ the evaluation takes 565–583 s, M2L 539–557
 s of it. The top levels at p = 251, 135 and 76 take 26–27, 54–55 and 60 s (3,096, 53,352 and
 563,040 V pairs); the leaf levels 7 and 8 at p = 24 take 123–124 and 166–167 s (43 and 58
-million pairs). The default takes levels 5–8 off RCR (121 s for the four against 399 s) and
+million pairs). The default takes levels 5–8 off RCR (121–122 s for the four against 399–417 s) and
 runs levels 2–4 in Rotation's time. So the levels beyond x = 65 (2 and 3) cost 14 % of the evaluation under Rotation;
 the per-run times of 10–11 min matched the plan's estimate.
 
@@ -210,14 +210,13 @@ of the minimum leaf level are CH4.0d's (a sentence there).
 
 ## 4. Questions for sign-off
 
-1. **Proposal §3.5, the calibrated rule's range** (review M6). Recommended: its paragraph
-   states the rule as measured over 10⁻⁸ ≤ ε ≤ 10⁻³ and 0.14 ≤ x ≤ 65 (D1's range; the plateau
-   to 10⁻¹⁰), checked in the full FMM at x = 108 (W1 at kD = 500, CH3.3) and at x = 216 and 108
-   (W1 at kD = 1000, this task: 0.83 ε at most, the extrapolated levels 1 % of the error), an
-   extrapolation beyond; CH3.3's 10⁻¹⁸ to 10⁻¹ named as the comparison with S7's closed form,
-   not a measured range; and below 10⁻⁸ the constant density's miss (CH4.0b §4). An
-   "(amended at CH4.0c)" and an Appendix A line. Alternative: leave §3.5 as is and state the
-   range in the code's documentation only (done in this PR either way).
+1. **Proposal §3.5, the check at x = 216.** §3.5 already states the rule as measured over
+   0.14 ≤ x ≤ 65 and 10⁻⁸ ≤ ε ≤ 10⁻³ and checked at x = 108; CH3.3's 10⁻¹⁸ to 10⁻¹ appears only in
+   CH3.3's report and the code's documentation, now corrected there (review M6). Recommended:
+   add "and at x = 216 and 108 (W1 at kD = 1000, CH4.0c: within ε, at most 0.83 ε; raising
+   either level moves the error by under 1 %)" to its sentence, "(amended at CH4.0c)" and an
+   Appendix A line. Alternative: leave §3.5 as is; the check is recorded in the code's
+   documentation and this report.
 
 ## 5. Reproduce
 
