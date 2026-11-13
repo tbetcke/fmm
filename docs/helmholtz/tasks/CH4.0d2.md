@@ -206,3 +206,6 @@ the cost model on the same cases (`custom`), which decides the default's proposa
    n_s n_P < n m_s (`v_group`), with the builder's levels with waves asserted to be the
    operator's. The matrix jobs 633813–633815 ran the per-pair rule: their wave levels'
    errors at partial crossovers are not usable, their times are (the work is the same).
+4. The default (the report's §6, question 1): signed off by the user on 2026-11-13, "I agree
+   with your recommendation": `VNear::Off` stays the default; CH4.0d3 sweeps the leaf size with
+   the rule off and with `VNear::CostModel` and proposes the two together (roadmap, CH4.0d3).

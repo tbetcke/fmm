@@ -8,10 +8,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-13): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0c and CH4.0d1 are merged;
-CH4.0d1b builds the empty-box rule's plan once (the build with the rule 0.80–1.03 of the rule
-off's, CH4.0d1's 1.24–1.57; the output CH4.0d1's bit for bit). HR, H0, H1 and H2 are still
-open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0d2, then CH4.0d3.
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0c, CH4.0d1 and CH4.0d1b
+are merged; CH4.0d2 makes V pairs between leaves near pairs, opt-in (`near_v`), decided per
+(parent, source) on levels with waves; it gains under Rotation (median 0.52 at 10⁻⁸) and at
+10⁻⁸ under the default on Kathleen, and stays off by default (signed off: its default goes to
+CH4.0d3). HR, H0, H1 and H2
+are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0d3, the leaf
+size, with the V rule swept beside it.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -537,16 +540,15 @@ task's full line is in its record or report and its progress entry
   the user on 2026-11-13 ("Approve (Recommended)"). The build with the rule 1.00–1.03× the rule
   off's on W3 at N = 4·10⁶, 0.80–0.82 on the under-resolved W3 at kD = 500 (Kathleen, 1 × 40);
   every checksum CH4.0d1's; `plan_build_cost` within `main`'s spread. *Needs:* CH4.0d1.
-- [ ] **CH4.0d2 V pairs between leaves of few points as near pairs.** By the near rule's
-  mechanism (n_s n_t below a crossover of the cost model; a Rotation pair at p = 24 costs about
-  110 µs of thread time on Kathleen, CH4.0c report §3.2): decided on the target's rank from the
-  owners' counts; a converted ghost leaf named in the leaf numbering, so the source exchange
-  delivers its points (a halo of up to three leaf boxes, not one); the near rows in (level, key)
-  order. *Done when:* the points sent and the multipoles no longer sent counted; the errors
-  within 1.1× the rule off's (the near rule's bound); the one-rank FMM of the same rule bit for
-  bit; rank-count invariance with the rule on; proposed or not on its measured gain
-  (*Sign-off*). *Needs:* CH4.0d1. *Machines:* Kathleen, locust (the M6 with the user's
-  go-ahead).
+- [x] **CH4.0d2 V pairs between leaves of few points as near pairs.** Report:
+  `fmm-validate/results/helmholtz-ch4-0d2.md`; record `docs/helmholtz/tasks/CH4.0d2.md`. Opt-in
+  `NearRule::with_v_pairs` and `HelmholtzFmmBuilder::near_v` (`VNear::{Off, Crossover,
+  CostModel}`, per-class `VCosts`); on levels with waves decided per (parent, source) (the user,
+  2026-11-13: "Group per (parent, source) (Recommended)"; per pair it counted sources twice).
+  Errors within 1.1× the rule off's, the one-rank FMM bit for bit, 4 × 10 = 1 × 40; build plus
+  evaluation under Rotation 0.52–0.94 (median by ε), under the default 0.85–1.05. Left off by
+  default, its default decided with CH4.0d3's leaf size (the user, 2026-11-13, on the PR's
+  question 1: "I agree with your recommendation"). *Needs:* CH4.0d1.
 - [ ] **CH4.0d3 The leaf size and c_leaf.** The FMM's build plus evaluation against the points
   per leaf (32 to 1,024), under the default M2L (D8) with CH4.0d1 (and CH4.0d2 if adopted) on,
   c_leaf kept as the width cap. Cases: CH3.6's matrix at 10⁻³, 10⁻⁶ and 10⁻⁸ (W1, W3 and the four
@@ -562,7 +564,11 @@ task's full line is in its record or report and its progress entry
   not depend on the data (constraint 9). The errors within ε, at most CH3.4b's contract range
   (Re(k) r ≤ 22 c_leaf, unchanged). Deterministic and rank-invariant at each leaf size.
   Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64 stays
-  best, and why `fastker`'s leaves do not carry over. *Needs:* CH4.0d2. *Machines:* Kathleen,
+  best, and why `fastker`'s leaves do not carry over. Also (CH4.0d2's question 1, signed off
+  2026-11-13: "I agree with your recommendation"): the sweep with `HelmholtzFmmBuilder::near_v` off and `VNear::CostModel`, on
+  Kathleen and locust, and the V rule's default proposed with the leaf size (under Rotation
+  CH4.0d2 converted nearly every V pair between leaves of 64 points at ε ≤ 10⁻⁶; under the
+  default it paid only at 10⁻⁸ on Kathleen). *Needs:* CH4.0d2. *Machines:* Kathleen,
   locust (the M6 with the user's go-ahead). *Sign-off:* the default.
 - [ ] **CH4.0e The comparison under the default, and H4's expected gain.** Added on
   2026-11-12 by the review's triage (`docs/reviews/2026-11-12-H6.md`, A1, B2, B5; question 1
