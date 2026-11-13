@@ -503,6 +503,11 @@ loop; the column "M2L" ending `/full` with the rule off) and a last table "Empty
 `tools/helmholtz/ch4-0d1-runs.sh` runs the task's measurements. Its report is
 `results/helmholtz-ch4-0d1.md`.
 
+Helmholtz CH4.0d1b (the rule's plan built once; docs/helmholtz/tasks/CH4.0d1b.md) changed no
+harness code: `tools/helmholtz/ch4-0d1b-runs.sh` reruns CH4.0d1's `large`, `w3` (10⁻⁶ only,
+both orders) and `traffic`, and `ch4-0d1b-tables.py` compares the builds and checksums with
+CH4.0d1's launches. Its report is `results/helmholtz-ch4-0d1b.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

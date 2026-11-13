@@ -165,6 +165,36 @@ Decides: the *Done when*.
 
 ## Pending runs
 
+None. Ran on Kathleen (report `fmm-validate/results/helmholtz-ch4-0d1b.md` §1), both on
+98014e8: job 633734 (node-c11a-036, `large`), job 633735 (node-c11a-140, `w3`, `traffic`,
+`plan_build_cost` of `main` 34c5922 and the branch). Raw outputs in
+`~/projects/fmm-archive/kathleen/logs/ch4-0d1b/`. The planned stage `build` was folded into
+`large` and `w3`, which rerun CH4.0d1's cases so that the checksums compare.
+
+## Results
+
+- The build with the rule over the rule off's (one rank × 40 threads): W3 at N = 4·10⁶,
+  kD = 100, 1.00–1.03 (CH4.0d1 1.55–1.57); the under-resolved W3 at kD = 500 0.80–0.82
+  (1.49–1.50); W1 at kD = 500 0.87–0.91 (1.24–1.33); 4 × 10 on the under-resolved W3 0.82
+  (1.45). The rule off's build is CH4.0d1's (15.3 s, 92.1 s against 92.2 s).
+- Every checksum (24 rows, rule on and off, both orders, Rotation and the default) equals
+  CH4.0d1's on the same case (jobs 633596, 633566, 633564).
+- `plan_build_cost`: medians 7.09/7.11, 80.33/80.29, 94.91/95.11 ms (`main`/branch), within
+  the spread.
+- Checks on the M6 (`/verify`): fmt, Clippy (default, examples, workspace), docs, the default
+  and workspace tests at opt-level 1 (1,253 and 1,367 passed), the MPI list at 2 and 4 ranks
+  (24 of 24), `mpi_regressions` at 8 ranks. The opt-level 0 one-rank times at load 17–20:
+  `mpi_regressions` 5.6 s (CH4.0d1: 3.9 s at load about 15 to 2), `helmholtz_fmm` 701 s
+  (CH4.0d1: 460 s at falling load; CH6.1h: 715 s at load 14–22): the load, not the change,
+  which removes a plan build and adds checks of a few plans to `mpi_regressions`.
+- Self-review (a subagent, 2026-11-13): no blocking finding; fixed: a collective
+  (`global_max_level`) short-circuited in the mismatch test, the dropped debug check of the
+  blocks in `with_rules_on`, the `empty` and `PlanRules` docs, a long line, this record's
+  step 4 (as built: one path with and without the rule). Not changed: the new serial test
+  restates the code's split (kept for the mismatch cases); rank-local asserts before
+  collectives in the new checks, as in the rest of `mpi_regressions`; `index_from_keys` and
+  `agree` live in `plan.rs` and are imported by `index.rs`.
+
 ## Open questions
 
 Asked before the code (`/next-task` step 3: the plan changes `nd-fmm-plan`'s interface),
