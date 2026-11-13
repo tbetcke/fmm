@@ -69,6 +69,12 @@
 //!   converts move to the leaf's near row, in its (level, key) order; a converted ghost W
 //!   entry is numbered as a ghost leaf. Every other row is the row without the rule, and
 //!   [`Plan::new`] is the plan without it, bit for bit.
+//! - **The empty-box rule** (Helmholtz CH4.0d1; [`Plan::with_rules`] with
+//!   [`PlanRules::empty_boxes`], the [`empty`](crate::empty) module): optional, applied
+//!   locally while the rows are built. A box whose subtree holds no target loses its V, X, W
+//!   and L2L rows; a box whose subtree holds no source leaves the V, W and M2M rows that
+//!   name it; `Global` boxes too, by the counts of whole subtrees. Rows are only shortened,
+//!   never reordered; [`Plan::new`] is the plan without the rule, bit for bit.
 //! - The plan owns its arrays and borrows nothing from the octree. A new tree needs a new
 //!   plan: box indices, unlike keys, change when the tree changes.
 //!
@@ -92,11 +98,12 @@ use nd_octree::{
     octree::{KeyType, PartitionMap},
 };
 
+use super::empty::{EmptyBoxes, Occupancies};
 use super::index::BoxIndex;
 use super::lists::{
     CsrBuilder, GroupedBuilder, LevelLists, NOCTANTS, NOFFSETS, Overflow, offset, offset_index,
 };
-use super::near::{LeafPair, NearPairs, NearRule};
+use super::near::{LeafCounts, LeafPair, NearPairs, NearRule};
 use crate::interaction_manager::{is_interior, is_leaf, key_lists, valid_neighbours};
 
 /// The box index and the interaction lists of an octree on one rank.
@@ -115,6 +122,20 @@ pub struct Plan {
     deepest_block_level: usize,
     /// The W and X pairs between leaves, and those the near rule converted.
     near_pairs: NearPairs,
+    /// What the empty-box rule left out.
+    empty_boxes: EmptyBoxes,
+}
+
+/// The optional rules a plan applies while it builds its rows
+/// ([`Plan::with_rules`]); the default applies neither, the plan of [`Plan::new`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlanRules<'a> {
+    /// The near rule (Phase 6 T12, C6.9; the [`near`](crate::near) module).
+    pub near: Option<&'a NearRule<'a>>,
+    /// The empty-box rule from these counts (Helmholtz CH4.0d1; the
+    /// [`empty`](crate::empty) module): the subtree counts of every box with rows and of
+    /// every box a V, W or M2M row names ([`LeafCounts::exchange_with_boxes`]).
+    pub empty_boxes: Option<&'a LeafCounts>,
 }
 
 /// The reasons a [`Plan`] cannot be built.
@@ -168,11 +189,12 @@ pub enum PlanError {
         /// The coarse block.
         key: MortonKey,
     },
-    /// The counts of a near rule lack a count it reads: the source count of a leaf a W
-    /// row names, or the target count of a local leaf with an X row
-    /// ([`near`](crate::near)).
+    /// The counts of a rule lack a count it reads: for the near rule the source count of a
+    /// leaf a W row names, or the target count of a local leaf with an X row
+    /// ([`near`](crate::near)); for the empty-box rule a subtree count of a box with rows or
+    /// of a box a V, W or M2M row names ([`empty`](crate::empty)).
     MissingCount {
-        /// The leaf.
+        /// The leaf or box.
         key: MortonKey,
     },
     /// Construction failed on another rank.
@@ -216,7 +238,7 @@ impl fmt::Display for PlanError {
                 write!(f, "coarse block {key} is not a non-ghost key of the tree")
             }
             Self::MissingCount { key } => {
-                write!(f, "the near rule has no point count of leaf {key}")
+                write!(f, "the plan's rule has no point count of key {key}")
             }
             Self::OtherRank => write!(f, "building the plan failed on another rank"),
         }
@@ -243,7 +265,7 @@ impl Plan {
     /// `Global` box) is not held, or a level or view outgrows `u32` indices. The rank
     /// that found the defect returns it; the other ranks return [`PlanError::OtherRank`].
     pub fn new<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> Result<Self, PlanError> {
-        Self::build(octree, None)
+        Self::with_rules(octree, &PlanRules::default())
     }
 
     /// Build the plan of `octree` as [`new`](Self::new) does, with the W and X pairs
@@ -260,13 +282,29 @@ impl Plan {
         octree: &Octree<'_, C>,
         rule: &NearRule<'_>,
     ) -> Result<Self, PlanError> {
-        Self::build(octree, Some(rule))
+        Self::with_rules(
+            octree,
+            &PlanRules {
+                near: Some(rule),
+                ..PlanRules::default()
+            },
+        )
     }
 
-    /// [`new`](Self::new) with an optional near rule.
-    fn build<C: CommunicatorCollectives>(
+    /// Build the plan of `octree` as [`new`](Self::new) does, with the rules of `rules`:
+    /// the near rule ([`near`](crate::near)) and the empty-box rule
+    /// ([`empty`](crate::empty)), each optional.
+    ///
+    /// # Collective operation
+    /// Those of [`new`](Self::new): the rules are applied locally.
+    ///
+    /// # Errors
+    /// Those of [`new`](Self::new), and [`PlanError::MissingCount`] where a rule's counts
+    /// lack a count it reads: on the rank that found it, [`PlanError::OtherRank`] on the
+    /// others.
+    pub fn with_rules<C: CommunicatorCollectives>(
         octree: &Octree<'_, C>,
-        rule: Option<&NearRule<'_>>,
+        rules: &PlanRules<'_>,
     ) -> Result<Self, PlanError> {
         let nlevels = octree.global_max_level() + 1;
         let map = octree.partition_map();
@@ -276,7 +314,7 @@ impl Plan {
             "the partition map names this rank's coarse blocks"
         );
         let local = if octree.options().ghost_children() {
-            Self::from_key_types_with(octree.all_keys(), nlevels, map, rule)
+            Self::from_key_types_with_rules(octree.all_keys(), nlevels, map, rules)
         } else {
             Err(PlanError::MissingGhostChildren)
         };
@@ -310,7 +348,7 @@ impl Plan {
         nlevels: usize,
         map: &PartitionMap,
     ) -> Result<Self, PlanError> {
-        Self::from_key_types_with(all_keys, nlevels, map, None)
+        Self::from_key_types_with_rules(all_keys, nlevels, map, &PlanRules::default())
     }
 
     /// [`from_key_types`](Self::from_key_types) with the W and X pairs between leaves that
@@ -326,15 +364,29 @@ impl Plan {
         map: &PartitionMap,
         rule: &NearRule<'_>,
     ) -> Result<Self, PlanError> {
-        Self::from_key_types_with(all_keys, nlevels, map, Some(rule))
+        Self::from_key_types_with_rules(
+            all_keys,
+            nlevels,
+            map,
+            &PlanRules {
+                near: Some(rule),
+                ..PlanRules::default()
+            },
+        )
     }
 
-    /// [`from_key_types`](Self::from_key_types) with an optional near rule.
-    fn from_key_types_with(
+    /// [`from_key_types`](Self::from_key_types) with the rules of `rules` (the near rule
+    /// and the empty-box rule, each optional; [`with_rules`](Self::with_rules)); local, for
+    /// tests on hand-built maps.
+    ///
+    /// # Errors
+    /// Those of [`from_key_types`](Self::from_key_types), and
+    /// [`PlanError::MissingCount`] where a rule's counts lack a count it reads.
+    pub fn from_key_types_with_rules(
         all_keys: &HashMap<MortonKey, KeyType>,
         nlevels: usize,
         map: &PartitionMap,
-        rule: Option<&NearRule<'_>>,
+        rules: &PlanRules<'_>,
     ) -> Result<Self, PlanError> {
         let mut sorted: Vec<MortonKey> = all_keys.keys().copied().collect();
         sorted.sort_unstable();
@@ -398,9 +450,13 @@ impl Plan {
 
         // First pass: every view that needs only box indices, and the U- and X-entries
         // as boxes, which become leaf indices once the ghost leaves are numbered.
+        let occupancies = rules
+            .empty_boxes
+            .map(|counts| Occupancies::new(&index, counts));
         let mut partial = Vec::with_capacity(nlevels);
         let mut ghost_leaves = Vec::new();
         let mut near_pairs = NearPairs::default();
+        let mut empty_boxes = EmptyBoxes::default();
         for level in 0..nlevels {
             partial.push(first_pass(
                 &index,
@@ -409,7 +465,12 @@ impl Plan {
                 &|i| owned(level, i),
                 level,
                 &mut ghost_leaves,
-                (rule, &mut near_pairs),
+                (
+                    rules.near,
+                    &mut near_pairs,
+                    occupancies.as_ref(),
+                    &mut empty_boxes,
+                ),
             )?);
         }
         index.set_ghost_leaves(ghost_leaves);
@@ -436,6 +497,7 @@ impl Plan {
             top,
             deepest_block_level,
             near_pairs,
+            empty_boxes,
         })
     }
 
@@ -504,6 +566,12 @@ impl Plan {
     /// the near rule converted (none without a rule; the [`near`](crate::near) module).
     pub fn near_pairs(&self) -> NearPairs {
         self.near_pairs
+    }
+
+    /// Return what the empty-box rule left out of this rank's rows (nothing without the
+    /// rule; the [`empty`](crate::empty) module).
+    pub fn empty_boxes(&self) -> EmptyBoxes {
+        self.empty_boxes
     }
 
     /// Return the deepest level of a coarse block of any rank, the same on every rank
@@ -620,6 +688,11 @@ struct PartialLevel {
 /// row) instead, a ghost W entry recorded in `ghost_leaves` as well; `near_pairs` counts
 /// the candidates and the conversions.
 ///
+/// With the occupancies of the empty-box rule, a box whose subtree holds no target gets
+/// empty V, X, W and L2L rows (its X entries not recorded in `ghost_leaves`), and the V, W
+/// and M2M entries naming a box whose subtree holds no source are left out, before the near
+/// rule sees a W or X entry; `empty_boxes` counts them ([`empty`](crate::empty)).
+///
 /// A `Global` box that is not in `needed_globals` (ascending) gets empty V, X and L2L
 /// rows (P2). Its lists are not resolved: since Phase 5S T4 the plan does not hold its
 /// neighbourhood. A `Global` box has its M2M row of the global pass only if `owned`
@@ -631,7 +704,12 @@ fn first_pass(
     owned: &dyn Fn(usize) -> bool,
     level: usize,
     ghost_leaves: &mut Vec<(usize, u32)>,
-    (rule, near_pairs): (Option<&NearRule<'_>>, &mut NearPairs),
+    (rule, near_pairs, occupancies, empty_boxes): (
+        Option<&NearRule<'_>>,
+        &mut NearPairs,
+        Option<&Occupancies>,
+        &mut EmptyBoxes,
+    ),
 ) -> Result<PartialLevel, PlanError> {
     let mut partial = PartialLevel {
         v: GroupedBuilder::new(NOFFSETS),
@@ -669,9 +747,13 @@ fn first_pass(
             partial.v.push_row([]);
             partial.m2m_local.push_row([]);
             if owned(i) {
-                partial
-                    .m2m_global
-                    .push_row((0..NOCTANTS as u8).map(|o| (o, first + o as u32)));
+                let children = (0..NOCTANTS as u8).map(|o| (o, first + o as u32));
+                partial.m2m_global.push_row(children_with_sources(
+                    children,
+                    level,
+                    occupancies.map(|o| (index, o)),
+                    &mut empty_boxes.m2m_without_sources,
+                )?);
             } else {
                 partial.m2m_global.push_row([]);
             }
@@ -692,6 +774,19 @@ fn first_pass(
         let leaf = index.box_leaf(level, i);
         let rule = rule.filter(|_| leaf.is_some());
         let missing = |key| PlanError::MissingCount { key };
+        // The empty-box rule: does the subtree of this box hold no target, and does that of
+        // the box (entry level, j) hold a source?
+        let no_targets = match occupancies {
+            Some(occupancies) => !occupancies.has_targets(index, level, i)?,
+            None => false,
+        };
+        if no_targets {
+            empty_boxes.target_boxes += 1;
+        }
+        let has_sources = |(entry_level, j): (usize, u32)| match occupancies {
+            Some(occupancies) => occupancies.has_sources(index, entry_level, j as usize),
+            None => Ok(true),
+        };
 
         v_row.clear();
         for source in v {
@@ -703,6 +798,14 @@ fn first_pass(
                 key,
                 "a V-list offset is not one of V_LIST_DIRECTIONS",
             ))?;
+            if no_targets {
+                empty_boxes.v_without_targets += 1;
+                continue;
+            }
+            if !has_sources((source_level, j))? {
+                empty_boxes.v_without_sources += 1;
+                continue;
+            }
             v_row.push((d as u16, j));
         }
         v_row.sort_unstable();
@@ -719,6 +822,14 @@ fn first_pass(
                     key,
                     "a W-list entry does not lie one level finer",
                 ));
+            }
+            if no_targets {
+                empty_boxes.w_without_targets += 1;
+                continue;
+            }
+            if !has_sources((source_level, j))? {
+                empty_boxes.w_without_sources += 1;
+                continue;
             }
             if let Some(rule) = rule
                 && is_leaf_box((source_level, j))
@@ -765,6 +876,10 @@ fn first_pass(
                     "an X-list entry is not a leaf one level coarser",
                 ));
             }
+            if no_targets {
+                empty_boxes.x_without_targets += 1;
+                continue;
+            }
             if index.kind(entry.0, entry.1 as usize).is_ghost() {
                 ghost_leaves.push(entry);
             }
@@ -790,15 +905,25 @@ fn first_pass(
                 .first_child(level, i)
                 .ok_or(PlanError::MissingChild { key })?;
             let children = (0..NOCTANTS as u8).map(|o| (o, first + o as u32));
+            // The empty-box rule leaves out the children whose subtrees hold no source, and
+            // counts them on the rows this rank keeps.
+            let mut kept = |children| {
+                children_with_sources(
+                    children,
+                    level,
+                    occupancies.map(|o| (index, o)),
+                    &mut empty_boxes.m2m_without_sources,
+                )
+            };
             if kind == KeyType::Global {
                 partial.m2m_local.push_row([]);
                 if owned(i) {
-                    partial.m2m_global.push_row(children);
+                    partial.m2m_global.push_row(kept(children)?);
                 } else {
                     partial.m2m_global.push_row([]);
                 }
             } else {
-                partial.m2m_local.push_row(children);
+                partial.m2m_local.push_row(kept(children)?);
                 partial.m2m_global.push_row([]);
             }
         } else {
@@ -811,7 +936,12 @@ fn first_pass(
                 let Some((_, j)) = index.find(parent) else {
                     return Err(malformed(key, "the parent of a non-ghost key is not held"));
                 };
-                partial.l2l.push_row([(morton::child_index(key) as u8, j)]);
+                if no_targets {
+                    empty_boxes.l2l_without_targets += 1;
+                    partial.l2l.push_row([]);
+                } else {
+                    partial.l2l.push_row([(morton::child_index(key) as u8, j)]);
+                }
             }
             None => partial.l2l.push_row([]),
         }
@@ -827,6 +957,29 @@ fn first_pass(
         }
     }
     Ok(partial)
+}
+
+/// The children (octant, box index on `level + 1`) of an M2M row whose subtrees hold a
+/// source, under the empty-box rule's occupancies (all of them without the rule), counting
+/// those left out in `left_out`.
+fn children_with_sources(
+    children: impl Iterator<Item = (u8, u32)>,
+    level: usize,
+    occupancies: Option<(&BoxIndex, &Occupancies)>,
+    left_out: &mut usize,
+) -> Result<Vec<(u8, u32)>, PlanError> {
+    let mut row = Vec::with_capacity(NOCTANTS);
+    for (o, j) in children {
+        match occupancies {
+            Some((index, occupancies))
+                if !occupancies.has_sources(index, level + 1, j as usize)? =>
+            {
+                *left_out += 1;
+            }
+            _ => row.push((o, j)),
+        }
+    }
+    Ok(row)
 }
 
 impl PartialLevel {

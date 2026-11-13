@@ -166,6 +166,9 @@ enum Layout {
     Cube,
     /// Four Gaussian clusters of width 0.05, so the leaves lie on several levels.
     Clusters,
+    /// The sphere of radius 0.4 about the cube's centre, so most leaves the leaf rule makes
+    /// hold no point (Helmholtz CH4.0d1).
+    Sphere,
 }
 
 /// `n` points of `layout` strictly inside the unit cube, from `seed`.
@@ -188,6 +191,16 @@ fn points(layout: Layout, n: usize, seed: u64) -> Vec<[f64; 3]> {
                     let g = (-2.0 * u.ln()).sqrt() * (2.0 * PI * v).cos();
                     (c[a] + 0.05 * g).clamp(0.001, 0.999)
                 })
+            }
+            Layout::Sphere => {
+                let z = 2.0 * rng.next() - 1.0;
+                let phi = 2.0 * PI * rng.next();
+                let r = (1.0 - z * z).sqrt();
+                [
+                    0.5 + 0.4 * r * phi.cos(),
+                    0.5 + 0.4 * r * phi.sin(),
+                    0.5 + 0.4 * z,
+                ]
             }
         })
         .collect()
@@ -1302,14 +1315,17 @@ fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// Rotation's error, the pair path, threads, the one-rank FMM, two vectors and named
 /// precisions.
 /// With `bounds`, also the bounded waves buffer (`check_plane_wave_buffer`); returns
-/// whether its floor took more chunks than the default budget on some rank.
+/// whether its floor took more chunks than the default budget on some rank. On the plan
+/// without the empty-box rule (Helmholtz CH4.0d1), so that the clusters' finest level keeps
+/// more V sources than the floor holds; `check_empty_boxes` runs PlaneWave with the rule.
 fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator) -> bool {
     let start = Instant::now();
     let rank = comm.rank();
     let name = format!("{}: PlaneWave", scenario.name);
     let inputs = Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
-    let (fmm, rotation) = run(&builder(scenario), &inputs, kind, comm);
+    let full = builder(scenario).empty_boxes(false);
+    let (fmm, rotation) = run(&full, &inputs, kind, comm);
     let degrees = fmm.degrees().to_vec();
     drop(fmm);
     // The domain is the unit cube, r₀ = ½.
@@ -1319,7 +1335,7 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
         Degrees::PerLevel(_) => None,
     };
     let rule = select(k_root, &degrees, tolerance);
-    let tables = builder(scenario).m2l(HelmholtzM2l::PlaneWave);
+    let tables = full.clone().m2l(HelmholtzM2l::PlaneWave);
     let (fmm, output) = run(&tables, &inputs, kind, comm);
     let op = fmm.operator();
     assert_eq!(op.m2l_choice(), HelmholtzM2l::PlaneWave);
@@ -2191,6 +2207,117 @@ fn check_errors(comm: &SimpleCommunicator) {
     }
 }
 
+/// Asserts on every rank that `got` equals `want` as values (−0 and +0 equal) on every
+/// rank: the empty-box rule leaves out exact zeros only.
+fn assert_same_values(
+    what: &str,
+    got: &Output<f64>,
+    want: &Output<f64>,
+    comm: &SimpleCommunicator,
+) {
+    let values = |output: &Output<f64>| {
+        let mut values = output.potential.clone();
+        if let Some(gradient) = &output.gradient {
+            values.extend(gradient.as_flattened());
+        }
+        values
+    };
+    let same = values(got) == values(want);
+    if !same {
+        eprintln!("rank {}: {what}: the values differ", comm.rank());
+    }
+    assert!(
+        everywhere(same, comm),
+        "{what}: not the same values on every rank"
+    );
+}
+
+/// The empty-box rule (Helmholtz CH4.0d1; `HelmholtzFmmBuilder::empty_boxes`, on by
+/// default): under Rotation, Batched, PlaneWave and Auto with the term off (whose levels'
+/// M2L do not depend on the rule) the output equals the rule off's as values (−0 and +0
+/// equal), at 2 threads the one-thread output bit for bit and on P ranks the one-rank FMM's;
+/// under the default the same where every level runs the M2L it runs with the rule off.
+/// Returns what the rule left out over every rank, `[boxes without targets, entries
+/// without sources]`.
+fn check_empty_boxes(scenario: &Scenario, comm: &SimpleCommunicator) -> [usize; 2] {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let mut left_out = [0usize; 2];
+    let settings: [(&str, HelmholtzFmmBuilder); 5] = [
+        ("Rotation", builder(scenario)),
+        (
+            "Batched",
+            default_builder(scenario).m2l(HelmholtzM2l::Batched),
+        ),
+        (
+            "PlaneWave",
+            default_builder(scenario).m2l(HelmholtzM2l::PlaneWave),
+        ),
+        (
+            "Auto without the term",
+            default_builder(scenario).batched_term(false),
+        ),
+        ("the default", default_builder(scenario)),
+    ];
+    for (setting, on) in settings {
+        let name = &format!("{}, empty boxes, {setting}", scenario.name);
+        let (fmm, output) = run(&on, &inputs, kind, comm);
+        assert!(fmm.empty_boxes(), "{name}: the rule is on by default");
+        let off = on.clone().empty_boxes(false);
+        let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
+        assert!(!fmm_off.empty_boxes(), "{name}");
+        assert_eq!(fmm_off.plan().empty_boxes(), Default::default(), "{name}");
+        let same_m2l = (0..fmm.nlevels())
+            .all(|level| fmm.operator().m2l_on(level) == fmm_off.operator().m2l_on(level));
+        if setting != "the default" || everywhere(same_m2l, comm) {
+            assert_same_values(
+                &format!("{name}: against the rule off"),
+                &output,
+                &output_off,
+                comm,
+            );
+        } else if comm.rank() == 0 {
+            println!("{name}: a level's M2L differs from the rule off's, values not compared");
+        }
+        let (_, threaded) = run(&on.clone().threads(2), &inputs, kind, comm);
+        assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+        check_one_rank(name, &on, &inputs, kind, &output, comm);
+        if setting == "Rotation" {
+            let e = fmm.plan().empty_boxes();
+            let local = [
+                e.target_boxes,
+                e.v_without_sources + e.w_without_sources + e.m2m_without_sources,
+            ];
+            comm.all_reduce_into(&local[..], &mut left_out[..], SystemOperation::sum());
+        }
+    }
+    if comm.rank() == 0 {
+        println!(
+            "{}, empty boxes: {} boxes without targets, {} entries without sources",
+            scenario.name, left_out[0], left_out[1]
+        );
+    }
+    left_out
+}
+
+/// The scenario of [`check_empty_boxes`] whose leaves the leaf rule fills with empty boxes:
+/// points on a sphere at kD = 30, leaves on level 3 or finer, about three quarters of
+/// level 3 empty.
+fn sphere_scenario() -> Scenario {
+    Scenario {
+        name: "sphere, kD = 30, ε = 1e-3, complex charges, gradients",
+        layout: Layout::Sphere,
+        n: (1000, None),
+        k: (30.0, 0.0),
+        degrees: Degrees::Tolerance(1e-3),
+        bound: ERROR_FACTOR * 1e-3,
+        charges: ChargeKind::Complex,
+        gradients: true,
+        debug: true,
+        empty_rank0: false,
+    }
+}
+
 /// The scenarios, small trees (a few thousand points, at most 32 per leaf).
 fn scenarios() -> Vec<Scenario> {
     vec![
@@ -2371,6 +2498,15 @@ fn helmholtz_fmm() {
     assert!(
         comm.size() > 1 || chunked,
         "the floor bound chunks a level call"
+    );
+    // The empty-box rule (CH4.0d1): the sphere under the leaf rule and the clusters with
+    // separate targets (boxes with sources and no target, and the reverse).
+    let sphere = check_empty_boxes(&sphere_scenario(), &comm);
+    check(&sphere_scenario(), &comm);
+    let clusters = check_empty_boxes(&scenarios()[2], &comm);
+    assert!(
+        sphere[0] > 0 && sphere[1] > 0 && clusters[0] > 0 && clusters[1] > 0,
+        "the empty-box rule left out nothing: sphere {sphere:?}, clusters {clusters:?}"
     );
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);

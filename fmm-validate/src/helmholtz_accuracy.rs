@@ -49,6 +49,10 @@
 //!   below 10⁻⁶ run at the raised degree (the library's `Rule` by default);
 //!   [`Row::plane_wave_raise`] the setting and [`Row::translation_degrees`] each level's
 //!   translation degree.
+//!   [`Case::empty_boxes`] (Helmholtz CH4.0d1) whether the plan leaves out the work of boxes
+//!   whose subtree holds no target or no source point (on by default, the library's);
+//!   [`Row::left_out`] what it left out and [`Row::remote_multipoles`] the multipoles the
+//!   ranks read from other ranks; [`Row::v_pairs`] counts the pairs that ran.
 
 use std::ops::Range;
 use std::thread;
@@ -147,6 +151,10 @@ pub struct Case {
     /// The points per leaf (`HelmholtzFmmBuilder::max_points_per_leaf`, Helmholtz CH4.0b;
     /// `None` the library's); above N, a tree of leaves on the leaf rule's level alone.
     pub max_points_per_leaf: Option<usize>,
+    /// Whether the plan leaves out the work of empty boxes
+    /// (`HelmholtzFmmBuilder::empty_boxes`, Helmholtz CH4.0d1; `true` in [`Case::new`], the
+    /// library's default); named always, as `auto_plane_wave`.
+    pub empty_boxes: bool,
 }
 
 impl Case {
@@ -182,6 +190,7 @@ impl Case {
             evaluations: 1,
             domain: None,
             max_points_per_leaf: None,
+            empty_boxes: true,
         }
     }
 }
@@ -630,6 +639,18 @@ pub struct Row {
     pub batched_term: bool,
     /// The width of Batched's blocks if named (Helmholtz CH4.0).
     pub m2l_block_targets: Option<usize>,
+    /// Whether the plan had the empty-box rule (Helmholtz CH4.0d1).
+    pub empty_boxes: bool,
+    /// What the empty-box rule left out, summed over the ranks, in the order of
+    /// `nd_fmm_plan::empty::EmptyBoxes`' fields: boxes without targets, their V, X and W
+    /// entries and L2L rows, then the V, W and M2M entries naming a box without sources (all
+    /// zero with the rule off). A box with rows on several ranks (a `Global` box) counts on
+    /// each.
+    pub left_out: [usize; 8],
+    /// The multipoles each rank reads from other ranks (the boxes its V and W rows name that
+    /// it does not compute, each once), summed over the ranks: what the reduction, the
+    /// replicated top and the multipole exchange deliver (Helmholtz CH4.0d1).
+    pub remote_multipoles: usize,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -714,6 +735,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         .dense_budget(case.dense_budget)
         .auto_plane_wave(case.auto_plane_wave)
         .batched_term(case.batched_term)
+        .empty_boxes(case.empty_boxes)
         .plane_wave_precision(case.plane_wave.clone());
     if let Some(width) = case.m2l_block_targets {
         builder = builder.m2l_block_targets(width);
@@ -852,6 +874,33 @@ pub fn run_output<C: CommunicatorCollectives>(
     let mut summed = vec![0u64; 2 * nlevels];
     comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
     let v_targets: Vec<usize> = summed.iter().step_by(2).map(|&n| n as usize).collect();
+    // What the empty-box rule left out, and the multipoles read from other ranks.
+    let e = plan.empty_boxes();
+    let mut remote: Vec<(usize, u32)> = (0..nlevels)
+        .flat_map(|l| {
+            let lists = plan.level(l);
+            let v = lists.v().sources().iter().map(move |&j| (l, j));
+            let w = lists.w().entries().iter().map(move |&j| (l + 1, j));
+            v.chain(w)
+        })
+        .filter(|&(l, j)| !plan.computes(l, j as usize))
+        .collect();
+    remote.sort_unstable();
+    remote.dedup();
+    let local = [
+        e.target_boxes,
+        e.v_without_targets,
+        e.x_without_targets,
+        e.w_without_targets,
+        e.l2l_without_targets,
+        e.v_without_sources,
+        e.w_without_sources,
+        e.m2m_without_sources,
+        remote.len(),
+    ]
+    .map(|n| n as u64);
+    let mut totals = [0u64; 9];
+    comm.all_reduce_into(&local[..], &mut totals[..], SystemOperation::sum());
     let block_visits: Vec<usize> = summed
         .iter()
         .skip(1)
@@ -917,6 +966,9 @@ pub fn run_output<C: CommunicatorCollectives>(
         block_visits,
         batched_term: fmm.level_shapes().is_some(),
         m2l_block_targets: fmm.operator().m2l_block_targets(),
+        empty_boxes: fmm.empty_boxes(),
+        left_out: core::array::from_fn(|i| totals[i] as usize),
+        remote_multipoles: totals[8] as usize,
         errors,
         checksum,
     };

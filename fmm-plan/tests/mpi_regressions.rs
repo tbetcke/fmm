@@ -4,6 +4,7 @@ use std::{borrow::Borrow, collections::HashMap, ops::Range};
 
 use mpi::{collective::SystemOperation, topology::SimpleCommunicator, traits::*};
 use nd_fmm_plan::{
+    empty::EmptyBoxes,
     evaluator::Evaluator,
     exchange::{
         self, MultipoleExchange, MultipoleRouting, ReductionExchange, SourceExchange,
@@ -16,7 +17,7 @@ use nd_fmm_plan::{
         FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
         PerPair, UpwardPass,
     },
-    plan::Plan,
+    plan::{Plan, PlanRules},
     redistribute::{Redistribution, RedistributionError},
     store::{LeafSliceMut, LeafStore, LevelBuffers},
 };
@@ -180,6 +181,63 @@ fn oracle_lists(keys: &[u64], leaves: &[u64], key: u64) -> [Vec<u64>; 4] {
 /// over the gathered global tree. The reference for the plan, the multipole ghosts and
 /// the pairs that an evaluation issues.
 type OracleLists = HashMap<u64, [Vec<u64>; 4]>;
+
+/// The empty-box rule's view of a scenario (Helmholtz CH4.0d1): the source and target
+/// points in the subtree of every key, from the scenario's points over every rank.
+struct EmptyOracle {
+    sources: HashMap<u64, usize>,
+    targets: HashMap<u64, usize>,
+}
+
+impl EmptyOracle {
+    fn new((sources, targets): ScenarioPoints<'_>) -> Self {
+        let subtree = |points: &[u64]| {
+            let mut counts = HashMap::new();
+            for &point in points {
+                let mut key = Some(point);
+                while let Some(k) = key {
+                    *counts.entry(k).or_insert(0) += 1;
+                    key = morton::parent(k);
+                }
+            }
+            counts
+        };
+        Self {
+            sources: subtree(sources),
+            targets: subtree(targets),
+        }
+    }
+
+    /// The source points in the subtree of `key`.
+    fn sources(&self, key: u64) -> usize {
+        self.sources.get(&key).copied().unwrap_or(0)
+    }
+
+    /// The target points in the subtree of `key`.
+    fn targets(&self, key: u64) -> usize {
+        self.targets.get(&key).copied().unwrap_or(0)
+    }
+}
+
+/// Whether `key` keeps its downward rows under the rule `empty` (always without one).
+fn has_targets(empty: Option<&EmptyOracle>, key: u64) -> bool {
+    empty.is_none_or(|empty| empty.targets(key) > 0)
+}
+
+/// Whether rows keep the entry `key` under the rule `empty` (always without one).
+fn has_sources(empty: Option<&EmptyOracle>, key: u64) -> bool {
+    empty.is_none_or(|empty| empty.sources(key) > 0)
+}
+
+/// The children of `key` an M2M row holds under the rule `empty`, with their octants.
+fn kept_children(empty: Option<&EmptyOracle>, key: u64) -> (Vec<u64>, Vec<u8>) {
+    morton::children(key)
+        .unwrap()
+        .into_iter()
+        .zip(0u8..)
+        .filter(|&(child, _)| has_sources(empty, child))
+        .unzip()
+}
 
 /// Whether this rank needs the local of the non-ghost `key`: every key but a `Global` box
 /// that is not an ancestor of one of the rank's own coarse blocks (P2).
@@ -424,7 +482,9 @@ fn computes<C: CommunicatorCollectives>(
 /// Compare the index-form lists of every local non-ghost box against the brute-force
 /// oracle, through the key and index maps, and check the invariants of the views: a
 /// `Global` box has its children in its global M2M row where `computed` says this rank
-/// owns it, and an empty row elsewhere (Phase 5S T5).
+/// owns it, and an empty row elsewhere (Phase 5S T5). Under the empty-box rule `empty`
+/// (Helmholtz CH4.0d1) the M2M rows hold the children whose subtrees hold a source, and a
+/// box whose subtree holds no target has no parent row.
 fn check_plan(
     name: &str,
     all_keys: &HashMap<u64, KeyType>,
@@ -432,6 +492,7 @@ fn check_plan(
     plan: &Plan,
     coarse_blocks: &[u64],
     computed: impl Fn(u64) -> bool,
+    empty: Option<&EmptyOracle>,
 ) {
     let index = plan.index();
     let leaves = index.leaves();
@@ -538,15 +599,17 @@ fn check_plan(
                 "{name}: owner of {key}"
             );
             if kind == KeyType::LocalInterior || (kind == KeyType::Global && computed(key)) {
-                assert_eq!(children, morton::children(key).unwrap(), "{name}: children");
-                assert_eq!(octants, [0, 1, 2, 3, 4, 5, 6, 7]);
+                let (kept, kept_octants) = kept_children(empty, key);
+                assert_eq!(children, kept, "{name}: children");
+                assert_eq!(octants, kept_octants);
             } else {
                 assert!(children.is_empty());
             }
             // P2: no parent for a `Global` box whose local this rank does not need.
             let (parents, octants) = lists.l2l().row(i);
             let parents: Vec<u64> = parents.iter().map(key_on(level.wrapping_sub(1))).collect();
-            let parent = morton::parent(key).filter(|_| needs_local(all_keys, &own_blocks, key));
+            let parent = morton::parent(key)
+                .filter(|_| needs_local(all_keys, &own_blocks, key) && has_targets(empty, key));
             assert_eq!(parents, parent.into_iter().collect::<Vec<_>>(), "{name}");
             if parent.is_some() {
                 assert_eq!(octants, [morton::child_index(key) as u8]);
@@ -852,6 +915,7 @@ fn check_reduction<C: CommunicatorCollectives>(
     held: &HashMap<u64, KeyType>,
     plan: &Plan,
     sizes: &[usize],
+    empty: Option<&EmptyOracle>,
 ) -> (ReductionExchange<u64>, Traffic) {
     let comm = octree.comm();
     let index = plan.index();
@@ -874,7 +938,7 @@ fn check_reduction<C: CommunicatorCollectives>(
     let mut expected = vec![Vec::new(); index.nlevels()];
     for (&key, &kind) in held {
         if kind == KeyType::Global && computes(octree, held, key) {
-            for child in morton::children(key).unwrap() {
+            for child in kept_children(empty, key).0 {
                 if !computes(octree, held, child) {
                     expected[morton::level(child)].push(child);
                 }
@@ -1530,7 +1594,7 @@ fn check_against_one_rank<C: CommunicatorCollectives>(
     plan: &Plan,
     fine_keys: &[u64],
     options: OctreeOptions,
-    near: Option<ScenarioPoints<'_>>,
+    rule: Option<(ScenarioRule, ScenarioPoints<'_>)>,
 ) -> usize {
     let comm = octree.comm();
     let rank = comm.rank();
@@ -1541,13 +1605,23 @@ fn check_against_one_rank<C: CommunicatorCollectives>(
     let single = Octree::new(&all_keys, options, &single_comm);
     assert_eq!(single.leaf_keys(), &leaves, "{name}: the one-rank tree");
     let one = Plan::new(&single).unwrap_or_else(|error| panic!("{name}: one rank: {error}"));
-    // With the near rule (Phase 6 T12), the one-rank plan of the same rule and counts.
-    let one = match near {
+    // With the near rule (Phase 6 T12) or the empty-box rule (Helmholtz CH4.0d1), the
+    // one-rank plan of the same rule and counts.
+    let one = match rule {
         None => one,
-        Some(points) => {
+        Some((ScenarioRule::Near, points)) => {
             let counts = near_counts(name, &single_comm, &one, points);
             Plan::with_near_rule(&single, &NearRule::new(&counts, &near_predicate))
                 .unwrap_or_else(|error| panic!("{name}: one rank, near rule: {error}"))
+        }
+        Some((ScenarioRule::EmptyBoxes, points)) => {
+            let counts = box_counts(name, &single_comm, &one, points);
+            let rules = PlanRules {
+                empty_boxes: Some(&counts),
+                ..PlanRules::default()
+            };
+            Plan::with_rules(&single, &rules)
+                .unwrap_or_else(|error| panic!("{name}: one rank, empty boxes: {error}"))
         }
     };
 
@@ -1732,13 +1806,13 @@ impl FmmOperator for Recorder<'_> {
         assert_eq!(b.multipoles.len(), b.index.len(b.level));
         assert_eq!(b.child_multipoles.len(), b.index.len(b.level + 1));
         let triples = self.grouped(b.children);
-        // Complete octant batches: every parent appears in all eight, with its child of
-        // that octant.
-        let parents: Vec<u32> = (0..b.children.nrows() as u32)
-            .filter(|&t| !b.children.row(t as usize).0.is_empty())
-            .collect();
-        for o in 0..8 {
-            assert_eq!(b.children.batch(o).0, parents, "octant batch {o}");
+        // Octant batches: batch o holds every parent whose row has a child of octant o
+        // (every parent with a row in all eight, but under the empty-box rule).
+        for o in 0..8u8 {
+            let parents: Vec<u32> = (0..b.children.nrows() as u32)
+                .filter(|&t| b.children.row(t as usize).1.contains(&o))
+                .collect();
+            assert_eq!(b.children.batch(o as usize).0, parents, "octant batch {o}");
         }
         let method = match b.pass {
             UpwardPass::Local => "m2m local",
@@ -2181,7 +2255,7 @@ fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String
 fn check_batches<C: CommunicatorCollectives>(
     name: &str,
     octree: &Octree<'_, C>,
-    oracle: &OracleLists,
+    (oracle, empty): (&OracleLists, Option<&EmptyOracle>),
     plan: &Plan,
     overlapped: bool,
     routing: (MultipoleRouting, usize),
@@ -2272,12 +2346,14 @@ fn check_batches<C: CommunicatorCollectives>(
         expected.extend(entries("p2l", x));
         if let Some(parent) = morton::parent(key)
             && needs_local(&held, octree.coarse_tree_leafs(), key)
+            && has_targets(empty, key)
         {
             expected.push(("l2l", key, parent));
         }
-        let children = morton::children(key)
-            .map(|c| c.to_vec())
-            .unwrap_or_default();
+        let children = match kind {
+            KeyType::LocalInterior | KeyType::Global => kept_children(empty, key).0,
+            _ => Vec::new(),
+        };
         match kind {
             KeyType::LocalLeaf => {
                 expected.extend([("p2m", key, key), ("l2p", key, key), ("p2p", key, key)]);
@@ -2309,6 +2385,15 @@ fn check_batches<C: CommunicatorCollectives>(
 
 /// The sorted fine keys of a scenario's sources and targets, over every rank.
 type ScenarioPoints<'a> = (&'a [u64], &'a [u64]);
+
+/// A rule of the plan that a scenario's one-rank comparison applies.
+#[derive(Clone, Copy, Debug)]
+enum ScenarioRule {
+    /// The near rule with [`near_predicate`] (Phase 6 T12).
+    Near,
+    /// The empty-box rule (Helmholtz CH4.0d1).
+    EmptyBoxes,
+}
 
 /// The predicate of the near-rule checks (Phase 6 T12): kernel-agnostic, and converting
 /// some pairs of each list and keeping others.
@@ -2438,6 +2523,7 @@ fn check_near_rule<C: CommunicatorCollectives>(
         &rule_plan,
         octree.coarse_tree_leafs(),
         |key| computes(octree, held, key),
+        None,
     );
     assert_eq!(
         rule_plan.near_pairs(),
@@ -2461,7 +2547,7 @@ fn check_near_rule<C: CommunicatorCollectives>(
     check_source_exchange(rule_name, comm, &rule_plan, points_of);
 
     let sizes: Vec<usize> = (0..rule_plan.nlevels()).map(|level| level + 1).collect();
-    let (reduction, _) = check_reduction(rule_name, octree, held, &rule_plan, &sizes);
+    let (reduction, _) = check_reduction(rule_name, octree, held, &rule_plan, &sizes, None);
     let (top, _) = check_top(
         rule_name,
         octree,
@@ -2483,7 +2569,7 @@ fn check_near_rule<C: CommunicatorCollectives>(
     check_batches(
         rule_name,
         octree,
-        &rule_oracle,
+        (&rule_oracle, None),
         &rule_plan,
         false,
         default_routing(comm),
@@ -2494,7 +2580,7 @@ fn check_near_rule<C: CommunicatorCollectives>(
         &rule_plan,
         fine_keys,
         options,
-        Some(points),
+        Some((ScenarioRule::Near, points)),
     );
 
     // Without the rule nothing changes: a rule that converts nothing gives `Plan::new`'s
@@ -2513,6 +2599,270 @@ fn check_near_rule<C: CommunicatorCollectives>(
         ghost_w,
     ];
     let mut total = [0usize; 5];
+    comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
+    total
+}
+
+/// The empty-box rule's counts on `plan` (without a rule): every local leaf's points of the
+/// scenario, and the subtree counts from `LeafCounts::exchange_with_boxes`. Collective.
+fn box_counts<C: CommunicatorCollectives>(
+    name: &str,
+    comm: &C,
+    plan: &Plan,
+    (sources, targets): ScenarioPoints<'_>,
+) -> LeafCounts {
+    let leaves = plan.index().leaves();
+    let local = |points: &[u64]| -> Vec<usize> {
+        (0..leaves.nlocal())
+            .map(|j| points_in(points, leaves.key(j)))
+            .collect()
+    };
+    LeafCounts::exchange_with_boxes(plan, comm, &local(sources), &local(targets))
+        .unwrap_or_else(|error| panic!("{name}: box counts: {error}"))
+}
+
+/// The oracle lists with the empty-box rule applied: a box whose subtree holds no target
+/// has no V, W or X entries, and the other boxes' V and W entries whose subtrees hold no
+/// source go. Also returns the [`EmptyBoxes`] this rank's plan must report, from the
+/// held keys' rows (`needs_local` for the L2L rows of P2).
+fn empty_oracle(
+    held: &HashMap<u64, KeyType>,
+    coarse_blocks: &[u64],
+    oracle: &OracleLists,
+    empty: &EmptyOracle,
+    computed: impl Fn(u64) -> bool,
+) -> (OracleLists, EmptyBoxes) {
+    let mut left_out = EmptyBoxes::default();
+    let mut lists = OracleLists::new();
+    for (&key, [u, v, w, x]) in oracle {
+        let kind = held[&key];
+        let pruned = !needs_local(held, coarse_blocks, key);
+        let (v, w, x) = if !pruned && empty.targets(key) == 0 {
+            left_out.target_boxes += 1;
+            left_out.v_without_targets += v.len();
+            left_out.w_without_targets += w.len();
+            left_out.x_without_targets += x.len();
+            left_out.l2l_without_targets += usize::from(morton::parent(key).is_some());
+            (Vec::new(), Vec::new(), Vec::new())
+        } else {
+            let kept = |list: &[u64], dropped: &mut usize| {
+                let kept: Vec<u64> = list
+                    .iter()
+                    .copied()
+                    .filter(|&e| empty.sources(e) > 0)
+                    .collect();
+                *dropped += list.len() - kept.len();
+                kept
+            };
+            (
+                kept(v, &mut left_out.v_without_sources),
+                kept(w, &mut left_out.w_without_sources),
+                x.clone(),
+            )
+        };
+        // The M2M rows this rank keeps: a local box's, an owned `Global` box's.
+        if kind == KeyType::LocalInterior || (kind == KeyType::Global && computed(key)) {
+            left_out.m2m_without_sources += morton::children(key)
+                .unwrap()
+                .iter()
+                .filter(|&&child| empty.sources(child) == 0)
+                .count();
+        }
+        lists.insert(key, [u.clone(), v, w, x]);
+    }
+    (lists, left_out)
+}
+
+/// Check the empty-box rule (Helmholtz CH4.0d1; `nd_fmm_plan::empty`) on a scenario, with
+/// the counts of its points: the counts the rule reads are the subtrees' points (local
+/// boxes', top-tree keys' from every rank's blocks, ghost boxes' from their owners); the
+/// plan with the rule has the oracle's lists with the rule applied ([`empty_oracle`]) and
+/// passes every check of [`check_plan`], its M2M and L2L rows and ghost leaves among them,
+/// and reports its [`EmptyBoxes`]; the source exchange, the reduction, the replicated top
+/// and the multipole exchange follow its rows, the multipole exchange receiving no more
+/// than without the rule; the evaluator issues exactly its pairs and gives one rank's bits
+/// on the one-rank plan of the same rule; and counts without a zero give the plan of
+/// `Plan::new`. Returns the totals of [`EmptyBoxes`] over the ranks, in its field order, and
+/// of the multipoles from other ranks that the ranks no longer read. Collective.
+fn check_empty_boxes<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    (held, oracle): (&HashMap<u64, KeyType>, &OracleLists),
+    plan: &Plan,
+    points: ScenarioPoints<'_>,
+    (fine_keys, options): (&[u64], OctreeOptions),
+) -> [usize; 9] {
+    let comm = octree.comm();
+    let rule_name = &format!("{name}, empty boxes");
+    let index = plan.index();
+    let empty = EmptyOracle::new(points);
+    let counts = box_counts(name, comm, plan, points);
+
+    // The counts the rule reads: every box with rows, and every box a V, W or M2M row
+    // names, the whole subtree's.
+    let mut defects = Vec::new();
+    for level in 0..index.nlevels() {
+        let lists = plan.level(level);
+        let mut named: Vec<(usize, u32)> = Vec::new();
+        named.extend(lists.v().sources().iter().map(|&j| (level, j)));
+        named.extend(lists.w().entries().iter().map(|&j| (level + 1, j)));
+        named.extend(lists.m2m_local().sources().iter().map(|&j| (level + 1, j)));
+        named.extend(lists.m2m_global().sources().iter().map(|&j| (level + 1, j)));
+        for (i, &key) in index.keys(level).iter().enumerate() {
+            if !index.kind(level, i).is_ghost() {
+                named.push((level, i as u32));
+                if counts.box_targets(key) != Some(empty.targets(key)) {
+                    defects.push(format!("target count of {key}"));
+                }
+            }
+        }
+        for (l, j) in named {
+            let key = index.key(l, j as usize);
+            if counts.box_sources(key) != Some(empty.sources(key)) {
+                defects.push(format!("source count of {key}"));
+            }
+        }
+    }
+    let mut failed = 0usize;
+    comm.all_reduce_into(&defects.len(), &mut failed, SystemOperation::sum());
+    assert!(
+        failed == 0,
+        "rank {}: {rule_name}: {failed} counts wrong on all ranks, here: {:?}",
+        comm.rank(),
+        &defects[..defects.len().min(4)]
+    );
+
+    let rules = PlanRules {
+        empty_boxes: Some(&counts),
+        ..PlanRules::default()
+    };
+    let rule_plan =
+        Plan::with_rules(octree, &rules).unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    let (rule_oracle, left_out) =
+        empty_oracle(held, octree.coarse_tree_leafs(), oracle, &empty, |key| {
+            computes(octree, held, key)
+        });
+    check_plan(
+        rule_name,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        octree.coarse_tree_leafs(),
+        |key| computes(octree, held, key),
+        Some(&empty),
+    );
+    assert_eq!(rule_plan.empty_boxes(), left_out, "{rule_name}: left out");
+
+    let points_of = |key| points_in(points.0, key);
+    check_source_exchange(rule_name, comm, &rule_plan, points_of);
+    let sizes: Vec<usize> = (0..rule_plan.nlevels()).map(|level| level + 1).collect();
+    let (reduction, _) = check_reduction(rule_name, octree, held, &rule_plan, &sizes, Some(&empty));
+    let (top, _) = check_top(
+        rule_name,
+        octree,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        &sizes,
+        &reduction,
+    );
+    check_multipole_exchange(
+        rule_name,
+        octree,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        &sizes,
+        (&reduction, &top),
+    );
+    // The multipoles this rank reads from other ranks (through any exchange) are among
+    // those it reads without the rule.
+    let reads = |plan: &Plan| -> Vec<u64> {
+        let index = plan.index();
+        let mut keys: Vec<u64> = (0..plan.nlevels())
+            .flat_map(|level| {
+                let lists = plan.level(level);
+                let v = lists.v().sources().iter().map(move |&j| (level, j));
+                let w = lists.w().entries().iter().map(move |&j| (level + 1, j));
+                v.chain(w)
+            })
+            .filter(|&(level, j)| !plan.computes(level, j as usize))
+            .map(|(level, j)| index.key(level, j as usize))
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    };
+    let (with_rule, without) = (reads(&rule_plan), reads(plan));
+    assert!(
+        with_rule
+            .iter()
+            .all(|key| without.binary_search(key).is_ok()),
+        "{rule_name}: a multipole read only with the rule"
+    );
+    let reads_left_out = without.len() - with_rule.len();
+    check_batches(
+        rule_name,
+        octree,
+        (&rule_oracle, Some(&empty)),
+        &rule_plan,
+        false,
+        default_routing(comm),
+    );
+    check_against_one_rank(
+        rule_name,
+        octree,
+        &rule_plan,
+        fine_keys,
+        options,
+        Some((ScenarioRule::EmptyBoxes, points)),
+    );
+
+    // Counts without a zero leave nothing out: the plan of `Plan::new`.
+    let mut full = LeafCounts::new();
+    for level in 0..index.nlevels() {
+        for &key in index.keys(level) {
+            full.set_box_sources(key, 1);
+            full.set_box_targets(key, 1);
+        }
+    }
+    let unchanged = Plan::with_rules(
+        octree,
+        &PlanRules {
+            empty_boxes: Some(&full),
+            ..PlanRules::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    assert_eq!(unchanged.index(), plan.index(), "{name}: nothing left out");
+    assert_eq!(
+        unchanged.levels(),
+        plan.levels(),
+        "{name}: nothing left out"
+    );
+
+    let EmptyBoxes {
+        target_boxes,
+        v_without_targets,
+        x_without_targets,
+        w_without_targets,
+        l2l_without_targets,
+        v_without_sources,
+        w_without_sources,
+        m2m_without_sources,
+    } = left_out;
+    let local = [
+        target_boxes,
+        v_without_targets,
+        x_without_targets,
+        w_without_targets,
+        l2l_without_targets,
+        v_without_sources,
+        w_without_sources,
+        m2m_without_sources,
+        reads_left_out,
+    ];
+    let mut total = [0usize; 9];
     comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
     total
 }
@@ -2955,6 +3305,7 @@ fn distributed_tree_regressions() {
     // The near rule's W and X pairs kept and converted, and the converted ghost leaves,
     // over every scenario, summed over the ranks (Phase 6 T12).
     let mut near_totals = [0usize; 5];
+    let mut empty_totals = [0usize; 9];
     for (name, sources, targets, max_level, capacity) in cases {
         eprintln!("rank {rank}: {name}");
         // One tree serves both populations, as in an FMM with distinct
@@ -2986,6 +3337,7 @@ fn distributed_tree_regressions() {
             &plan,
             octree.coarse_tree_leafs(),
             |key| computes(&octree, &held, key),
+            None,
         );
         // The held set is H, the locally essential keys (Phase 5S T5).
         let [essential, top] = check_held_keys(name, &comm, &held, &octree, &global_leaves);
@@ -3054,7 +3406,7 @@ fn distributed_tree_regressions() {
                 }
             })
             .collect();
-        let (reduction, reduced) = check_reduction(name, &octree, &held, &plan, &sizes);
+        let (reduction, reduced) = check_reduction(name, &octree, &held, &plan, &sizes, None);
         let reduced = reduced.total(&comm);
         let (top, top_size) = check_top(name, &octree, &held, &oracle, &plan, &sizes, &reduction);
         let (multipoles, forwarded) = check_multipole_exchange(
@@ -3104,11 +3456,39 @@ fn distributed_tree_regressions() {
         // batches it issues.
         check_repeated_evaluation(name, &comm, &plan);
         check_against_one_rank(name, &octree, &plan, &fine_keys, options, None);
-        check_batches(name, &octree, &oracle, &plan, false, default_routing(&comm));
-        check_batches(name, &octree, &oracle, &plan, true, default_routing(&comm));
+        check_batches(
+            name,
+            &octree,
+            (&oracle, None),
+            &plan,
+            false,
+            default_routing(&comm),
+        );
+        check_batches(
+            name,
+            &octree,
+            (&oracle, None),
+            &plan,
+            true,
+            default_routing(&comm),
+        );
         let narrow = &format!("{name}, narrow tree");
-        check_batches(narrow, &octree, &oracle, &plan, false, narrow_tree(&comm));
-        check_batches(narrow, &octree, &oracle, &plan, true, narrow_tree(&comm));
+        check_batches(
+            narrow,
+            &octree,
+            (&oracle, None),
+            &plan,
+            false,
+            narrow_tree(&comm),
+        );
+        check_batches(
+            narrow,
+            &octree,
+            (&oracle, None),
+            &plan,
+            true,
+            narrow_tree(&comm),
+        );
 
         // The near rule (Phase 6 T12, C6.9), with counts per leaf from the scenario's points.
         let mut target_points = gather_to_all(&keys(&targets), &comm);
@@ -3122,6 +3502,19 @@ fn distributed_tree_regressions() {
             (&fine_keys, options),
         );
         for (total, count) in near_totals.iter_mut().zip(pairs) {
+            *total += count;
+        }
+
+        // The empty-box rule (Helmholtz CH4.0d1), with the subtrees' points.
+        let left_out = check_empty_boxes(
+            name,
+            &octree,
+            (&held, &oracle),
+            &plan,
+            (&source_points, &target_points),
+            (&fine_keys, options),
+        );
+        for (total, count) in empty_totals.iter_mut().zip(left_out) {
             *total += count;
         }
 
@@ -3167,6 +3560,41 @@ fn distributed_tree_regressions() {
     );
     if comm.size() > 1 {
         assert!(near_totals[4] > 0, "no converted ghost W leaf");
+    }
+    // The empty-box rule left out every kind of entry over the scenarios.
+    if rank == 0 {
+        println!(
+            "empty-box rule on {} ranks, summed over the scenarios and ranks: boxes without \
+             targets {}, their V {}, X {}, W {}, L2L {}; entries without sources: V {}, W {}, \
+             M2M {}",
+            comm.size(),
+            empty_totals[0],
+            empty_totals[1],
+            empty_totals[2],
+            empty_totals[3],
+            empty_totals[4],
+            empty_totals[5],
+            empty_totals[6],
+            empty_totals[7]
+        );
+    }
+    assert!(
+        empty_totals[..8].iter().all(|&n| n > 0),
+        "the empty-box rule left out no entry of some kind: {empty_totals:?}"
+    );
+    // On several ranks some multipole from another rank is no longer read.
+    if rank == 0 {
+        println!(
+            "empty-box rule on {} ranks: {} multipoles from other ranks no longer read",
+            comm.size(),
+            empty_totals[8]
+        );
+    }
+    if comm.size() > 1 {
+        assert!(
+            empty_totals[8] > 0,
+            "the rule left out no multipole from another rank"
+        );
     }
 
     // The owned top tree against one rank on the cube and the Plummer sphere (Phase 5S T5):

@@ -648,6 +648,44 @@ fn helmholtz_accuracy_harness() {
     check_fmm3d_measures(&world);
     check_densities(&world);
     check_box_study(&world);
+    check_empty_boxes(&world);
+}
+
+/// The empty-box rule (Helmholtz CH4.0d1) on W1 at kD = 30 under Rotation (leaves on
+/// level 3, most of it empty): on by default, with entries left out and fewer V pairs than
+/// off, the same errors, and nothing left out with it off.
+fn check_empty_boxes(world: &SimpleCommunicator) {
+    let on = Case::new(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
+    assert!(on.empty_boxes, "the library's default");
+    let off = Case {
+        empty_boxes: false,
+        ..on.clone()
+    };
+    let problem = Problem::new(&on);
+    let oracle = Oracle::sharded(complex_k(&on), &problem, on.gradients, 2, world);
+    let row_on = run(&on, &problem, &oracle, 1, world).expect("the FMM runs");
+    let row_off = run(&off, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert!(row_on.empty_boxes && !row_off.empty_boxes);
+    assert!(
+        row_on.left_out[0] > 0 && row_on.left_out[5] > 0,
+        "{:?}",
+        row_on.left_out
+    );
+    assert_eq!(row_off.left_out, [0; 8]);
+    let pairs = |row: &Row| row.v_pairs.iter().sum::<usize>();
+    assert!(pairs(&row_on) < pairs(&row_off), "V pairs");
+    assert_eq!(
+        row_on.errors, row_off.errors,
+        "the rule leaves out exact zeros"
+    );
+    if world.size() == 1 {
+        assert_eq!(
+            row_on.remote_multipoles, 0,
+            "one rank reads no other's multipole"
+        );
+    }
+    assert!(row_on.remote_multipoles <= row_off.remote_multipoles);
+    check_levels(&row_on);
 }
 
 /// The smooth densities (Helmholtz CH4.0b) on W1 at kD = 10: the plane wave's trace

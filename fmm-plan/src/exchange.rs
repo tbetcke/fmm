@@ -383,13 +383,66 @@ pub(crate) fn ghost_source_counts<C: CommunicatorCollectives>(
             actual: local_counts.len(),
         })
     });
-    agree_valid(comm, local)?;
+    ghost_key_counts(comm, local, ghosts, &|key| {
+        owned_chunk_size(index, local_counts, 1, key)
+    })
+}
+
+/// Every rank's `own` values, in rank order: one all-gather of the counts and one
+/// all-gather-v (the coarse blocks' counts of the empty-box rule,
+/// [`LeafCounts::exchange_with_boxes`](super::near::LeafCounts::exchange_with_boxes)).
+///
+/// # Collective operation
+/// An all-gather and an all-gather-v on `comm`, on every rank.
+///
+/// # Errors
+/// [`ExchangeError::Overflow`] on every rank if the gathered values outgrow MPI's counts.
+pub(crate) fn gather_all<C: CommunicatorCollectives, T: Equivalence + Copy + Default>(
+    comm: &C,
+    own: &[T],
+) -> Result<Vec<T>, ExchangeError> {
+    let mut counts = vec![0i32; comm.size() as usize];
+    let len = i32::try_from(own.len()).unwrap_or(i32::MAX);
+    comm.all_gather_into(&len, &mut counts[..]);
+    // Every rank sees the same counts, so every rank returns the same error.
+    let displacements = displacements(&counts)
+        .filter(|_| counts.iter().all(|&count| count < i32::MAX))
+        .ok_or(ExchangeError::Overflow)?;
+    let total = counts.iter().map(|&count| count as usize).sum();
+    let mut all = vec![T::default(); total];
+    comm.all_gather_varcount_into(
+        own,
+        &mut PartitionMut::new(&mut all[..], &counts[..], &displacements[..]),
+    );
+    Ok(all)
+}
+
+/// The counts of the ghost keys `ghosts` (key, owner), as (key, count) in the order the
+/// owners send them, where each owner answers `owned(key)` for its keys (`None`: the key is
+/// not one it can count): the chunk sizes of a ghost communicator, so that no value moves.
+/// [`ghost_source_counts`] counts leaves' points; the empty-box rule's
+/// [`LeafCounts::exchange_with_boxes`](super::near::LeafCounts::exchange_with_boxes) the
+/// points of boxes' subtrees.
+///
+/// # Collective operation
+/// Two all-reduces that agree the outcome, around the build of rlst's ghost communicator.
+///
+/// # Errors
+/// Returned on every rank if, on any rank, `checked` is an error or a rank is asked for a
+/// key it cannot count.
+pub(crate) fn ghost_key_counts<C: CommunicatorCollectives>(
+    comm: &C,
+    checked: Result<(), ExchangeError>,
+    ghosts: &[(MortonKey, usize)],
+    owned: &dyn Fn(MortonKey) -> Option<usize>,
+) -> Result<Vec<(MortonKey, usize)>, ExchangeError> {
+    agree_valid(comm, checked)?;
 
     let unheld = Cell::new(None);
     let communicator = GhostCommunicatorBuilder::<MortonKey>::new()
         .add_ghosts(ghosts.iter().copied())
         .chunk_sizes(ChunkSizes::PerIndex(Box::new(|key| {
-            owned_chunk_size(index, local_counts, 1, key).unwrap_or_else(|| {
+            owned(key).unwrap_or_else(|| {
                 unheld.set(Some(key));
                 0
             })

@@ -797,7 +797,7 @@ fn global_boxes_above_other_ranks_blocks_get_no_downward_rows() {
 
 /// Every row of every box with rows, as keys in row order: V (with offsets), X, L2L, the
 /// two M2M views and, for a leaf, the near and W rows.
-fn rows_by_key(plan: &Plan) -> HashMap<MortonKey, Vec<Vec<(MortonKey, usize)>>> {
+pub(crate) fn rows_by_key(plan: &Plan) -> HashMap<MortonKey, Vec<Vec<(MortonKey, usize)>>> {
     let index = plan.index();
     let leaves = index.leaves();
     let mut rows = HashMap::new();
