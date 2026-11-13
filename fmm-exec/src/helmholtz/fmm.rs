@@ -16,8 +16,14 @@
 //! 4. the octree of every point, with the leaf rule (proposal §3.7):
 //!    [`min_leaf_level`] of k, the domain and c_leaf passed to
 //!    `OctreeOptions::with_min_leaf_level`, so that no leaf holding a point is wider than
-//!    c_leaf λ; and its plan. There is no near rule and no work cut: both weigh the work
-//!    with Laplace's cost model;
+//!    c_leaf λ; and its plan, by default with the empty-box rule (Helmholtz CH4.0d1;
+//!    [`HelmholtzFmmBuilder::empty_boxes`]): the points of every leaf counted where they
+//!    are (`cost::leaf_point_counts`), every box's subtree counts
+//!    (`nd_fmm_plan::near::LeafCounts::exchange_with_boxes`) and the plan again with
+//!    `nd_fmm_plan::plan::Plan::with_rules`, which leaves out the work of the boxes whose
+//!    subtree holds no target or no source point (`nd_fmm_plan::empty`). Only exact zeros
+//!    go: the output is the rule off's as values (−0 and +0 equal). There is no near rule
+//!    and no work cut: both weigh the work with Laplace's cost model;
 //! 5. and 6. every point to the rank that owns its leaf, the leaf ranges, radii and the
 //!    output order;
 //! 7. the degree of every level ([`Degrees::resolve`]), the [`HelmholtzOperator`] with its
@@ -92,10 +98,12 @@ use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_plan::evaluator::Evaluator;
+use nd_fmm_plan::evaluator::EvaluatorError;
+use nd_fmm_plan::near::LeafCounts;
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair,
 };
-use nd_fmm_plan::plan::Plan;
+use nd_fmm_plan::plan::{Plan, PlanRules};
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
@@ -109,6 +117,7 @@ use super::{
     PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind,
     auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
 };
+use crate::cost;
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
 use crate::operator::{Isa, MulAdd, P2pChoice, SimdScalar};
@@ -199,6 +208,7 @@ pub struct HelmholtzFmmBuilder {
     plane_wave_raise: PlaneWaveRaise,
     c_leaf: f64,
     p2p: P2pChoice,
+    empty_boxes: bool,
     pair_calls: bool,
 }
 
@@ -239,6 +249,7 @@ impl HelmholtzFmmBuilder {
             plane_wave_raise: PlaneWaveRaise::Rule,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
+            empty_boxes: true,
             pair_calls: false,
         }
     }
@@ -367,6 +378,21 @@ impl HelmholtzFmmBuilder {
     /// [`HelmholtzFmm::level_shapes`] reports them.
     pub fn batched_term(mut self, on: bool) -> Self {
         self.batched_term = on;
+        self
+    }
+
+    /// Whether the plan leaves out the work of the boxes whose subtree holds no target or
+    /// no source point (Helmholtz CH4.0d1, the empty-box rule of `nd_fmm_plan::empty`;
+    /// default on). Only exact zeros go, so the output is the rule off's as values (−0 and
+    /// +0 equal), and on P ranks the one-rank FMM's of the same setting bit for bit. The
+    /// build counts every leaf's points where they are and every box's subtree (an
+    /// all-to-all-v, an all-gather of the coarse blocks' counts and a ghost exchange of
+    /// counts) and builds the plan again; [`HelmholtzFmm::plan`]'s `empty_boxes` reports
+    /// what it left out. Under [`HelmholtzM2l::Auto`] the levels' shapes
+    /// ([`HelmholtzFmm::level_shapes`]) count the rule's V pairs, so a level's M2L may
+    /// differ from the rule off's.
+    pub fn empty_boxes(mut self, on: bool) -> Self {
+        self.empty_boxes = on;
         self
     }
 
@@ -604,7 +630,19 @@ impl HelmholtzFmmBuilder {
             .with_ghost_children(true)
             .with_min_leaf_level(leaf_level);
         let (keys, octree) = pipeline::octree(&coordinates, &domain, options, comm);
-        let plan = Plan::new(&octree).map_err(FmmError::Plan)?;
+        let mut plan = Plan::new(&octree).map_err(FmmError::Plan)?;
+        if self.empty_boxes {
+            let (source_keys, target_keys) = keys.split_at(sources.len());
+            let (leaf_sources, leaf_targets) =
+                cost::leaf_point_counts(&octree, &plan, source_keys, target_keys, comm);
+            let counts = LeafCounts::exchange_with_boxes(&plan, comm, &leaf_sources, &leaf_targets)
+                .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?;
+            let rules = PlanRules {
+                empty_boxes: Some(&counts),
+                ..PlanRules::default()
+            };
+            plan = Plan::with_rules(&octree, &rules).map_err(FmmError::Plan)?;
+        }
 
         // Steps 5 and 6: the points to their owners. Three coordinates per point move now,
         // and on every evaluation c m strengths per source and the output values per
@@ -781,6 +819,7 @@ impl HelmholtzFmmBuilder {
             returned_output: vec![T::zero(); output_values * points.targets.nsent()],
             points,
             ranks_per_node,
+            empty_boxes: self.empty_boxes,
         })
     }
 }
@@ -889,6 +928,8 @@ where
     points: Points,
     /// The largest number of ranks on one node, agreed at build.
     ranks_per_node: usize,
+    /// Whether the plan has the empty-box rule.
+    empty_boxes: bool,
 }
 
 impl<'o, T, C> HelmholtzFmm<'o, T, C>
@@ -1090,6 +1131,12 @@ where
     /// exponential M2L's waves budget ([`HelmholtzFmmBuilder::plane_wave_budget`]).
     pub fn ranks_per_node(&self) -> usize {
         self.ranks_per_node
+    }
+
+    /// Whether the plan has the empty-box rule ([`HelmholtzFmmBuilder::empty_boxes`]);
+    /// what it left out on this rank is [`plan`](Self::plan)'s `empty_boxes`.
+    pub fn empty_boxes(&self) -> bool {
+        self.empty_boxes
     }
 
     /// The domain.
