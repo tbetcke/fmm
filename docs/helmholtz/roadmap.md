@@ -8,12 +8,10 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-13): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0, CH4.0b and CH4.0c are merged;
-CH4.0d was split into CH4.0d1–d3 and CH4.0d1b added. CH4.0d1 (the empty-box rule of
-`nd-fmm-plan`, on under the Helmholtz builder: the evaluation 0.2–0.56 of before on sparse
-trees, the build 1.1–1.7× from a second plan) is signed off with the rule on by default. HR,
-H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next:
-CH4.0d1b, then CH4.0d2 (#216's question 2).
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0c and CH4.0d1 are merged;
+CH4.0d1b builds the empty-box rule's plan once (the build with the rule 0.80–1.03 of the rule
+off's, CH4.0d1's 1.24–1.57; the output CH4.0d1's bit for bit). HR, H0, H1 and H2 are still
+open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0d2, then CH4.0d3.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -532,17 +530,13 @@ task's full line is in its record or report and its progress entry
   the under-resolved W3, noise on uniform trees; the build 1.1–1.7× (a second serial plan,
   CH4.0d1b). `Plan::new` and Laplace unchanged (plan build within spread on Kathleen).
   Signed off (the user, 2026-11-13, on #216: "Please sign off both questions as recommended"): (1) the rule on by default; (2) CH4.0d1b next, before CH4.0d2.
-- [ ] **CH4.0d1b The empty-box rule's build cost.** Added at CH4.0d1 (report §0, §5): the rule
-  builds the plan twice (`Plan::new` for the counts' exchange lists, then `Plan::with_rules`),
-  and a plan is built serially at about 17 µs per box on Kathleen, so the build with the rule is
-  1.1–1.7× the rule off's (W3 at N = 4·10⁶: 24.5 s against 15.6 s; the under-resolved W3 at
-  kD = 500: 139 s against 93 s), a loss of up to 1.33× in build plus one evaluation on uniform
-  trees. Build the rule's plan once: the counts' exchange lists without a first plan (every
-  held ghost box requested, the routes on the box index), or the rule applied to the first
-  plan's rows. It changes `nd-fmm-plan`'s interface (a stop-and-ask when it starts).
-  *Done when:* the build with the rule within 1.1× the rule off's on W3 at N = 4·10⁶ and on the
-  under-resolved W3 at kD = 500 (one rank × 40 threads, Kathleen), the plans and outputs
-  CH4.0d1's bit for bit, Laplace unchanged. *Needs:* CH4.0d1. *Machines:* Kathleen.
+- [x] **CH4.0d1b The empty-box rule's build cost.** Report:
+  `fmm-validate/results/helmholtz-ch4-0d1b.md`; record `docs/helmholtz/tasks/CH4.0d1b.md`. The
+  plan built once on the octree's index (`BoxIndex::of_octree`, `Plan::with_rules_on`,
+  `Redistribution::with_index`; the counts of every held ghost box), the design approved by
+  the user on 2026-11-13 ("Approve (Recommended)"). The build with the rule 1.00–1.03× the rule
+  off's on W3 at N = 4·10⁶, 0.80–0.82 on the under-resolved W3 at kD = 500 (Kathleen, 1 × 40);
+  every checksum CH4.0d1's; `plan_build_cost` within `main`'s spread. *Needs:* CH4.0d1.
 - [ ] **CH4.0d2 V pairs between leaves of few points as near pairs.** By the near rule's
   mechanism (n_s n_t below a crossover of the cost model; a Rotation pair at p = 24 costs about
   110 µs of thread time on Kathleen, CH4.0c report §3.2): decided on the target's rank from the

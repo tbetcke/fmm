@@ -40,9 +40,12 @@
 //! Built in O(K log K) for K held keys (one sort per level). Memory: 32 bytes per box
 //! (key, kind, first child, leaf) and 13 bytes per numbered leaf.
 
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
-use nd_octree::{MortonKey, morton, octree::KeyType};
+use mpi::traits::CommunicatorCollectives;
+use nd_octree::{MortonKey, Octree, morton, octree::KeyType};
+
+use crate::plan::{PlanError, agree, index_from_keys};
 
 /// The marker for "no index" in the `u32` arrays of [`BoxIndex`].
 pub const NONE: u32 = u32::MAX;
@@ -127,6 +130,49 @@ impl BoxIndex {
             box_leaf,
             leaves,
         }
+    }
+
+    /// The box index of `octree`'s held keys, as [`Plan::new`](crate::plan::Plan::new)
+    /// numbers them, with the local leaves and no ghost leaf (Helmholtz CH4.0d1b): what a
+    /// caller needs before the plan, to route points to the local leaves
+    /// ([`Redistribution::with_index`](crate::redistribute::Redistribution::with_index)) and
+    /// count the boxes' points
+    /// ([`LeafCounts::exchange_with_boxes`](crate::near::LeafCounts::exchange_with_boxes)),
+    /// and then gives to
+    /// [`Plan::with_rules_on`](crate::plan::Plan::with_rules_on). The local leaves are
+    /// those of every plan of the octree, whatever its rules.
+    ///
+    /// # Collective operation
+    /// The global level count ([`Octree::global_max_level`], an all-reduce) and one
+    /// all-reduce that agrees the outcome, on every rank.
+    ///
+    /// # Errors
+    /// The key checks of [`Plan::new`](crate::plan::Plan::new) that need no rows: a key
+    /// that is not a valid Morton key ([`PlanError::MalformedTree`]), and a level of 2³² boxes
+    /// or more ([`PlanError::TooManyBoxes`]). The rank that found it returns it, the others
+    /// [`PlanError::OtherRank`].
+    pub fn of_octree<C: CommunicatorCollectives>(
+        octree: &Octree<'_, C>,
+    ) -> Result<Self, PlanError> {
+        let nlevels = octree.global_max_level() + 1;
+        agree(octree, index_from_keys(octree.all_keys(), nlevels))
+    }
+
+    /// Whether this is the index of `all_keys` on `nlevels` levels with no ghost leaf
+    /// numbered: every key of the map, at its level, with its kind.
+    pub(crate) fn is_index_of(
+        &self,
+        all_keys: &HashMap<MortonKey, KeyType>,
+        nlevels: usize,
+    ) -> bool {
+        self.nlevels() == nlevels
+            && self.leaves.len() == self.leaves.nlocal()
+            && self.keys.iter().map(Vec::len).sum::<usize>() == all_keys.len()
+            && self.keys.iter().zip(&self.kinds).all(|(keys, kinds)| {
+                keys.iter()
+                    .zip(kinds)
+                    .all(|(key, kind)| all_keys.get(key) == Some(kind))
+            })
     }
 
     /// Number the ghost leaves `ghosts`, given as (level, box), after the local leaves,

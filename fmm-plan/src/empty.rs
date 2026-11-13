@@ -6,9 +6,15 @@
 //! has every row a full one has. Where a box's subtree holds no target point, its local is
 //! read by no point; where it holds no source point, its multipole is zero. The rule leaves
 //! that work out, from the points in each box's subtree ([`LeafCounts`], by key, which the
-//! operator supplies: [`LeafCounts::exchange_with_boxes`]), while the plan builds its lists
-//! ([`Plan::with_rules`](crate::plan::Plan::with_rules) with
+//! operator supplies: [`LeafCounts::exchange_with_boxes`], the counts of every held box),
+//! while the plan builds its lists ([`Plan::with_rules`](crate::plan::Plan::with_rules) with
 //! [`PlanRules::empty_boxes`](crate::plan::PlanRules::empty_boxes)).
+//!
+//! The counts need the points of every local leaf, so a caller that routes its points
+//! builds the octree's index first
+//! ([`BoxIndex::of_octree`](crate::index::BoxIndex::of_octree)), routes and counts on it,
+//! and builds the plan once on the same index
+//! ([`Plan::with_rules_on`](crate::plan::Plan::with_rules_on); Helmholtz CH4.0d1b).
 //!
 //! # What the rule changes
 //!

@@ -48,11 +48,12 @@ mod tests;
 use std::collections::HashMap;
 
 use mpi::traits::CommunicatorCollectives;
-use nd_octree::{MortonKey, morton};
+use nd_octree::{MortonKey, Octree, morton};
 
 use nd_octree::octree::KeyType;
 
 use super::exchange::{ExchangeError, gather_all, ghost_key_counts, ghost_source_counts};
+use super::index::BoxIndex;
 use super::plan::Plan;
 use crate::interaction_manager::is_leaf;
 
@@ -199,33 +200,41 @@ impl LeafCounts {
     }
 
     /// The counts of [`exchange`](Self::exchange), and those the empty-box rule reads
-    /// ([`empty`](crate::empty)): the source and target points in the subtree of every
-    /// local box of `plan` (its local leaves' counts summed up the tree; every descendant
-    /// of a local box is local), of every top-tree key it holds (the coarse blocks' counts
-    /// of every rank, summed up the replicated top tree), and the source points in the
-    /// subtree of every other ghost box a V or W row names, from its owner. `plan` is a
-    /// plan of the same octree built without a rule.
+    /// ([`empty`](crate::empty)), on `index`, the box index of `octree`
+    /// ([`BoxIndex::of_octree`]; Helmholtz CH4.0d1b: no plan needed): the source and target
+    /// points in the subtree of every local box (its local leaves' counts summed up the tree;
+    /// every descendant of a local box is local), of every top-tree key it holds (the coarse
+    /// blocks' counts of every rank, summed up the replicated top tree), and the source points
+    /// in the subtree of every other held ghost box, and of every held ghost leaf, from its
+    /// owner. `sources[j]` and `targets[j]` are the points on local leaf j.
     ///
-    /// Every box thus has the counts of its whole subtree, the same on every rank and on
-    /// one rank. The ghost boxes and the near rule's W-row leaves are fetched in one ghost
-    /// communicator: for a leaf the subtree's count is its own.
+    /// Every held box thus has the counts of its whole subtree (a ghost its source count),
+    /// the same on every rank and on one rank: those of every box a plan's rows name, which
+    /// any plan of the octree reads ([`Plan::with_rules_on`](crate::plan::Plan::with_rules_on)
+    /// with the empty-box rule, the near rule or both). Every held ghost below another rank's
+    /// coarse blocks is a local box of its owner, which counts it; the counts move as the
+    /// chunk sizes of one ghost communicator, a count per held ghost box, whether or not a
+    /// row names it.
     ///
     /// # Collective operation
-    /// On `comm`, the communicator of the octree of `plan`: an all-gather and an
-    /// all-gather-v of the coarse blocks' counts, then the build of a ghost communicator
-    /// (rlst's, which moves the counts as chunk sizes and no value) and two all-reduces, as
-    /// [`exchange`](Self::exchange).
+    /// On the octree's communicator: an all-gather and an all-gather-v of the coarse blocks'
+    /// counts, then the build of a ghost communicator (rlst's, which moves the counts as
+    /// chunk sizes and no value) and two all-reduces, as [`exchange`](Self::exchange).
     ///
     /// # Errors
-    /// Those of [`exchange`](Self::exchange), on every rank alike, and
-    /// [`ExchangeError::Overflow`] if the blocks' counts outgrow MPI's counts.
+    /// Returned on every rank if, on any rank, `sources` or `targets` does not have one
+    /// entry per local leaf of `index` ([`ExchangeError::CountsLength`]), a rank is asked for
+    /// a key that is not one of its local boxes ([`ExchangeError::UnheldKey`]), or the
+    /// blocks' counts outgrow MPI's counts ([`ExchangeError::Overflow`]).
     pub fn exchange_with_boxes<C: CommunicatorCollectives>(
-        plan: &Plan,
-        comm: &C,
+        octree: &Octree<'_, C>,
+        index: &BoxIndex,
         sources: &[usize],
         targets: &[usize],
     ) -> Result<Self, ExchangeError> {
-        let index = plan.index();
+        let comm = octree.comm();
+        let map = octree.partition_map();
+        let is_top = |key: MortonKey| map.top_kind(key).is_some();
         let leaves = index.leaves();
         let nlocal = leaves.nlocal();
         let checked = [sources.len(), targets.len()]
@@ -271,8 +280,7 @@ impl LeafCounts {
 
         // The coarse blocks' counts of every rank, summed into every ancestor: the counts
         // of every top-tree key.
-        let own: Vec<u64> = plan
-            .coarse_blocks()
+        let own: Vec<u64> = map.blocks()[map.rank_blocks(map.rank())]
             .iter()
             .flat_map(|&block| {
                 let (s, t) = index
@@ -293,24 +301,15 @@ impl LeafCounts {
             }
         }
 
-        // The ghost boxes of the V and W rows that are not top-tree keys, and the ghost
-        // leaves of the W rows (the near rule's), each once, with their owners.
+        // Every held ghost box that is not a top-tree key, and every held ghost leaf (the
+        // near rule's), each once, with its owner.
         let mut ghosts: Vec<(MortonKey, usize)> = Vec::new();
-        let mut add = |level: usize, j: u32, w_leaf: bool| {
-            let kind = index.kind(level, j as usize);
-            if let Some(owner) = kind.ghost_rank()
-                && ((is_leaf(kind) && w_leaf) || !plan.is_top(level, j as usize))
-            {
-                ghosts.push((index.key(level, j as usize), owner));
-            }
-        };
         for level in 0..nlevels {
-            for &s in plan.level(level).v().sources() {
-                add(level, s, false);
-            }
-            if level + 1 < nlevels {
-                for &s in plan.level(level).w().entries() {
-                    add(level + 1, s, true);
+            for (&key, &kind) in index.keys(level).iter().zip(index.kinds(level)) {
+                if let Some(owner) = kind.ghost_rank()
+                    && (is_leaf(kind) || !is_top(key))
+                {
+                    ghosts.push((key, owner));
                 }
             }
         }
@@ -336,8 +335,7 @@ impl LeafCounts {
             }
         }
         for level in 0..nlevels {
-            for &(i, _) in plan.top_boxes(level) {
-                let key = index.key(level, i as usize);
+            for &key in index.keys(level).iter().filter(|&&key| is_top(key)) {
                 let (s, t) = top.get(&key).copied().unwrap_or_default();
                 counts.set_box_sources(key, s);
                 counts.set_box_targets(key, t);

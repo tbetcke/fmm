@@ -74,7 +74,11 @@
 //!   locally while the rows are built. A box whose subtree holds no target loses its V, X, W
 //!   and L2L rows; a box whose subtree holds no source leaves the V, W and M2M rows that
 //!   name it; `Global` boxes too, by the counts of whole subtrees. Rows are only shortened,
-//!   never reordered; [`Plan::new`] is the plan without the rule, bit for bit.
+//!   never reordered; [`Plan::new`] is the plan without the rule, bit for bit. Its counts
+//!   need the local leaves' points, so a caller builds the octree's index first
+//!   ([`BoxIndex::of_octree`]), routes the points and counts on it
+//!   ([`LeafCounts::exchange_with_boxes`]), and builds the plan once on the same index
+//!   ([`Plan::with_rules_on`]; Helmholtz CH4.0d1b).
 //! - The plan owns its arrays and borrows nothing from the octree. A new tree needs a new
 //!   plan: box indices, unlike keys, change when the tree changes.
 //!
@@ -134,7 +138,8 @@ pub struct PlanRules<'a> {
     pub near: Option<&'a NearRule<'a>>,
     /// The empty-box rule from these counts (Helmholtz CH4.0d1; the
     /// [`empty`](crate::empty) module): the subtree counts of every box with rows and of
-    /// every box a V, W or M2M row names ([`LeafCounts::exchange_with_boxes`]).
+    /// every box a V, W or M2M row names; [`LeafCounts::exchange_with_boxes`] gives those
+    /// of every held box.
     pub empty_boxes: Option<&'a LeafCounts>,
 }
 
@@ -197,6 +202,9 @@ pub enum PlanError {
         /// The leaf or box.
         key: MortonKey,
     },
+    /// The box index given to [`Plan::with_rules_on`] is not the index of the octree's
+    /// held keys: built from another octree, or with another level count.
+    IndexMismatch,
     /// Construction failed on another rank.
     OtherRank,
 }
@@ -239,6 +247,9 @@ impl fmt::Display for PlanError {
             }
             Self::MissingCount { key } => {
                 write!(f, "the plan's rule has no point count of key {key}")
+            }
+            Self::IndexMismatch => {
+                write!(f, "the box index is not the index of the octree's keys")
             }
             Self::OtherRank => write!(f, "building the plan failed on another rank"),
         }
@@ -318,15 +329,43 @@ impl Plan {
         } else {
             Err(PlanError::MissingGhostChildren)
         };
+        agree(octree, local)
+    }
 
-        let mut valid = false;
-        octree
-            .comm()
-            .all_reduce_into(&local.is_ok(), &mut valid, SystemOperation::logical_and());
-        match local {
-            Ok(_) if !valid => Err(PlanError::OtherRank),
-            result => result,
-        }
+    /// Build the plan of `octree` as [`with_rules`](Self::with_rules) does, on `index`, the
+    /// octree's box index from [`BoxIndex::of_octree`], instead of numbering the keys again
+    /// (Helmholtz CH4.0d1b): a caller that needs the index before the plan (to route points
+    /// to the local leaves and count them for [`PlanRules::empty_boxes`]) builds the plan
+    /// once. The plan is [`with_rules`](Self::with_rules)' bit for bit.
+    ///
+    /// # Collective operation
+    /// Those of [`new`](Self::new): the rules are applied locally.
+    ///
+    /// # Errors
+    /// Those of [`with_rules`](Self::with_rules), and [`PlanError::IndexMismatch`] if
+    /// `index` is not the index of the octree's held keys on its global level count (or
+    /// has ghost leaves numbered): on the rank that found it, [`PlanError::OtherRank`] on
+    /// the others.
+    pub fn with_rules_on<C: CommunicatorCollectives>(
+        octree: &Octree<'_, C>,
+        index: BoxIndex,
+        rules: &PlanRules<'_>,
+    ) -> Result<Self, PlanError> {
+        let nlevels = octree.global_max_level() + 1;
+        let map = octree.partition_map();
+        debug_assert_eq!(
+            &map.blocks()[map.rank_blocks(map.rank())],
+            &octree.coarse_tree_leafs()[..],
+            "the partition map names this rank's coarse blocks"
+        );
+        let local = if !octree.options().ghost_children() {
+            Err(PlanError::MissingGhostChildren)
+        } else if !index.is_index_of(octree.all_keys(), nlevels) {
+            Err(PlanError::IndexMismatch)
+        } else {
+            Self::from_index_with_rules(index, octree.all_keys(), map, rules)
+        };
+        agree(octree, local)
     }
 
     /// Build the plan from a key classification and a partition map; local, for tests on
@@ -388,36 +427,20 @@ impl Plan {
         map: &PartitionMap,
         rules: &PlanRules<'_>,
     ) -> Result<Self, PlanError> {
-        let mut sorted: Vec<MortonKey> = all_keys.keys().copied().collect();
-        sorted.sort_unstable();
-        let mut keys = vec![Vec::new(); nlevels];
-        for key in sorted {
-            if !morton::is_valid(key) {
-                return Err(PlanError::MalformedTree {
-                    key,
-                    reason: "the key is not a valid Morton key",
-                });
-            }
-            let level = morton::level(key);
-            if level >= nlevels {
-                return Err(PlanError::LevelOutOfRange { key, nlevels });
-            }
-            keys[level].push(key);
-        }
-        for (level, level_keys) in keys.iter().enumerate() {
-            if level_keys.len() > u32::MAX as usize {
-                return Err(PlanError::TooManyBoxes {
-                    level,
-                    count: level_keys.len(),
-                });
-            }
-        }
-        let kinds = keys
-            .iter()
-            .map(|level| level.iter().map(|key| all_keys[key]).collect())
-            .collect();
-        let mut index = BoxIndex::new(keys, kinds);
+        let index = index_from_keys(all_keys, nlevels)?;
+        Self::from_index_with_rules(index, all_keys, map, rules)
+    }
 
+    /// The plan of [`from_key_types_with_rules`](Self::from_key_types_with_rules) on
+    /// `index`, the index of `all_keys` ([`index_from_keys`]) before its ghost leaves are
+    /// numbered; local.
+    pub(crate) fn from_index_with_rules(
+        mut index: BoxIndex,
+        all_keys: &HashMap<MortonKey, KeyType>,
+        map: &PartitionMap,
+        rules: &PlanRules<'_>,
+    ) -> Result<Self, PlanError> {
+        let nlevels = index.nlevels();
         let rank = map.rank();
         let coarse_blocks = map.blocks()[map.rank_blocks(rank)].to_vec();
         // P2: the `Global` boxes whose locals this rank needs, the ancestors of its own
@@ -593,6 +616,62 @@ impl Plan {
         top.binary_search_by_key(&(i as u32), |&(j, _)| j)
             .ok()
             .map(|t| top[t].1 as usize)
+    }
+}
+
+/// Number the keys of `all_keys` on the levels `0..nlevels` ([`BoxIndex`]), with their
+/// kinds and the local leaves; local. The checks of
+/// [`Plan::from_key_types`] that need no rows, in its order.
+pub(crate) fn index_from_keys(
+    all_keys: &HashMap<MortonKey, KeyType>,
+    nlevels: usize,
+) -> Result<BoxIndex, PlanError> {
+    let mut sorted: Vec<MortonKey> = all_keys.keys().copied().collect();
+    sorted.sort_unstable();
+    let mut keys = vec![Vec::new(); nlevels];
+    for key in sorted {
+        if !morton::is_valid(key) {
+            return Err(PlanError::MalformedTree {
+                key,
+                reason: "the key is not a valid Morton key",
+            });
+        }
+        let level = morton::level(key);
+        if level >= nlevels {
+            return Err(PlanError::LevelOutOfRange { key, nlevels });
+        }
+        keys[level].push(key);
+    }
+    for (level, level_keys) in keys.iter().enumerate() {
+        if level_keys.len() > u32::MAX as usize {
+            return Err(PlanError::TooManyBoxes {
+                level,
+                count: level_keys.len(),
+            });
+        }
+    }
+    let kinds = keys
+        .iter()
+        .map(|level| level.iter().map(|key| all_keys[key]).collect())
+        .collect();
+    Ok(BoxIndex::new(keys, kinds))
+}
+
+/// Agree the outcome of a local build (a plan or a box index) on every rank of `octree`'s
+/// communicator: one
+/// all-reduce; a rank whose build succeeded returns [`PlanError::OtherRank`] if another
+/// rank's failed.
+pub(crate) fn agree<T, C: CommunicatorCollectives>(
+    octree: &Octree<'_, C>,
+    local: Result<T, PlanError>,
+) -> Result<T, PlanError> {
+    let mut valid = false;
+    octree
+        .comm()
+        .all_reduce_into(&local.is_ok(), &mut valid, SystemOperation::logical_and());
+    match local {
+        Ok(_) if !valid => Err(PlanError::OtherRank),
+        result => result,
     }
 }
 

@@ -3012,3 +3012,41 @@ request, using this template:
   user, 2026-11-13: "Tests + build time (Recommended)").
 - Follow-ups: CH4.0d1b (roadmap: the rule's build cost, one plan build); CH4.0g (Laplace's empty
   boxes, now with the rule to count with).
+
+## 2026-11-13: CH4.0d1b The empty-box rule's build cost
+- Done:
+  - The design, approved before the code (the user, 2026-11-13: "Approve (Recommended)"): the
+    routes need only the box index's local leaves, and every held ghost below another rank's
+    blocks is a local box of its owner, so the counts need no first plan.
+  - `nd-fmm-plan`: `BoxIndex::of_octree` (collective; the index of `Plan::new` before any row),
+    `Plan::with_rules_on` (the plan of `with_rules` on that index; `PlanError::IndexMismatch`),
+    `Redistribution::with_index` (`new` calls it with the plan's index),
+    `LeafCounts::exchange_with_boxes(octree, &index, …)` in place of the plan-based form (every
+    held ghost that is not a top-tree key, and every held ghost leaf, counted by its owner);
+    `from_key_types_with_rules` split into the crate-private `index_from_keys` and the rows.
+  - `nd-fmm-exec`: `Points::route` on a `BoxIndex` (`Fmm` passes its plan's); the Helmholtz
+    builder builds the index, routes on it, counts and builds the plan once, with the rule or
+    without.
+  - Kathleen jobs 633734 and 633735 (98014e8): the build with the rule 1.00–1.03 of the rule
+    off's on W3 at N = 4·10⁶ (CH4.0d1 1.55–1.57), 0.80–0.82 on the under-resolved W3 at
+    kD = 500 (1.49–1.50), 0.87–0.91 on W1 at kD = 500, 0.82 at 4 × 10; every checksum
+    CH4.0d1's. Report `fmm-validate/results/helmholtz-ch4-0d1b.md`; raw outputs in
+    `~/projects/fmm-archive/kathleen/logs/ch4-0d1b/`; `tools/helmholtz/ch4-0d1b-runs.sh`,
+    `ch4-0d1b-tables.py`.
+- Tests: `src/empty_tests.rs` (one more: the plan on a prebuilt index, and indexes of other
+  keys, levels or with ghost leaves not one); `tests/mpi_regressions.rs` at 1, 2, 4 and 8
+  ranks: `BoxIndex::of_octree` against `Plan::new`'s index, the counts of every held box
+  against brute force, the plan of one build equal to `Plan::with_rules` on the true counts
+  (with the near rule too) and with no rule to `Plan::new`'s, `Redistribution::with_index`
+  against `new` (counts, origins, forward bits), the index of another tree (`PlanMismatch`,
+  `IndexMismatch`).
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default
+  and workspace tests at opt-level 1 (1,253 and 1,367 passed), the MPI list at 2 and 4 ranks
+  (24 of 24), `mpi_regressions` at 8. One-rank opt-level 0 times at load 17–20:
+  `mpi_regressions` 5.6 s, `helmholtz_fmm` 701 s (CH4.0d1 3.9 s and 460 s at falling load).
+  Nothing pending.
+- Decisions: none; no questions for sign-off.
+- Laplace: unchanged (`Plan::new`, `Redistribution::new` and `Fmm`'s routes the same code on
+  the same index; every Laplace test; `plan_build_cost` on Kathleen job 633735 within `main`'s
+  spread). No D9 evaluation runs: no evaluation code changed.
+- Follow-ups: none new; CH4.0d2 next on the priority list.

@@ -10,6 +10,7 @@ use nd_fmm_plan::{
         self, MultipoleExchange, MultipoleRouting, ReductionExchange, SourceExchange,
         TOP_MAX_BOXES, TOP_READER_FRACTION, TopExchange,
     },
+    index::BoxIndex,
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
     near::{LeafCounts, LeafPair, NearPairs, NearRule},
@@ -17,7 +18,7 @@ use nd_fmm_plan::{
         FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
         PerPair, UpwardPass,
     },
-    plan::{Plan, PlanRules},
+    plan::{Plan, PlanError, PlanRules},
     redistribute::{Redistribution, RedistributionError},
     store::{LeafSliceMut, LeafStore, LevelBuffers},
 };
@@ -1615,12 +1616,14 @@ fn check_against_one_rank<C: CommunicatorCollectives>(
                 .unwrap_or_else(|error| panic!("{name}: one rank, near rule: {error}"))
         }
         Some((ScenarioRule::EmptyBoxes, points)) => {
-            let counts = box_counts(name, &single_comm, &one, points);
+            let index = BoxIndex::of_octree(&single)
+                .unwrap_or_else(|error| panic!("{name}: one rank, index: {error}"));
+            let counts = box_counts(name, &single, &index, points);
             let rules = PlanRules {
                 empty_boxes: Some(&counts),
                 ..PlanRules::default()
             };
-            Plan::with_rules(&single, &rules)
+            Plan::with_rules_on(&single, index, &rules)
                 .unwrap_or_else(|error| panic!("{name}: one rank, empty boxes: {error}"))
         }
     };
@@ -2603,22 +2606,82 @@ fn check_near_rule<C: CommunicatorCollectives>(
     total
 }
 
-/// The empty-box rule's counts on `plan` (without a rule): every local leaf's points of the
-/// scenario, and the subtree counts from `LeafCounts::exchange_with_boxes`. Collective.
+/// The empty-box rule's counts on `index`, the octree's box index before a plan
+/// (`BoxIndex::of_octree`, Helmholtz CH4.0d1b): every local leaf's points of the scenario,
+/// and the subtree counts from `LeafCounts::exchange_with_boxes`. Collective.
 fn box_counts<C: CommunicatorCollectives>(
     name: &str,
-    comm: &C,
-    plan: &Plan,
+    octree: &Octree<'_, C>,
+    index: &BoxIndex,
     (sources, targets): ScenarioPoints<'_>,
 ) -> LeafCounts {
-    let leaves = plan.index().leaves();
+    let leaves = index.leaves();
     let local = |points: &[u64]| -> Vec<usize> {
         (0..leaves.nlocal())
             .map(|j| points_in(points, leaves.key(j)))
             .collect()
     };
-    LeafCounts::exchange_with_boxes(plan, comm, &local(sources), &local(targets))
+    LeafCounts::exchange_with_boxes(octree, index, &local(sources), &local(targets))
         .unwrap_or_else(|error| panic!("{name}: box counts: {error}"))
+}
+
+/// The true counts of every held box of `index` from `empty` (both subtree counts), of every
+/// held leaf (its sources) and of every local leaf (its targets): what any rule reads. The
+/// counts of CH4.0d1's plans, which came from the plan's rows.
+fn true_counts(index: &BoxIndex, empty: &EmptyOracle) -> LeafCounts {
+    let mut counts = LeafCounts::new();
+    for level in 0..index.nlevels() {
+        for (&key, &kind) in index.keys(level).iter().zip(index.kinds(level)) {
+            counts.set_box_sources(key, empty.sources(key));
+            counts.set_box_targets(key, empty.targets(key));
+            if matches!(kind, KeyType::LocalLeaf | KeyType::GhostLeaf(_)) {
+                counts.set_sources(key, empty.sources(key));
+            }
+            if kind == KeyType::LocalLeaf {
+                counts.set_targets(key, empty.targets(key));
+            }
+        }
+    }
+    counts
+}
+
+/// Check the index of `BoxIndex::of_octree` (Helmholtz CH4.0d1b) against `plan`'s, built by
+/// `Plan::new`: the same keys, kinds, children and local leaves, and no ghost leaf.
+fn check_index_of(name: &str, index: &BoxIndex, plan: &Plan) {
+    let planned = plan.index();
+    assert_eq!(index.nlevels(), planned.nlevels(), "{name}: index levels");
+    for level in 0..index.nlevels() {
+        assert_eq!(index.keys(level), planned.keys(level), "{name}: index keys");
+        assert_eq!(
+            index.kinds(level),
+            planned.kinds(level),
+            "{name}: index kinds"
+        );
+        assert_eq!(
+            index.first_children(level),
+            planned.first_children(level),
+            "{name}: index children"
+        );
+    }
+    let (leaves, planned_leaves) = (index.leaves(), planned.leaves());
+    let nlocal = planned_leaves.nlocal();
+    assert_eq!(leaves.len(), nlocal, "{name}: the index has no ghost leaf");
+    assert_eq!(leaves.nlocal(), nlocal, "{name}: local leaves");
+    assert_eq!(
+        leaves.keys(),
+        &planned_leaves.keys()[..nlocal],
+        "{name}: leaf keys"
+    );
+    assert_eq!(
+        leaves.levels(),
+        &planned_leaves.levels()[..nlocal],
+        "{name}: leaf levels"
+    );
+    assert_eq!(
+        leaves.boxes(),
+        &planned_leaves.boxes()[..nlocal],
+        "{name}: leaf boxes"
+    );
 }
 
 /// The oracle lists with the empty-box rule applied: a box whose subtree holds no target
@@ -2696,30 +2759,36 @@ fn check_empty_boxes<C: CommunicatorCollectives>(
     let rule_name = &format!("{name}, empty boxes");
     let index = plan.index();
     let empty = EmptyOracle::new(points);
-    let counts = box_counts(name, comm, plan, points);
+    // The counts on the octree's index before any plan (Helmholtz CH4.0d1b).
+    let index_of =
+        BoxIndex::of_octree(octree).unwrap_or_else(|error| panic!("{name}: index: {error}"));
+    check_index_of(name, &index_of, plan);
+    let counts = box_counts(name, octree, &index_of, points);
 
-    // The counts the rule reads: every box with rows, and every box a V, W or M2M row
-    // names, the whole subtree's.
+    // The counts the rule reads, the whole subtree's: the source count of every held box,
+    // the target count of every box with rows and every top-tree key, and the leaves'
+    // counts the near rule reads (every held leaf's sources, the local leaves' targets).
+    // Every box a V, W or M2M row names is held.
+    let map = octree.partition_map();
     let mut defects = Vec::new();
     for level in 0..index.nlevels() {
-        let lists = plan.level(level);
-        let mut named: Vec<(usize, u32)> = Vec::new();
-        named.extend(lists.v().sources().iter().map(|&j| (level, j)));
-        named.extend(lists.w().entries().iter().map(|&j| (level + 1, j)));
-        named.extend(lists.m2m_local().sources().iter().map(|&j| (level + 1, j)));
-        named.extend(lists.m2m_global().sources().iter().map(|&j| (level + 1, j)));
         for (i, &key) in index.keys(level).iter().enumerate() {
-            if !index.kind(level, i).is_ghost() {
-                named.push((level, i as u32));
-                if counts.box_targets(key) != Some(empty.targets(key)) {
-                    defects.push(format!("target count of {key}"));
-                }
-            }
-        }
-        for (l, j) in named {
-            let key = index.key(l, j as usize);
+            let kind = index.kind(level, i);
             if counts.box_sources(key) != Some(empty.sources(key)) {
                 defects.push(format!("source count of {key}"));
+            }
+            if (!kind.is_ghost() || map.top_kind(key).is_some())
+                && counts.box_targets(key) != Some(empty.targets(key))
+            {
+                defects.push(format!("target count of {key}"));
+            }
+            if matches!(kind, KeyType::LocalLeaf | KeyType::GhostLeaf(_))
+                && counts.sources(key) != Some(empty.sources(key))
+            {
+                defects.push(format!("leaf source count of {key}"));
+            }
+            if kind == KeyType::LocalLeaf && counts.targets(key) != Some(empty.targets(key)) {
+                defects.push(format!("leaf target count of {key}"));
             }
         }
     }
@@ -2736,8 +2805,50 @@ fn check_empty_boxes<C: CommunicatorCollectives>(
         empty_boxes: Some(&counts),
         ..PlanRules::default()
     };
-    let rule_plan =
-        Plan::with_rules(octree, &rules).unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    let rule_plan = Plan::with_rules_on(octree, index_of.clone(), &rules)
+        .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    // One build is CH4.0d1's plan bit for bit (Helmholtz CH4.0d1b): `Plan::with_rules` on
+    // the true counts of every held box, which a plan reads only where its rows name a box,
+    // as CH4.0d1's counts were taken. With the near rule as well.
+    let truth = true_counts(index, &empty);
+    let reference = Plan::with_rules(
+        octree,
+        &PlanRules {
+            empty_boxes: Some(&truth),
+            ..PlanRules::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    assert!(rule_plan == reference, "{rule_name}: the plan of one build");
+    let (near, near_truth) = (
+        NearRule::new(&counts, &near_predicate),
+        NearRule::new(&truth, &near_predicate),
+    );
+    let both = Plan::with_rules_on(
+        octree,
+        index_of.clone(),
+        &PlanRules {
+            near: Some(&near),
+            empty_boxes: Some(&counts),
+        },
+    )
+    .unwrap_or_else(|error| panic!("{rule_name}, near rule: {error}"));
+    let both_reference = Plan::with_rules(
+        octree,
+        &PlanRules {
+            near: Some(&near_truth),
+            empty_boxes: Some(&truth),
+        },
+    )
+    .unwrap_or_else(|error| panic!("{rule_name}, near rule: {error}"));
+    assert!(
+        both == both_reference,
+        "{rule_name}, near rule: the plan of one build"
+    );
+    // Without a rule, the plan on the index is `Plan::new`'s.
+    let plain = Plan::with_rules_on(octree, index_of.clone(), &PlanRules::default())
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
+    assert!(plain == *plan, "{name}: the plan on the index");
     let (rule_oracle, left_out) =
         empty_oracle(held, octree.coarse_tree_leafs(), oracle, &empty, |key| {
             computes(octree, held, key)
@@ -2949,6 +3060,8 @@ fn check_redistribution<C: CommunicatorCollectives>(
     let comm = octree.comm();
     let rank = comm.rank() as usize;
     let leaves = plan.index().leaves();
+    let index_of =
+        BoxIndex::of_octree(octree).unwrap_or_else(|error| panic!("{name}: index: {error}"));
     let mut sorted = global.to_vec();
     sorted.sort_unstable();
     let expected_counts: Vec<usize> = (0..leaves.nlocal())
@@ -2961,6 +3074,24 @@ fn check_redistribution<C: CommunicatorCollectives>(
         let mine: Vec<u64> = inputs[rank].iter().map(|&i| global[i]).collect();
         let redistribution = Redistribution::new(octree, plan, &mine)
             .unwrap_or_else(|error| panic!("{label}: {error}"));
+        // On the octree's index before a plan (Helmholtz CH4.0d1b): the same routes.
+        let on_index = Redistribution::with_index(octree, &index_of, &mine)
+            .unwrap_or_else(|error| panic!("{label}, on the index: {error}"));
+        assert_eq!(
+            on_index.counts(),
+            redistribution.counts(),
+            "{label}, on the index"
+        );
+        assert_eq!(
+            on_index.origins(),
+            redistribution.origins(),
+            "{label}, on the index"
+        );
+        assert_eq!(
+            on_index.max_per_item(),
+            redistribution.max_per_item(),
+            "{label}, on the index"
+        );
         assert_eq!(redistribution.nsent(), mine.len(), "{label}");
         let (min, max) = extremes(comm, redistribution.max_per_item());
         assert_eq!(min, max, "{label}: max_per_item differs between ranks");
@@ -2985,6 +3116,12 @@ fn check_redistribution<C: CommunicatorCollectives>(
         assert_eq!(forwarded.len(), 3 * nreceived, "{label}");
         let again = redistribution.forward(&f64_payload, 3);
         assert_eq!(bits(&again), bits(&forwarded), "{label}: two forwards");
+        let indexed = on_index.forward(&f64_payload, 3);
+        assert_eq!(
+            bits(&indexed),
+            bits(&forwarded),
+            "{label}: forward on the index"
+        );
         let mut into = vec![0.0; forwarded.len()];
         redistribution.forward_into(&f64_payload, 3, &mut into);
         assert_eq!(bits(&into), bits(&forwarded), "{label}: forward_into");
@@ -3132,6 +3269,28 @@ fn check_redistribution_errors<C: CommunicatorCollectives>(
     };
     let error = Redistribution::new(octree, &other, &mine).err();
     assert_eq!(error, expected, "{name}: plan of another tree");
+    // The same index on its own (Helmholtz CH4.0d1b).
+    let error = Redistribution::with_index(octree, other.index(), &mine).err();
+    assert_eq!(error, expected, "{name}: index of another tree");
+    // A plan on the index of another tree: `IndexMismatch` where the keys differ.
+    // `global_max_level` is collective: every rank calls it.
+    let nlevels = octree.global_max_level() + 1;
+    let local_mismatch = *octree.all_keys() != map || nlevels != 2;
+    comm.all_reduce_into(
+        &local_mismatch,
+        &mut any_mismatch,
+        SystemOperation::logical_or(),
+    );
+    let expected = match (local_mismatch, any_mismatch) {
+        (true, _) => Some(PlanError::IndexMismatch),
+        (false, true) => Some(PlanError::OtherRank),
+        (false, false) => None,
+    };
+    let error = Plan::with_rules_on(octree, other.index().clone(), &PlanRules::default()).err();
+    assert_eq!(
+        error, expected,
+        "{name}: a plan on the index of another tree"
+    );
 
     let redistribution =
         Redistribution::new(octree, plan, &mine).unwrap_or_else(|error| panic!("{name}: {error}"));

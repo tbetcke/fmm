@@ -26,6 +26,7 @@ use mpi::collective::SystemOperation;
 use mpi::traits::CommunicatorCollectives;
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::evaluator::Evaluator;
+use nd_fmm_plan::index::BoxIndex;
 use nd_fmm_plan::operator::FmmOperator;
 use nd_fmm_plan::plan::Plan;
 use nd_fmm_plan::redistribute::{Redistribution, RedistributionError};
@@ -126,14 +127,15 @@ impl Points {
     /// Steps 5 and 6: every point to the rank that owns its leaf (Phase 5 T6,
     /// docs/design/distributed-fmm.md §4.4), one redistribution for the sources and one
     /// for the targets, routed by their `keys` (the `nsources` sources, then the targets,
-    /// as [`octree`] gave them) on `plan` of `octree`, and the f64 `coordinates` of
+    /// as [`octree`] gave them) on the box index `index` of `octree` (a plan's, or
+    /// `BoxIndex::of_octree`'s before the plan: Helmholtz CH4.0d1b), and the f64 `coordinates` of
     /// [`domain`] forwarded into the received order, which is leaf order; then the points
     /// of every local leaf, its radius and the output order. `per_item` is the largest
     /// number of values per point that a move of the build's evaluations carries.
     ///
     /// # Collective operation
     ///
-    /// Those of two `Redistribution::new` and two forwards; every rank must enter.
+    /// Those of two `Redistribution::with_index` and two forwards; every rank must enter.
     ///
     /// # Errors
     ///
@@ -141,18 +143,18 @@ impl Points {
     /// errors, and `max_per_item` is the same on every rank.
     pub(crate) fn route<C: CommunicatorCollectives>(
         octree: &Octree<'_, C>,
-        plan: &Plan,
+        index: &BoxIndex,
         (keys, nsources): (&[MortonKey], usize),
         coordinates: &[f64],
         domain: &Domain,
         per_item: usize,
     ) -> Result<(Self, OwnedCoordinates), FmmError> {
-        let nlocal = plan.index().leaves().nlocal();
+        let nlocal = index.leaves().nlocal();
         let (source_keys, target_keys) = keys.split_at(nsources);
-        let source_route =
-            Redistribution::new(octree, plan, source_keys).map_err(FmmError::Redistribution)?;
-        let target_route =
-            Redistribution::new(octree, plan, target_keys).map_err(FmmError::Redistribution)?;
+        let source_route = Redistribution::with_index(octree, index, source_keys)
+            .map_err(FmmError::Redistribution)?;
+        let target_route = Redistribution::with_index(octree, index, target_keys)
+            .map_err(FmmError::Redistribution)?;
         if source_route.max_per_item().min(target_route.max_per_item()) < per_item {
             return Err(FmmError::Redistribution(RedistributionError::Overflow));
         }
@@ -163,7 +165,7 @@ impl Points {
         let source_leaves = LeafRanges::new(source_route.counts());
         let target_leaves = LeafRanges::new(target_route.counts());
         let radii: Vec<f64> = (0..nlocal)
-            .map(|j| radius(plan.index().leaves().level(j), domain))
+            .map(|j| radius(index.leaves().level(j), domain))
             .collect();
         let outputs = OutputOrder::new(&target_leaves, &radii);
         let points = Self {

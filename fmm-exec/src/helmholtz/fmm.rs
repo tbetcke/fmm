@@ -16,16 +16,18 @@
 //! 4. the octree of every point, with the leaf rule (proposal §3.7):
 //!    [`min_leaf_level`] of k, the domain and c_leaf passed to
 //!    `OctreeOptions::with_min_leaf_level`, so that no leaf holding a point is wider than
-//!    c_leaf λ; and its plan. There is no near rule and no work cut: both weigh the work
-//!    with Laplace's cost model;
-//! 5. and 6. every point to the rank that owns its leaf, the leaf ranges, radii and the
-//!    output order; then, by default, the plan again with the empty-box rule (Helmholtz
-//!    CH4.0d1; [`HelmholtzFmmBuilder::empty_boxes`]): every box's subtree counts from the
-//!    routes' points per local leaf (`nd_fmm_plan::near::LeafCounts::exchange_with_boxes`)
-//!    and `nd_fmm_plan::plan::Plan::with_rules`, which leaves out the work of the boxes whose
-//!    subtree holds no target or no source point (`nd_fmm_plan::empty`). The rule changes
-//!    no local leaf, so the routes hold. Only exact zeros go: the output is the rule off's
-//!    as values (−0 and +0 equal);
+//!    c_leaf λ; and its box index (`nd_fmm_plan::index::BoxIndex::of_octree`). There is no
+//!    near rule and no work cut: both weigh the work with Laplace's cost model;
+//! 5. and 6. every point to the rank that owns its leaf, routed on the index's local
+//!    leaves, the leaf ranges, radii and the output order; then the plan, built once on the
+//!    index (`nd_fmm_plan::plan::Plan::with_rules_on`; Helmholtz CH4.0d1b), by default with
+//!    the empty-box rule (Helmholtz CH4.0d1; [`HelmholtzFmmBuilder::empty_boxes`]): every
+//!    box's subtree counts from the routes' points per local leaf
+//!    (`nd_fmm_plan::near::LeafCounts::exchange_with_boxes`), so that the plan leaves out the
+//!    work of the boxes whose subtree holds no target or no source point
+//!    (`nd_fmm_plan::empty`). Every plan of the octree has the index's local leaves, so the
+//!    routes hold. Only exact zeros go: the output is the rule off's as values (−0 and +0
+//!    equal);
 //! 7. the degree of every level ([`Degrees::resolve`]), the [`HelmholtzOperator`] with its
 //!    tables, on the pool, and the evaluator; the largest leaf is agreed on every rank.
 //!    Under [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶, and under the default
@@ -99,6 +101,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_plan::evaluator::Evaluator;
 use nd_fmm_plan::evaluator::EvaluatorError;
+use nd_fmm_plan::index::BoxIndex;
 use nd_fmm_plan::near::LeafCounts;
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair,
@@ -385,8 +388,9 @@ impl HelmholtzFmmBuilder {
     /// default on). Only exact zeros go, so the output is the rule off's as values (−0 and
     /// +0 equal), and on P ranks the one-rank FMM's of the same setting bit for bit. The
     /// build counts every box's subtree from the points the routes deliver to each local
-    /// leaf (an all-gather of the coarse blocks' counts and a ghost exchange of counts) and
-    /// builds the plan again; [`HelmholtzFmm::plan`]'s `empty_boxes` reports
+    /// leaf (an all-gather of the coarse blocks' counts and a ghost exchange of counts)
+    /// before it builds the plan, once (Helmholtz CH4.0d1b); [`HelmholtzFmm::plan`]'s
+    /// `empty_boxes` reports
     /// what it left out. Under [`HelmholtzM2l::Auto`] the levels' shapes
     /// ([`HelmholtzFmm::level_shapes`]) count the rule's V pairs, so a level's M2L may
     /// differ from the rule off's.
@@ -629,17 +633,17 @@ impl HelmholtzFmmBuilder {
             .with_ghost_children(true)
             .with_min_leaf_level(leaf_level);
         let (keys, octree) = pipeline::octree(&coordinates, &domain, options, comm);
-        let mut plan = Plan::new(&octree).map_err(FmmError::Plan)?;
+        let index = BoxIndex::of_octree(&octree).map_err(FmmError::Plan)?;
 
-        // Steps 5 and 6: the points to their owners. Three coordinates per point move now,
-        // and on every evaluation c m strengths per source and the output values per
-        // target.
+        // Steps 5 and 6: the points to their owners, routed on the index's local leaves.
+        // Three coordinates per point move now, and on every evaluation c m strengths per
+        // source and the output values per target.
         let densities = Densities::new(self.k.kind(), self.charges, self.vectors);
         let output_values = densities.target_output_point_size(self.gradients);
         let per_item = output_values.max(3).max(densities.columns());
         let (points, owned) = Points::route(
             &octree,
-            &plan,
+            &index,
             (&keys, sources.len()),
             &coordinates,
             &domain,
@@ -647,30 +651,27 @@ impl HelmholtzFmmBuilder {
         )?;
         drop(keys);
         drop(coordinates);
-        // The empty-box rule's plan from the routes' points per local leaf. The rule changes
-        // no local leaf (they are numbered by (level, key) whatever the rows), so the routes
+        // The plan, once, on the index: with the empty-box rule from the routes' points per
+        // local leaf. Every plan of the octree has the index's local leaves, so the routes
         // and the leaf ranges hold for it.
-        if self.empty_boxes {
-            let counts = LeafCounts::exchange_with_boxes(
-                &plan,
-                comm,
-                &points.source_leaves.counts,
-                &points.target_leaves.counts,
+        let counts = if self.empty_boxes {
+            Some(
+                LeafCounts::exchange_with_boxes(
+                    &octree,
+                    &index,
+                    &points.source_leaves.counts,
+                    &points.target_leaves.counts,
+                )
+                .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?,
             )
-            .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?;
-            let rules = PlanRules {
-                empty_boxes: Some(&counts),
-                ..PlanRules::default()
-            };
-            let local = plan.index().leaves().nlocal();
-            let full = plan;
-            plan = Plan::with_rules(&octree, &rules).map_err(FmmError::Plan)?;
-            debug_assert_eq!(
-                plan.index().leaves().keys()[..local],
-                full.index().leaves().keys()[..local],
-                "the rule changes no local leaf"
-            );
-        }
+        } else {
+            None
+        };
+        let rules = PlanRules {
+            empty_boxes: counts.as_ref(),
+            ..PlanRules::default()
+        };
+        let plan = Plan::with_rules_on(&octree, index, &rules).map_err(FmmError::Plan)?;
 
         // Step 7: the degrees, the operator and the evaluator. The largest number of
         // sources in a leaf, over every rank, sizes P2P's scratch.
