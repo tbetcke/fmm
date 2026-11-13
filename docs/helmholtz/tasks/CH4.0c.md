@@ -76,7 +76,15 @@ sign-off 2 also names the plane wave's trace.
 - No library code change unless the runs miss ε. If they do: the correction (stage D) changes
   `DegreeRule`'s high-frequency branch, or names S7's per-pair degrees above a stated x, as a
   proposal for sign-off; the plan is then amended with its tests (below) before the code.
-- Public API: none. Conventions: none.
+- A defect the runs found (W3 at kD = 500, the default M2L, every density): `HelmholtzFmmBuilder`
+  sized the exponential M2L's waves buffer for the plan's boxes before it set the buffer's
+  bound, so it held every box of the largest level with waves until then; 218 GB there, refused
+  by the node. The builder now sets the bound first (`fmm-exec/src/helmholtz/fmm.rs`); the test
+  is `HelmholtzOperator::plane_wave_buffer_peak_bytes` (new, the most the buffer held) asserted
+  equal to the bound's buffer in `check_plane_wave_buffer` (`tests/helmholtz_fmm.rs`), red
+  before the fix and green after. No output changes. `helmholtz_boxes` also prints each run's
+  errors as it finishes (job 633324 lost the Rotation run's errors to the abort).
+- Public API: `HelmholtzOperator::plane_wave_buffer_peak_bytes` (added). Conventions: none.
 
 ## Tests that prove it
 
@@ -148,7 +156,13 @@ Accuracy runs: times reported from Kathleen's exclusive nodes, never asserted. R
 
 ## Pending runs
 
-(filled in step 6)
+Done: jobs 633320 (`w1-random`), 633321 (`w1-levels`), 633323 (`w1-smooth`), 633324 (`w3`;
+kD = 200 complete, kD = 500 aborted in the default's build, the defect above). Outputs in
+`~/projects/fmm-archive/kathleen/logs/ch4-0c/`; results in the report.
+
+Pending: W3 at kD = 500 with the fix, one job per density (`ONLY=w3-500-<density>
+tools/helmholtz/ch4-0c-runs.sh w3 logs/ch4-0c/w3-500`): 633429 (random), 633430 (plane wave),
+633431 (constant). Decides §9 item 8 at kD = 500.
 
 ## Open questions
 

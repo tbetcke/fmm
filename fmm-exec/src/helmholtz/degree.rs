@@ -17,7 +17,11 @@
 //! ∇φ over 1,000 sampled targets within ε/2, on W1, W3 and W4 of proposal §9.1, one level
 //! scanned at a time (the plateau on trees with every level at x ≤ 2.2, all levels together),
 //! over 0.14 ≤ x ≤ 65 and 10⁻⁸ ≤ ε ≤ 10⁻³ (the plateau to 10⁻¹⁰); the rule is at least
-//! every measured degree. Outside those ranges it is an extrapolation.
+//! every measured degree. That is the range the rule is measured on, D1's 10⁻³ ≤ ε ≤ 10⁻⁸
+//! (Helmholtz CH4.0c, review 2026-11-12 M6); outside it the rule is an extrapolation. Below
+//! 10⁻⁸ the constant density on W1 at kD = 100 misses ε in ℓ2, 1.5× at 10⁻⁹ and 3.4× at
+//! 10⁻¹⁰, all from level 2 on the high-frequency branch (CH4.0b, report §4), although the
+//! plateau alone was scanned to 10⁻¹⁰.
 //!
 //! ε is a relative ℓ2 tolerance, not a pointwise one (proposal §9.1, amended at Helmholtz
 //! CH4.0b): the truncation is largest at targets and sources near a corner of their box, so
@@ -28,17 +32,21 @@
 //! S7's closed form, [`s7_degree`], max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈x + (ln 1/ε)^{2/3} x^{1/3}⌉),
 //! was the default before CH3.3. It is the per-pair worst case (the worst of the 316
 //! offsets and three placements, potential and gradient, per-pair relative ℓ2 norm, margin
-//! ε/2) and lies at or above the calibrated rule for 10⁻¹⁸ ≤ ε ≤ 10⁻¹: about twice its plateau
+//! ε/2). As a formula it lies at or above the calibrated rule (CH3.3's report compared them
+//! for 10⁻¹⁸ ≤ ε ≤ 10⁻¹, the tests for 10⁻¹⁰ ≤ ε ≤ 10⁻³ and x ≤ 304), a comparison of two
+//! formulas and not a range on which the calibrated rule is measured: about twice its plateau
 //! at low frequency (34 against 15 at ε = 10⁻⁶), where the full FMM's errors lay 10³ to 10⁶
 //! below ε (CH3.1c).
 //!
 //! The high-frequency branch is measured to x = 65 (kD = 300 on the unit cube) and checked
-//! in the full FMM at x = 108 (W1 at kD = 500, 0.63 ε at ε = 10⁻⁸, the tightest case of the
-//! verification). Beyond, it is an extrapolation that falls increasingly below S7's
-//! per-pair p* as x grows and ε falls (157 against 161 at x = 128, 292 against 297 at
-//! x = 256, both at 10⁻⁸): the measured excess p − x grows about linearly in log₁₀(1/ε),
-//! faster than (ln 1/ε)^{2/3}. Above kD ≈ 500 at ε ≤ 10⁻⁷, check the errors or name S7's
-//! degrees per level; CH4.3 recalibrates the high-frequency levels.
+//! in the full FMM at x = 108 (W1 at kD = 500, 0.63 ε at ε = 10⁻⁸; CH3.3) and at x = 216 and
+//! 108 (W1 at kD = 1000, levels 2 and 3, at 10⁻⁸ to 10⁻³, all-RCR and the default, random
+//! charges, the plane wave's trace and the constant density: within ε in ℓ2, at most 0.83 ε,
+//! the levels beyond x = 65 about 1 % of the error at 10⁻⁸; Helmholtz CH4.0c,
+//! `fmm-validate/results/helmholtz-ch4-0c.md`). Beyond, it is an extrapolation that falls
+//! increasingly below S7's per-pair p* as x grows and ε falls (157 against 161 at x = 128,
+//! 292 against 297 at x = 256, both at 10⁻⁸): the measured excess p − x grows about linearly
+//! in log₁₀(1/ε), faster than (ln 1/ε)^{2/3}. CH4.3 recalibrates the high-frequency levels.
 //!
 //! Complex k takes Re(k) a, provisionally: S7 found η = Im k / Re k = 0.1 within 10 degrees
 //! of real k, and the damping-dependent rule is CH5.2's.
