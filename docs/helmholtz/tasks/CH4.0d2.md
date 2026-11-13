@@ -184,6 +184,18 @@ the cost model on the same cases (`custom`), which decides the default's proposa
 
 ## Open questions
 
+3. Found in Kathleen job 633811 (W1 at kD = 500 under the default, a partial crossover: φ
+   4·10⁵× the rule off's) and reproduced in `check_near_v` under PlaneWave (1.8·10⁻² against
+   1.2·10⁻⁵): on a level with waves merge and shift serves each source of a parent's slots
+   to every child in its geometric mask, so a pair converted while a sibling keeps its source
+   is counted twice. Rotation, Batched, Dense and Classes follow the rows; the empty-box rule
+   leaves out exact zeros only. Decided by the user on 2026-11-13: "Group per (parent,
+   source) (Recommended)": on a level with waves the rule decides once per parent P and
+   source s for every child of P reading s, converting if all are leaves and
+   n_s n_P < n m_s (`v_group`), with the builder's levels with waves asserted to be the
+   operator's. The matrix jobs 633813–633815 ran the per-pair rule: their wave levels'
+   errors at partial crossovers are not usable, their times are (the work is the same).
+
 1. The interface (above): `VPair` and `NearRule::with_v_pairs`, opt-in, no new `LeafPair`
    variant. Approved by the user on 2026-11-13 before the code: "Approve (Recommended)".
 2. The crossover: the cheapest M2L Auto may choose per level (conservative, no circularity),

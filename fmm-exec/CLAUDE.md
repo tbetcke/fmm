@@ -588,13 +588,20 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   level; negative or NaN is `HelmholtzFmmError::VCrossover`) makes V pairs between two leaves
   near pairs through `nd_fmm_plan`'s `NearRule::with_v_pairs` on the counts the empty-box rule
   reads (counted even with that rule off), in the one plan build; W and X pairs never convert
-  here. A converted pair is exact, so the output is not the rule off's; it stays deterministic
+  here. On a level whose M2L is the exponential one (under `PlaneWave` or Auto's levels with
+  waves, `operator::auto_plane_wave_levels`, known before the plan; `build` asserts they are
+  the operator's) the decision is per parent P and source s (`v_group`): merge and shift
+  serves s to every child of P whose V list holds it by geometric masks, so a pair converted
+  alone counts its source twice (W1 at kD = 500 erred 4·10⁵× before; the user, 2026-11-13:
+  "Group per (parent, source)"); all those children convert if all are leaves and
+  n_s n_P < n m_s (n_P the targets under P, m_s the children reading s). A converted pair is exact, so the output is not the rule off's; it stays deterministic
   and on P ranks the one-rank FMM's of the same setting bit for bit. `HelmholtzFmm::{near_v,
   source_points_exchanged, near_interactions}` report the setting, the source exchange's points
   (sent, received) and each level's Σ_t n_t Σ_s n_s; `HelmholtzOperator::p2p_times` times every
   P2P level call per level (two clock reads, as `m2l_times`). `check_near_v` in
   `tests/helmholtz_fmm.rs` (the cube with rank 0 empty and the sphere, at n_s n_t < 100 and
-  every V pair, under Rotation and the default): the errors within `NEAR_ERROR_BOUND` (1.1) of
+  every V pair, under Rotation, PlaneWave and the default; on the sphere PlaneWave's groups
+  convert in part): the errors within `NEAR_ERROR_BOUND` (1.1) of
   the rule off's, 2 threads and the one-rank FMM bit for bit, crossover 0 the rule off's bits,
   more near interactions and ghost points, the P2P timed on every level with near rows;
   `check_errors` the refused crossovers. `tests/helmholtz_fmm.rs`

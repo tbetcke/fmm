@@ -2318,20 +2318,27 @@ fn check_empty_boxes(scenario: &Scenario, comm: &SimpleCommunicator) -> [usize; 
 const NEAR_ERROR_BOUND: f64 = 1.1;
 
 /// The V pairs between leaves as near pairs (Helmholtz CH4.0d2;
-/// `HelmholtzFmmBuilder::near_v`), under Rotation and the default, at a crossover of n_s n_t
+/// `HelmholtzFmmBuilder::near_v`), under Rotation, PlaneWave (whose levels with waves decide
+/// per parent and source: converted alone, a pair's source would still reach its target
+/// through the parent's waves) and the default, at a crossover of n_s n_t
 /// that converts some pairs and keeps others and at one that converts every V pair between
 /// leaves: the errors against the direct sum within [`NEAR_ERROR_BOUND`] of the rule off's,
 /// 2 threads the one-thread output bit for bit, on P ranks the one-rank FMM's of the same
 /// rule bit for bit, and the ghost leaves' points received at least the rule off's. A
 /// crossover of 0 converts nothing: the rule off's output bit for bit. Returns the V pairs
-/// between leaves offered and converted at the middle crossover under Rotation, and the
-/// source points received beyond the rule off's, over every rank.
-fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) -> [usize; 3] {
+/// between leaves offered and converted at the middle crossover under Rotation, the source
+/// points received beyond the rule off's, and the V pairs offered and converted under
+/// PlaneWave, over every rank.
+fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) -> [usize; 5] {
     let inputs = Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
-    let mut totals = [0usize; 3];
+    let mut totals = [0usize; 5];
     for (setting, off) in [
         ("Rotation", builder(scenario)),
+        (
+            "PlaneWave",
+            default_builder(scenario).m2l(HelmholtzM2l::PlaneWave),
+        ),
         ("the default", default_builder(scenario)),
     ] {
         let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
@@ -2410,14 +2417,19 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
             check_one_rank(name, &on, &inputs, kind, &output, comm);
             if setting == "Rotation" && n == crossover {
                 let local = [offered, converted, received - received_off];
-                comm.all_reduce_into(&local[..], &mut totals[..], SystemOperation::sum());
+                comm.all_reduce_into(&local[..], &mut totals[..3], SystemOperation::sum());
+            }
+            if setting == "PlaneWave" && n == crossover {
+                let local = [offered, converted];
+                comm.all_reduce_into(&local[..], &mut totals[3..], SystemOperation::sum());
             }
         }
     }
     if comm.rank() == 0 {
         println!(
-            "{}, V pairs below {crossover}: {} of {} converted, {} more source points received",
-            scenario.name, totals[1], totals[0], totals[2]
+            "{}, V pairs below {crossover}: {} of {} converted, {} more source points received; \
+             under PlaneWave (by parent and source on the levels with waves) {} of {}",
+            scenario.name, totals[1], totals[0], totals[2], totals[4], totals[3]
         );
     }
     totals
@@ -2634,7 +2646,16 @@ fn helmholtz_fmm() {
     // The V pairs between leaves as near pairs (CH4.0d2): the cube with rank 0 empty and
     // the sphere under the leaf rule.
     for scenario in [&scenarios()[0], &sphere_scenario()] {
-        let [offered, converted, received] = check_near_v(scenario, 100.0, &comm);
+        let [offered, converted, received, pw_offered, pw_converted] =
+            check_near_v(scenario, 100.0, &comm);
+        // On the sphere the levels with waves convert some groups and keep others.
+        if matches!(scenario.layout, Layout::Sphere) {
+            assert!(
+                0 < pw_converted && pw_converted < pw_offered,
+                "{}: under PlaneWave {pw_converted} of {pw_offered} converted",
+                scenario.name
+            );
+        }
         assert!(
             0 < converted && converted < offered,
             "{}: the V rule converted nothing or everything ({converted} of {offered})",

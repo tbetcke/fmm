@@ -93,12 +93,14 @@
 //! println!("Re φ = {}, Im φ = {:?}", phi.re[0], phi.im.map(|im| im[0]));
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
+use nd_fmm_math::Complex;
 use nd_fmm_plan::evaluator::Evaluator;
 use nd_fmm_plan::evaluator::EvaluatorError;
 use nd_fmm_plan::index::BoxIndex;
@@ -108,9 +110,11 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::plan::{Plan, PlanRules};
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
+use nd_fmm_tables::helmholtz::plane_wave::merge::select;
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
-use nd_octree::{Octree, OctreeOptions, PhysicalBox};
+use nd_octree::octree::KeyType;
+use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, morton};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use thiserror::Error;
 
@@ -121,7 +125,8 @@ use super::{
     auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
-use crate::geometry::Domain;
+use crate::geometry::{Domain, radius};
+use crate::helmholtz::operator::auto_plane_wave_levels;
 use crate::operator::{Isa, MulAdd, P2pChoice, SimdScalar};
 use crate::pipeline::{
     self, Points, check_finite, gather_output, load_source_charges, pack_charges,
@@ -176,7 +181,12 @@ pub enum HelmholtzFmmError {
 /// Which V pairs between two leaves the plan makes near pairs (Helmholtz CH4.0d2;
 /// [`HelmholtzFmmBuilder::near_v`]; `nd_fmm_plan::near::NearRule::with_v_pairs`): a V pair
 /// (t, s) of two leaves converts where n_s n_t, the source points of s times the target
-/// points of t, is below the crossover; its M2L is replaced by the exact P2P.
+/// points of t, is below the crossover; its M2L is replaced by the exact P2P. On a level
+/// whose M2L is the exponential one the decision is per parent P and source s instead
+/// (merge and shift serves s to every child of P whose V list holds it, so a pair alone
+/// would be counted twice): every such child converts if all of them are leaves and
+/// n_s n_P is below the crossover times their number (n_P the target points under P;
+/// the user's choice on 2026-11-13, "Group per (parent, source)").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum VNear {
     /// No V pair converts (the default until CH4.0d2's sign-off).
@@ -700,42 +710,9 @@ impl HelmholtzFmmBuilder {
         )?;
         drop(keys);
         drop(coordinates);
-        // The plan, once, on the index: with the empty-box rule and the V pairs' near rule
-        // (Helmholtz CH4.0d2) from the routes' points per local leaf. Every plan of the
-        // octree has the index's local leaves, so the routes and the leaf ranges hold for it.
-        let counts = if self.empty_boxes || self.near_v != VNear::Off {
-            Some(
-                LeafCounts::exchange_with_boxes(
-                    &octree,
-                    &index,
-                    &points.source_leaves.counts,
-                    &points.target_leaves.counts,
-                )
-                .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?,
-            )
-        } else {
-            None
-        };
-        let no_leaf_pairs = |_: LeafPair| false;
-        let v_crossover = match self.near_v {
-            VNear::Off => 0.0,
-            VNear::Crossover(n) => n,
-        };
-        let v_pairs = |pair: VPair| ((pair.sources * pair.targets) as f64) < v_crossover;
-        let near = match (&counts, self.near_v) {
-            (Some(counts), VNear::Crossover(_)) => {
-                Some(NearRule::new(counts, &no_leaf_pairs).with_v_pairs(&v_pairs))
-            }
-            _ => None,
-        };
-        let rules = PlanRules {
-            near: near.as_ref(),
-            empty_boxes: counts.as_ref().filter(|_| self.empty_boxes),
-        };
-        let plan = Plan::with_rules_on(&octree, index, &rules).map_err(FmmError::Plan)?;
-
-        // Step 7: the degrees, the operator and the evaluator. The largest number of
-        // sources in a leaf, over every rank, sizes P2P's scratch.
+        // Step 7 (its first part before the plan, Helmholtz CH4.0d2): the degrees and the
+        // M2L's agreed settings, which the V rule reads. The largest number of sources in a
+        // leaf, over every rank, sizes P2P's scratch.
         let local = points
             .source_leaves
             .counts
@@ -748,7 +725,7 @@ impl HelmholtzFmmBuilder {
         let degrees = agree(
             comm,
             self.degrees
-                .resolve(&self.k, &domain, plan.nlevels())
+                .resolve(&self.k, &domain, index.nlevels())
                 .map_err(HelmholtzFmmError::from),
         )?;
         // Auto's crossover, agreed over the ranks (constraints 2 and 9): the smallest of
@@ -770,6 +747,82 @@ impl HelmholtzFmmBuilder {
             as u64;
         let mut plane_wave_min_degree = 0u64;
         comm.all_reduce_into(&local, &mut plane_wave_min_degree, SystemOperation::min());
+        // The levels whose M2L is the exponential one, from the settings and the degrees as
+        // the operator chooses them (`build` checks the two agree below): there merge and
+        // shift serves a parent's sources to its children by geometric masks, so the V rule
+        // decides per parent and source (`v_group`).
+        let k_root = Complex::new(
+            self.k.re() * radius(0, &domain),
+            self.k.im() * radius(0, &domain),
+        );
+        let tolerance = match self.degrees {
+            Degrees::Tolerance(epsilon) => Some(epsilon),
+            Degrees::PerLevel(_) => None,
+        };
+        let waves: Vec<bool> = match (self.m2l, &self.plane_wave_precision) {
+            (HelmholtzM2l::PlaneWave, PlaneWavePrecision::Rule) => {
+                select(k_root, &degrees, tolerance)
+                    .iter()
+                    .map(Option::is_some)
+                    .collect()
+            }
+            (HelmholtzM2l::PlaneWave, PlaneWavePrecision::PerLevel(named)) => (0..degrees.len())
+                .map(|l| l >= 2 && named.get(l).copied().flatten().is_some())
+                .collect(),
+            (HelmholtzM2l::Auto, _)
+                if self.auto_plane_wave
+                    && std::mem::size_of::<T>() == std::mem::size_of::<f64>() =>
+            {
+                auto_plane_wave_levels(k_root, &degrees, tolerance, plane_wave_min_degree as usize)
+                    .iter()
+                    .map(Option::is_some)
+                    .collect()
+            }
+            _ => vec![false; degrees.len()],
+        };
+        // The plan, once, on the index: with the empty-box rule and the V pairs' near rule
+        // (Helmholtz CH4.0d2) from the routes' points per local leaf. Every plan of the
+        // octree has the index's local leaves, so the routes and the leaf ranges hold for it.
+        let counts = if self.empty_boxes || self.near_v != VNear::Off {
+            Some(
+                LeafCounts::exchange_with_boxes(
+                    &octree,
+                    &index,
+                    &points.source_leaves.counts,
+                    &points.target_leaves.counts,
+                )
+                .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?,
+            )
+        } else {
+            None
+        };
+        let no_leaf_pairs = |_: LeafPair| false;
+        let v_crossover = match self.near_v {
+            VNear::Off => 0.0,
+            VNear::Crossover(n) => n,
+        };
+        let all_keys = octree.all_keys();
+        let v_pairs = |pair: VPair| {
+            if waves[morton::level(pair.target)] {
+                counts
+                    .as_ref()
+                    .is_some_and(|counts| v_group(pair, v_crossover, all_keys, counts))
+            } else {
+                ((pair.sources * pair.targets) as f64) < v_crossover
+            }
+        };
+        let near = match (&counts, self.near_v) {
+            (Some(counts), VNear::Crossover(_)) => {
+                Some(NearRule::new(counts, &no_leaf_pairs).with_v_pairs(&v_pairs))
+            }
+            _ => None,
+        };
+        let rules = PlanRules {
+            near: near.as_ref(),
+            empty_boxes: counts.as_ref().filter(|_| self.empty_boxes),
+        };
+        let plan = Plan::with_rules_on(&octree, index, &rules).map_err(FmmError::Plan)?;
+
         // Auto's term for Batched (Helmholtz CH4.0): each level's V pairs and boxes, each
         // box counted by the rank that computes it, summed over the ranks.
         let shapes = if self.batched_term {
@@ -855,6 +908,15 @@ impl HelmholtzFmmBuilder {
         if let Some(pool) = &pool {
             operator = operator.with_pool(Arc::clone(pool));
         }
+        // The V rule's levels with waves are the operator's (Helmholtz CH4.0d2): on another
+        // level a grouped decision would be needlessly coarse, and on a level with waves a
+        // pair's decision would count its source twice.
+        assert!(
+            self.near_v == VNear::Off
+                || (0..degrees.len())
+                    .all(|l| operator.plane_wave_precision(l).is_some() == waves[l]),
+            "the V rule's levels with waves {waves:?} are the operator's"
+        );
         // The degrees the operator runs at (raised on the levels with waves below 10⁻⁶).
         let degrees: Vec<usize> = (0..degrees.len()).map(|l| operator.degree(l)).collect();
         let calls = if self.pair_calls {
@@ -896,6 +958,43 @@ impl HelmholtzFmmBuilder {
             near_v: self.near_v,
         })
     }
+}
+
+/// The V rule's decision for `pair` on a level with waves (Helmholtz CH4.0d2): the
+/// exponential M2L's merge and shift serves each source s of a parent P's slots to every
+/// child of P whose V list holds it (geometric masks), so a pair cannot convert alone. The
+/// decision is once per (P, s), the same for each child t of P that reads s: they convert
+/// if every such child is a leaf and n_s n_P < `crossover` m_s, with n_P the target points
+/// of P's subtree and m_s the children reading s (n_P / m_s bounds the mean target count
+/// of those children). From keys and counts by key, so every rank decides as one rank.
+fn v_group(
+    pair: VPair,
+    crossover: f64,
+    keys: &HashMap<MortonKey, KeyType>,
+    counts: &LeafCounts,
+) -> bool {
+    let (Some(parent), (_, s)) = (morton::parent(pair.target), morton::decode(pair.source)) else {
+        return false;
+    };
+    let Some(children) = morton::children(parent) else {
+        return false;
+    };
+    // s's parent is a neighbour of P, so s is in the V list of every child of P it does
+    // not touch.
+    let mut readers = 0usize;
+    for child in children {
+        let (_, c) = morton::decode(child);
+        if (0..3).all(|i| c[i].abs_diff(s[i]) <= 1) {
+            continue;
+        }
+        match keys.get(&child) {
+            Some(KeyType::LocalLeaf | KeyType::GhostLeaf(_)) => readers += 1,
+            _ => return false,
+        }
+    }
+    counts
+        .box_targets(parent)
+        .is_some_and(|targets| ((pair.sources * targets) as f64) < crossover * readers as f64)
 }
 
 /// The unit cube, for the tolerance's own check.
