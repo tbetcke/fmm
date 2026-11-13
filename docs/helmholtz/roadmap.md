@@ -58,9 +58,9 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
 3. CH4.0c The degree rule beyond its measured range
-4. CH4.0d The Helmholtz leaf size (added on 2026-11-12, the user: "After CH4.0c
-   (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and CH4.5's timings
-   run on)
+4. CH4.0d1, CH4.0d2, CH4.0d3 The Helmholtz leaf size (added on 2026-11-12, the user: "After
+   CH4.0c (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and CH4.5's
+   timings run on; split on 2026-11-13): the empty boxes, the V pairs of few points, the sweep
 5. CH4.0e The comparison under the default, and H4's expected gain (review A1 and B2; its
    sign-off is H4's go-ahead and order)
 6. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
@@ -71,7 +71,7 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
 9. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
-CH4.0g (after CH4.0d, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
+CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
 after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
 CHA.6 recommended before CH7.5d).
@@ -501,68 +501,67 @@ task's full line is in its record or report and its progress entry
   Found and fixed: the builder sized the waves buffer before its bound (218 GB on W3 at
   kD = 500). Proposal §3.5 amended with the check at x = 216 (#214's question 1, the user,
   2026-11-13: "Sign off as recommended"). *Needs:* CH3.6.
-- [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
-  "Can you add leaf size tuning to the roadmap?"). Also (CH4.0c, report §3.2): on the
-  under-resolved W3 (N = 10⁶) at kD = 500 the leaf rule fills level 7 and the complete octree
-  gives 2.06 million leaves, 61 % empty and 0.62 million of one point; level 7's M2L runs every
-  V pair of the full level, empty boxes included (the plan's lists come from the keys alone),
-  and takes 1,056 s of the 1,232 s evaluation under Rotation at 10⁻⁸ (247 of 340 s under the
-  default). Both parts belong here: the leaves of about one point, and the M2L of empty boxes
-  (about 38 % of level 7's pairs have a source holding a point, 14 % a source and a target);
-  the design for the latter is the last two items below. `HelmholtzFmmBuilder` refines to a fixed
-  `DEFAULT_MAX_POINTS_PER_LEAF` = 64 points per leaf. That is Laplace's base value without
-  Phase 6 T11's per-p rule (`default_max_points_per_leaf`: 128 from p = 12 on the host).
-  The leaf rule of §3.7 (c_leaf = 1 wavelength, D11) only refines further. FMM3D's
-  `hfmm3d` allows 40–700 points per leaf in its default build and 300–1000 in `fastker`
-  (`hndiv.f`, `hndiv_fast.f`, v2.1.0): fewer, larger leaves on its vectorised P2P. At 10⁻⁸,
-  after H6, `fastker` is still 1.2–3.9× faster than our default on CH3.6's cases (estimated from
-  CH3.6, CH6.1h and job 633000). Below kD ≈ 100
-  much of that is likely the shallower trees: our P2P is already vectorised (CH3.4b), and the
-  trees are not. Not measured.
-  - The FMM's build plus evaluation against the points per leaf (32 to 1,024), under the
-    default M2L (D8), with c_leaf kept as the width cap.
-  - Cases: CH3.6's matrix at 10⁻³, 10⁻⁶ and 10⁻⁸ (W1, W3 and the four W4 distributions),
-    and W1 at kD = 500 and W3 at kD = 100.
-  - The leaf size's effect on the degrees and the near field's share recorded, with the
-    leaf rule's forced levels named where c_leaf binds before the points do.
-  - Added on 2026-11-12 (review A2; question 2 of #209, the user, 2026-11-12, on #209: "I agree"):
-    c_leaf swept as well, from 1 to 2, on the cases where it binds. D11's c_leaf = 1 stays
-    the default until this task's sign-off says otherwise. On W1 at kD = 500 every
-    leaf is forced to level 7 at about 27 points, so the sweep of the points alone cannot
-    change that tree. The errors still within ε and CH3.4b's contract range checked at
-    each c_leaf.
-  - Added on 2026-11-13 at CH4.0c (the user, on #214: "Yes. Please.", to the design that
-    follows): empty boxes left out of the lists, by an opt-in rule of `nd-fmm-plan` like
-    `Plan::with_near_rule`, so `Plan::new` and Laplace stay as they are. A box whose subtree
-    holds no target point loses its V and X rows and the L2L into it; one holding no source
-    point leaves every V and W row and its parent's M2M. The target side is local. For the
-    source side each owner gives a flag per box, interior boxes included (its leaf counts
-    summed up its tree), fetched with the near rule's counts (`LeafCounts::exchange`
-    extended: one exchange, not two). `Global` boxes are never left out: they have no single
-    owner, lie on coarse levels, and the reduction and the replicated top stay unchanged.
-    The multipole exchange follows the rows (each rank requests what its rows name), so empty
-    boxes' multipoles are not sent. Only exact zeros go: the output is the rule off's bit for
-    bit (−0 and +0 equal), on P ranks the one-rank FMM's, and the traffic counters show the
-    multipoles no longer sent. It changes `nd-fmm-plan`'s interface: the plan stops and asks
-    first (`/next-task` step 3).
-  - Then V pairs between leaves of few points turned into near pairs by the near rule's
-    mechanism (n_s n_t below a crossover of the cost model; a Rotation pair at p = 24 costs
-    about 110 µs of thread time on Kathleen, CH4.0c report §3.2): decided on the target's rank
-    from the owners' counts; a converted ghost leaf named in the leaf numbering, so the source
-    exchange delivers its points (a halo of up to three leaf boxes, not one); the near rows in
-    (level, key) order. The points sent and the multipoles no longer sent counted; the errors
-    within 1.1× the rule off's (the near rule's bound); the one-rank FMM of the same rule bit
-    for bit; rank-count invariance with the rule on. The empty boxes first, this second; the
-    task is likely to be split into lettered sub-tasks when it starts.
-  *Done when:* a default leaf size by ε (or p), the machine class and the multipole planes,
-  proposed for sign-off with its gain per case, as T11 did for Laplace. Inputs that do not
-  depend on the data (constraint 9). The errors within ε, at most CH3.4b's contract range
+- CH4.0d The Helmholtz leaf size. Added on 2026-11-12 after the H6 gate (the user: "Can you add
+  leaf size tuning to the roadmap?"). Also (CH4.0c, report §3.2): on the under-resolved W3
+  (N = 10⁶) at kD = 500 the leaf rule fills level 7 and the complete octree gives 2.06 million
+  leaves, 61 % empty and 0.62 million of one point; level 7's M2L runs every V pair of the full
+  level, empty boxes included (the plan's lists come from the keys alone), and takes 1,056 s of
+  the 1,232 s evaluation under Rotation at 10⁻⁸ (247 of 340 s under the default); about 38 % of
+  level 7's pairs have a source holding a point, 14 % a source and a target.
+  `HelmholtzFmmBuilder` refines to a fixed `DEFAULT_MAX_POINTS_PER_LEAF` = 64 points per leaf,
+  Laplace's base value without Phase 6 T11's per-p rule (`default_max_points_per_leaf`: 128
+  from p = 12 on the host); the leaf rule of §3.7 (c_leaf = 1 wavelength, D11) only refines
+  further. FMM3D's `hfmm3d` allows 40–700 points per leaf in its default build and 300–1000 in
+  `fastker` (`hndiv.f`, `hndiv_fast.f`, v2.1.0). At 10⁻⁸, after H6, `fastker` is still 1.2–3.9×
+  faster than our default on CH3.6's cases (estimated from CH3.6, CH6.1h and job 633000); below
+  kD ≈ 100 much of that is likely the shallower trees (our P2P is vectorised, CH3.4b). Not
+  measured. Split on 2026-11-13 into CH4.0d1–d3 (the user: "d1/d2/d3 (Recommended)"): the
+  empty boxes first, then the V pairs of few points, then the sweep on the trees they leave.
+- [ ] **CH4.0d1 Empty boxes left out of the lists.** The design of 2026-11-13 (the user, on
+  #214: "Yes. Please."; plan `docs/helmholtz/tasks/CH4.0d1.md`): an opt-in rule of
+  `nd-fmm-plan`, so `Plan::new` and Laplace stay as they are. A box whose subtree holds no
+  target point loses its V, X and W rows and the L2L into it (W added 2026-11-13, the user:
+  "Also drop W (Recommended)"); one holding no source point leaves every V and W row and its
+  parent's M2M. The target side is local. For the source side each owner gives a count per box,
+  interior boxes included (its leaf counts summed up its tree), fetched with the near rule's
+  counts in one exchange. Top-tree keys (`Global` boxes and their ghosts) are never left out:
+  they have no single owner of their subtree, lie on coarse levels, and the reduction and the
+  replicated top stay unchanged. The multipole exchange follows the rows, so empty boxes'
+  multipoles are not sent. The interface (the user, 2026-11-13: "Approve (Recommended)"):
+  `PlanRules { near, empty_boxes }` with `Plan::with_rules`, `LeafCounts` with box counts and
+  `exchange_with_boxes` (`LeafCounts::exchange` unchanged), `Plan::empty_boxes`. *Done when:*
+  only exact zeros go: the output the rule off's (−0 and +0 equal), on P ranks the one-rank
+  FMM's bit for bit, the traffic counters showing the multipoles no longer sent; the rule on
+  under the Helmholtz builder with its gain per case (*Sign-off*: the default); Laplace bit for
+  bit, with `plan_build_cost` on Kathleen before and after and no D9 evaluation runs (the user,
+  2026-11-13: "Tests + build time (Recommended)"). *Needs:* CH6.2h, CH3.4c. *Machines:* Kathleen.
+- [ ] **CH4.0d2 V pairs between leaves of few points as near pairs.** By the near rule's
+  mechanism (n_s n_t below a crossover of the cost model; a Rotation pair at p = 24 costs about
+  110 µs of thread time on Kathleen, CH4.0c report §3.2): decided on the target's rank from the
+  owners' counts; a converted ghost leaf named in the leaf numbering, so the source exchange
+  delivers its points (a halo of up to three leaf boxes, not one); the near rows in (level, key)
+  order. *Done when:* the points sent and the multipoles no longer sent counted; the errors
+  within 1.1× the rule off's (the near rule's bound); the one-rank FMM of the same rule bit for
+  bit; rank-count invariance with the rule on; proposed or not on its measured gain
+  (*Sign-off*). *Needs:* CH4.0d1. *Machines:* Kathleen, locust (the M6 with the user's
+  go-ahead).
+- [ ] **CH4.0d3 The leaf size and c_leaf.** The FMM's build plus evaluation against the points
+  per leaf (32 to 1,024), under the default M2L (D8) with CH4.0d1 (and CH4.0d2 if adopted) on,
+  c_leaf kept as the width cap. Cases: CH3.6's matrix at 10⁻³, 10⁻⁶ and 10⁻⁸ (W1, W3 and the four
+  W4 distributions), and W1 at kD = 500 and W3 at kD = 100. The leaf size's effect on the
+  degrees and the near field's share recorded, with the leaf rule's forced levels named where
+  c_leaf binds before the points do. c_leaf swept as well, from 1 to 2, on the cases where it
+  binds (review A2; question 2 of #209, the user, 2026-11-12, on #209: "I agree"); D11's
+  c_leaf = 1 stays the default until this task's sign-off says otherwise. On W1 at kD = 500
+  every leaf is forced to level 7 at about 27 points, so the sweep of the points alone cannot
+  change that tree. The errors still within ε and CH3.4b's contract range checked at each
+  c_leaf. *Done when:* a default leaf size by ε (or p), the machine class and the multipole
+  planes, proposed for sign-off with its gain per case, as T11 did for Laplace. Inputs that do
+  not depend on the data (constraint 9). The errors within ε, at most CH3.4b's contract range
   (Re(k) r ≤ 22 c_leaf, unchanged). Deterministic and rank-invariant at each leaf size.
-  Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64
-  stays best, and why `fastker`'s leaves do not carry over. The empty-box rule on under the
-  Helmholtz builder with its gain per case, and the V conversion proposed or not on its
-  measured gain (*Sign-off*). *Needs:* CH6.2h, CH3.4c.
-  *Machines:* Kathleen, locust (the M6 with the user's go-ahead). *Sign-off:* the default.
+  Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64 stays
+  best, and why `fastker`'s leaves do not carry over. *Needs:* CH4.0d2. *Machines:* Kathleen,
+  locust (the M6 with the user's go-ahead). *Sign-off:* the default.
 - [ ] **CH4.0e The comparison under the default, and H4's expected gain.** Added on
   2026-11-12 by the review's triage (`docs/reviews/2026-11-12-H6.md`, A1, B2, B5; question 1
   of #209, the user, 2026-11-12, on #209: "I agree"). CH3.6 is
@@ -570,7 +569,7 @@ task's full line is in its record or report and its progress entry
   and the raised degree; the figures since are estimates across rank × thread splits. And
   the levels H4 can change are 35–40 % of W1's evaluation at kD = 500 and 10⁻⁶, about 20 %
   at 10⁻⁷ and 10⁻⁸, and about nothing at kD ≤ 100.
-  - CH3.6's matrix again under the defaults as they stand after CH4.0d, beside `hfmm3d`
+  - CH3.6's matrix again under the defaults as they stand after CH4.0d3, beside `hfmm3d`
     (`default` and `fastker`), each code on the whole node at its best split, repeated; the
     build and the evaluation apart for ours, the whole call beside FMM3D's, at the same
     requested ε and at matched accuracy.
@@ -579,7 +578,7 @@ task's full line is in its record or report and its progress entry
   - Kathleen against locust per level on W1 at kD = 500 (3.3–5.4× at a core ratio of 1.8),
     explained in a sentence or measured.
   *Done when:* the tables on Kathleen and locust; the estimate; the order of H4's tasks
-  confirmed or changed. *Needs:* CH4.0d. *Machines:* Kathleen, locust. *Sign-off:* H4's
+  confirmed or changed. *Needs:* CH4.0d3. *Machines:* Kathleen, locust. *Sign-off:* H4's
   go-ahead and order.
 - [ ] **CH4.0f Batched's split across the matrix's rows.** Added on 2026-11-12 at CH4.0
   (report §4, §8): with CH4.0's split by blocks, Batched on levels of 64–5,000 boxes at 40–72
@@ -598,7 +597,7 @@ task's full line is in its record or report and its progress entry
   empty sibling of a split box or a split of the 2:1 balance: probably rare on the uniform
   cube, probably common on the Plummer sphere, the Gaussian clusters and points on a surface
   (not counted). First count, without timing (the M6 needs no quiet gate): per tree and level
-  the leaves and boxes without source or target points and the V, W and M2M pairs CH4.0d's
+  the leaves and boxes without source or target points and the V, W and M2M pairs CH4.0d1's
   rule leaves out, on the cube, the Plummer sphere, the clusters and a sphere's surface at
   Phase 6 T11's default leaf sizes. Then, where the pairs drop noticeably, the rule under
   Laplace's `FmmBuilder` timed against the rule off. The V conversion is not for Laplace: its
@@ -607,7 +606,7 @@ task's full line is in its record or report and its progress entry
   (the output bit for bit, −0 and +0 equal, on host, device and P ranks; D9's benchmarks within
   noise or better on the M6, locust and Kathleen; the work cut's counts, the device tuner's
   pair buckets and Batched's columns per read checked), or the report shows it does not pay.
-  *Needs:* CH4.0d (the rule). *Machines:* Kathleen, locust (the M6 with the user's go-ahead
+  *Needs:* CH4.0d1 (the rule). *Machines:* Kathleen, locust (the M6 with the user's go-ahead
   for timings). *Sign-off:* Laplace's default.
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
