@@ -67,6 +67,15 @@
 //!   the run loops); the column "M2L" of a row with the rule off ends with `/full`. A last
 //!   table has a row per run with what the rule left out (`Row::left_out`, summed over the
 //!   ranks) and the multipoles the ranks read from other ranks (`Row::remote_multipoles`).
+//! - `--near-v off|n|inf,…` (Helmholtz CH4.0d2, `HelmholtzFmmBuilder::near_v`): the V pairs
+//!   between leaves with n_s n_t below n become near pairs (`off`, the default, the
+//!   library's; `inf` every V pair between leaves), every run at each in turn, inside
+//!   `--empty-boxes`' loop; the column "M2L" of a row with the rule on ends with `/v<n>`. A
+//!   last table "Near pairs" has a row per run with the V pairs offered and converted
+//!   (`Row::v_near`), the V pairs that ran, the multipoles read from other ranks, the source
+//!   points sent and received (`Row::source_points`), the P2P's seconds and near
+//!   interactions with its thread-nanoseconds per interaction, the M2L's seconds and the
+//!   evaluation; with `--levels` also a row per level with P2P.
 //! - `--term on|off,…` (Helmholtz CH4.0, `HelmholtzFmmBuilder::batched_term`): whether Auto
 //!   reads the levels' V lists (`on`, the default, the library's), each Auto run (`auto`,
 //!   `auto:<d>`, `sweep`, `auto-pw`) at each in turn; the column "M2L" of a row with the term
@@ -123,7 +132,7 @@ use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, Wavenumber, s7_degree,
+    PlaneWaveSplit, VNear, Wavenumber, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -159,6 +168,7 @@ struct Arguments {
     terms: Vec<bool>,
     blocks: Vec<Option<usize>>,
     empty_boxes: Vec<bool>,
+    near_v: Vec<VNear>,
     s7: bool,
     levels: bool,
     evaluations: usize,
@@ -255,6 +265,7 @@ fn arguments() -> Arguments {
         terms: vec![true],
         blocks: vec![None],
         empty_boxes: vec![true],
+        near_v: vec![VNear::Off],
         s7: false,
         levels: false,
         evaluations: 1,
@@ -416,6 +427,20 @@ fn arguments() -> Arguments {
                         .collect::<Option<Vec<_>>>()
                         .map(|e| parsed.empty_boxes = e)
                         .is_some(),
+                    "--near-v" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "off" => Some(VNear::Off),
+                            "inf" => Some(VNear::Crossover(f64::INFINITY)),
+                            n => n
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|n| *n >= 0.0)
+                                .map(VNear::Crossover),
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|n| parsed.near_v = n)
+                        .is_some(),
                     "--block" => value
                         .split(',')
                         .map(|v| match v {
@@ -532,9 +557,14 @@ fn m2l_string(row: &Row) -> String {
     }
 }
 
-/// For a row with the empty-box rule off `/full` (Helmholtz CH4.0d1); else empty.
-fn empty_suffix(row: &Row) -> &'static str {
-    if row.empty_boxes { "" } else { "/full" }
+/// For a row with the empty-box rule off `/full` (Helmholtz CH4.0d1), and with V pairs
+/// as near pairs `/v<n>` (Helmholtz CH4.0d2); else empty.
+fn empty_suffix(row: &Row) -> String {
+    let full = if row.empty_boxes { "" } else { "/full" };
+    match row.near_v {
+        VNear::Off => full.to_string(),
+        near => format!("{full}/v{near}"),
+    }
 }
 
 /// For an Auto row without the term `/no-term`, and for a Batched or Auto row at a named
@@ -682,6 +712,7 @@ fn main() {
     }
     let mut levels: Vec<String> = Vec::new();
     let mut left_out: Vec<String> = Vec::new();
+    let mut near: Vec<String> = Vec::new();
     for &kd in &arguments.kds {
         let workload = workload(&arguments.workload, kd).expect("checked");
         for degrees in &arguments.degrees {
@@ -863,12 +894,66 @@ fn main() {
                     row.remote_multipoles,
                 )
             };
+            // The rows of the table "Near pairs" (Helmholtz CH4.0d2): the run's, and with
+            // `--levels` one per level with P2P.
+            let near_lines = |row: &Row| -> Vec<String> {
+                let head = format!(
+                    "| {} | {} | {kd_string} | {degrees_name} | {}{} | {} × {}",
+                    workload.name(),
+                    problem.len(),
+                    setting_name(row),
+                    empty_suffix(row),
+                    row.ranks,
+                    row.threads,
+                );
+                // Thread-nanoseconds per interaction: the slowest rank's seconds times its
+                // threads over the interactions of every rank (exact on one rank).
+                let per = |seconds: f64, interactions: u64| match interactions {
+                    0 => "–".to_string(),
+                    n => format!("{:.3}", seconds * row.threads as f64 * 1e9 / n as f64),
+                };
+                let p2p: f64 = row.p2p_seconds.iter().sum();
+                let interactions: u64 = row.near_interactions.iter().sum();
+                let mut lines = vec![format!(
+                    "{head} | Σ | {} | {} | {} | {} | {} | {} | {p2p:.4} | {interactions} | {} \
+                     | {:.4} | {:.4} |",
+                    row.v_near[0],
+                    row.v_near[1],
+                    row.v_pairs.iter().sum::<usize>(),
+                    row.remote_multipoles,
+                    row.source_points[0],
+                    row.source_points[1],
+                    per(p2p, interactions),
+                    row.m2l_seconds.iter().sum::<f64>(),
+                    row.evaluate,
+                )];
+                if arguments.levels {
+                    for l in (0..row.levels).filter(|&l| row.near_interactions[l] > 0) {
+                        lines.push(format!(
+                            "{head} | {l} | – | – | {} | – | – | – | {:.4} | {} | {} | {:.4} | – |",
+                            row.v_pairs[l],
+                            row.p2p_seconds[l],
+                            row.near_interactions[l],
+                            per(row.p2p_seconds[l], row.near_interactions[l]),
+                            row.m2l_seconds[l],
+                        ));
+                    }
+                }
+                lines
+            };
             // The errors of the case's Rotation rows by P2P kernel and threads.
             let mut rotation: Vec<((P2pChoice, usize), [f64; 2])> = Vec::new();
             let k = complex_k(&case);
-            // `--empty-boxes`, the outermost of the run loops.
-            for &empty_boxes in &arguments.empty_boxes {
+            // `--empty-boxes`, the outermost of the run loops, then `--near-v`.
+            let rules = arguments.empty_boxes.iter().flat_map(|&empty_boxes| {
+                arguments
+                    .near_v
+                    .iter()
+                    .map(move |&near_v| (empty_boxes, near_v))
+            });
+            for (empty_boxes, near_v) in rules {
                 case.empty_boxes = empty_boxes;
+                case.near_v = near_v;
                 for &m2l_run in &arguments.m2l {
                     // `--term` for the Auto entries, `--block` for those and Batched's.
                     let (auto, batched) = match m2l_run {
@@ -1006,6 +1091,7 @@ fn main() {
                                                     levels.extend(per_level(&row));
                                                 }
                                                 left_out.push(left_out_line(&row));
+                                                near.extend(near_lines(&row));
                                             }
                                             if is_rotation && reference.is_none() {
                                                 rotation.push(((p2p, threads), all));
@@ -1107,6 +1193,21 @@ fn main() {
              | ---: | ---: | ---: | ---: |"
         );
         for line in &left_out {
+            println!("{line}");
+        }
+        println!();
+        println!("## Near pairs");
+        println!();
+        println!(
+            "| Workload | N | kD | degrees | M2L | ranks × threads | level | V pairs offered \
+             | converted | V pairs | remote multipoles | source points sent | received | P2P s \
+             | near interactions | ns per interaction | M2L s | evaluate s |"
+        );
+        println!(
+            "| --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: \
+             | ---: | ---: | ---: | ---: | ---: |"
+        );
+        for line in &near {
             println!("{line}");
         }
     }

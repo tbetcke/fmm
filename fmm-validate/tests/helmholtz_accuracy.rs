@@ -27,7 +27,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzM2l, LevelShape, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind, auto_m2l_mul_add, s7_degree,
+    PlaneWaveRaise, PlaneWaveSplit, VNear, Wavenumber, WavenumberKind, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -649,6 +649,60 @@ fn helmholtz_accuracy_harness() {
     check_densities(&world);
     check_box_study(&world);
     check_empty_boxes(&world);
+    check_near_v(&world);
+}
+
+/// The V pairs as near pairs (Helmholtz CH4.0d2) on W1 at kD = 30 under Rotation: off by
+/// default with nothing offered; every V pair between leaves converted at `inf`, fewer V
+/// pairs and more near interactions than off, the errors within 1.1× the rule off's, and
+/// the P2P timed on every level with interactions.
+fn check_near_v(world: &SimpleCommunicator) {
+    let off = Case::new(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
+    assert_eq!(off.near_v, VNear::Off, "the library's default");
+    let on = Case {
+        near_v: VNear::Crossover(f64::INFINITY),
+        ..off.clone()
+    };
+    let problem = Problem::new(&off);
+    let oracle = Oracle::sharded(complex_k(&off), &problem, off.gradients, 2, world);
+    let row_off = run(&off, &problem, &oracle, 1, world).expect("the FMM runs");
+    let row_on = run(&on, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row_off.near_v, VNear::Off);
+    assert_eq!(row_off.v_near, [0, 0]);
+    assert_eq!(row_on.near_v, on.near_v);
+    assert!(
+        row_on.v_near[0] > 0 && row_on.v_near[1] == row_on.v_near[0],
+        "{:?}",
+        row_on.v_near
+    );
+    let pairs = |row: &Row| row.v_pairs.iter().sum::<usize>();
+    assert_eq!(
+        pairs(&row_on) + row_on.v_near[1],
+        pairs(&row_off),
+        "V pairs"
+    );
+    let interactions = |row: &Row| row.near_interactions.iter().sum::<u64>();
+    assert!(interactions(&row_on) > interactions(&row_off));
+    for (on, off) in row_on.errors.iter().zip(&row_off.errors) {
+        assert!(
+            on[0] <= 1.1 * off[0] && on[1] <= 1.1 * off[1],
+            "{on:?}, {off:?}"
+        );
+    }
+    for row in [&row_on, &row_off] {
+        assert_eq!(row.p2p_seconds.len(), row.levels);
+        assert!(
+            (0..row.levels).all(|l| row.near_interactions[l] == 0 || row.p2p_seconds[l] > 0.0),
+            "{:?}",
+            row.p2p_seconds
+        );
+        // Summed over the ranks, every point sent is received.
+        assert_eq!(row.source_points[0], row.source_points[1]);
+    }
+    if world.size() == 1 {
+        assert_eq!(row_on.source_points, [0, 0], "one rank exchanges no point");
+    }
+    assert!(row_on.remote_multipoles <= row_off.remote_multipoles);
 }
 
 /// The empty-box rule (Helmholtz CH4.0d1) on W1 at kD = 30 under Rotation (leaves on

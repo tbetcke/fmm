@@ -53,6 +53,11 @@
 //!   whose subtree holds no target or no source point (on by default, the library's);
 //!   [`Row::left_out`] what it left out and [`Row::remote_multipoles`] the multipoles the
 //!   ranks read from other ranks; [`Row::v_pairs`] counts the pairs that ran.
+//!   [`Case::near_v`] (Helmholtz CH4.0d2) which V pairs between leaves become near pairs
+//!   (off by default, the library's); [`Row::v_near`] the pairs offered and converted,
+//!   [`Row::source_points`] the points the source exchange moves, and per level
+//!   [`Row::p2p_seconds`] and [`Row::near_interactions`], for the P2P's cost per
+//!   interaction.
 
 use std::ops::Range;
 use std::thread;
@@ -64,7 +69,7 @@ use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
+    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -155,6 +160,9 @@ pub struct Case {
     /// (`HelmholtzFmmBuilder::empty_boxes`, Helmholtz CH4.0d1; `true` in [`Case::new`], the
     /// library's default); named always, as `auto_plane_wave`.
     pub empty_boxes: bool,
+    /// Which V pairs between leaves become near pairs (`HelmholtzFmmBuilder::near_v`,
+    /// Helmholtz CH4.0d2; [`VNear::Off`] in [`Case::new`], the library's default).
+    pub near_v: VNear,
 }
 
 impl Case {
@@ -191,6 +199,7 @@ impl Case {
             domain: None,
             max_points_per_leaf: None,
             empty_boxes: true,
+            near_v: VNear::Off,
         }
     }
 }
@@ -651,6 +660,20 @@ pub struct Row {
     /// it does not compute, each once), summed over the ranks: what the reduction, the
     /// replicated top and the multipole exchange deliver (Helmholtz CH4.0d1).
     pub remote_multipoles: usize,
+    /// The V pairs' near rule as built (Helmholtz CH4.0d2).
+    pub near_v: VNear,
+    /// The V pairs between leaves the rule offered and those it converted, summed over the
+    /// ranks (zero offered with the rule off; `NearPairs`' V fields).
+    pub v_near: [usize; 2],
+    /// The source points the source exchange moves per evaluation, [sent, received], summed
+    /// over the ranks (`HelmholtzFmm::source_points_exchanged`; Helmholtz CH4.0d2).
+    pub source_points: [usize; 2],
+    /// Per level, the P2P level calls' seconds in the last evaluation, the slowest rank's
+    /// (`HelmholtzOperator::p2p_times`; Helmholtz CH4.0d2).
+    pub p2p_seconds: Vec<f64>,
+    /// Per level, the near interactions Σ_t n_t Σ_s n_s of its P2P, summed over the ranks
+    /// (`HelmholtzFmm::near_interactions`; Helmholtz CH4.0d2).
+    pub near_interactions: Vec<u64>,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -736,6 +759,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         .auto_plane_wave(case.auto_plane_wave)
         .batched_term(case.batched_term)
         .empty_boxes(case.empty_boxes)
+        .near_v(case.near_v)
         .plane_wave_precision(case.plane_wave.clone());
     if let Some(width) = case.m2l_block_targets {
         builder = builder.m2l_block_targets(width);
@@ -781,9 +805,11 @@ pub fn run_output<C: CommunicatorCollectives>(
     // The M2L times before the last evaluation, so that the row has the last one's.
     let (mut output, mut evaluate, mut first_evaluate) = (None, 0.0, 0.0);
     let mut before: Vec<Duration> = Vec::new();
+    let mut p2p_before: Vec<Duration> = Vec::new();
     let mut passes_before: Vec<PlaneWaveTimes> = Vec::new();
     for evaluation in 0..case.evaluations.max(1) {
         before = fmm.operator().m2l_times().to_vec();
+        p2p_before = fmm.operator().p2p_times().to_vec();
         passes_before = fmm.operator().plane_wave_times().to_vec();
         comm.barrier();
         let start = Instant::now();
@@ -808,6 +834,26 @@ pub fn run_output<C: CommunicatorCollectives>(
         .collect();
     let mut m2l_seconds = vec![0.0f64; nlevels];
     comm.all_reduce_into(&seconds[..], &mut m2l_seconds[..], SystemOperation::max());
+    let seconds: Vec<f64> = fmm
+        .operator()
+        .p2p_times()
+        .iter()
+        .zip(&p2p_before)
+        .map(|(after, before)| (*after - *before).as_secs_f64())
+        .collect();
+    let mut p2p_seconds = vec![0.0f64; nlevels];
+    comm.all_reduce_into(&seconds[..], &mut p2p_seconds[..], SystemOperation::max());
+    let mut near_interactions = vec![0u64; nlevels];
+    comm.all_reduce_into(
+        &fmm.near_interactions()[..],
+        &mut near_interactions[..],
+        SystemOperation::sum(),
+    );
+    let pairs = fmm.plan().near_pairs();
+    let (sent, received) = fmm.source_points_exchanged();
+    let local = [pairs.v_leaf_pairs, pairs.v_converted, sent, received].map(|n| n as u64);
+    let mut v_totals = [0u64; 4];
+    comm.all_reduce_into(&local[..], &mut v_totals[..], SystemOperation::sum());
     let passes: Vec<f64> = fmm
         .operator()
         .plane_wave_times()
@@ -969,6 +1015,11 @@ pub fn run_output<C: CommunicatorCollectives>(
         empty_boxes: fmm.empty_boxes(),
         left_out: core::array::from_fn(|i| totals[i] as usize),
         remote_multipoles: totals[8] as usize,
+        near_v: fmm.near_v(),
+        v_near: [v_totals[0] as usize, v_totals[1] as usize],
+        source_points: [v_totals[2] as usize, v_totals[3] as usize],
+        p2p_seconds,
+        near_interactions,
         errors,
         checksum,
     };

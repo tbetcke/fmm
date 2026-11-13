@@ -1223,6 +1223,28 @@ where
         (sent, exchange.ghost_counts().iter().sum())
     }
 
+    /// The near interactions of each level's P2P on this rank (Helmholtz CH4.0d2): over the
+    /// local leaves of the level, the leaf's target points times the source points of every
+    /// leaf of its near row (itself included), Σ_t n_t Σ_s n_s.
+    pub fn near_interactions(&self) -> Vec<u64> {
+        let plan = self.evaluator.plan();
+        let sources = self.evaluator.source_exchange().leaf_counts();
+        let targets = &self.points.target_leaves.counts;
+        let leaves = plan.index().leaves();
+        (0..plan.nlevels())
+            .map(|level| {
+                let near = plan.level(level).near();
+                let first = leaves.local(level).start;
+                (0..near.nrows())
+                    .map(|r| {
+                        let n_s: usize = near.row(r).iter().map(|&j| sources[j as usize]).sum();
+                        (targets[first + r] * n_s) as u64
+                    })
+                    .sum()
+            })
+            .collect()
+    }
+
     /// The V pairs' near rule as built ([`HelmholtzFmmBuilder::near_v`]); the pairs offered
     /// and converted on this rank are [`plan`](Self::plan)'s `near_pairs`.
     pub fn near_v(&self) -> VNear {

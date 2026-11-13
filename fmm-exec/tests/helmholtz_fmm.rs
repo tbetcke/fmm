@@ -2338,6 +2338,13 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
         assert_eq!(fmm_off.near_v(), VNear::Off, "the rule is off by default");
         let (phi_off, grad_off) = errors(scenario, &inputs, &output_off, 0, comm);
         let received_off = fmm_off.source_points_exchanged().1;
+        let interactions = |fmm: &HelmholtzFmm<'_, f64>| {
+            let local: u64 = fmm.near_interactions().iter().sum();
+            let mut total = 0u64;
+            comm.all_reduce_into(&local, &mut total, SystemOperation::sum());
+            total
+        };
+        let interactions_off = interactions(&fmm_off);
         drop(fmm_off);
 
         let name = &format!("{}, V pairs at 0, {setting}", scenario.name);
@@ -2377,6 +2384,21 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
                 phi <= NEAR_ERROR_BOUND * phi_off && grad <= NEAR_ERROR_BOUND * grad_off,
                 "{name}: φ {phi:.3e}, ∇φ {grad:.3e} against the rule off's {phi_off:.3e}, \
                  {grad_off:.3e}"
+            );
+            // The P2P level calls timed per level (CH4.0d2): an entry on every level with
+            // near rows.
+            let times = fmm.operator().p2p_times();
+            let ok = times.len() == fmm.nlevels()
+                && (0..fmm.nlevels()).all(|level| {
+                    fmm.plan().level(level).near().nrows() == 0 || times[level] > Duration::ZERO
+                });
+            assert!(everywhere(ok, comm), "{name}: P2P times {times:?}");
+            // The near interactions grow by n_s n_t per converted pair (summed over the
+            // ranks, so the verdict is the same on every rank).
+            let more = interactions(&fmm);
+            assert!(
+                more >= interactions_off,
+                "{name}: {more} near interactions, the rule off {interactions_off}"
             );
             let received = fmm.source_points_exchanged().1;
             assert!(
