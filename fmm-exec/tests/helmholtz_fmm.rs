@@ -1860,7 +1860,10 @@ fn check_plane_wave_buffer(
     let op = fmm.operator();
     let floor_counts = op.plane_wave_counts();
     let floor_buffer = op.plane_wave_buffer_bytes();
+    // The build never held more than the bound's buffer, not even before the bound was set
+    // (Helmholtz CH4.0c: the whole level's, 218 GB on W3 at kD = 500).
     let ok = op.plane_wave_buffer() == Some(0)
+        && op.plane_wave_buffer_peak_bytes() == floor_buffer
         && floor_buffer <= whole_buffer
         && op.plane_wave_bytes() <= bytes
         && floor_counts.level_calls == whole_counts.level_calls
@@ -1871,7 +1874,9 @@ fn check_plane_wave_buffer(
             || floor_counts.chunks > whole_counts.chunks);
     assert!(
         everywhere(ok, comm),
-        "{name}: the floor's buffer and counts ({floor_counts:?} against {whole_counts:?})"
+        "{name}: the floor's buffer and counts ({floor_counts:?} against {whole_counts:?}; \
+         the buffer {floor_buffer} bytes, its peak {})",
+        op.plane_wave_buffer_peak_bytes()
     );
     let floor_chunked = floor_counts.chunks > whole_counts.chunks;
     drop(fmm);

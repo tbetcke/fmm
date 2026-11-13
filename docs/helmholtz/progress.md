@@ -2934,3 +2934,41 @@ request, using this template:
 - Follow-ups: CH4.0c (roadmap: its runs include the constant density, which shows the
   high-frequency branch short below 10⁻⁸); CH4.3 and CH4.4 (roadmap: the smooth densities in
   their verification; CH4.4 the 100 ε bound).
+
+## 2026-11-13: CH4.0c The degree rule beyond its measured range
+- Done:
+  - W1 at kD = 1000 (N = 7,957,748; levels 2 and 3 at x = 216.5 and 108.3, beyond the rule's
+    measured x ≤ 65) against the direct sum on Kathleen (one rank × 40 threads): within ε in
+    §9.1's ℓ2 at 10⁻⁸, 10⁻⁷, 10⁻⁶ and 10⁻³, under Rotation and the default, for the random
+    charges, the plane wave's trace and the constant density; at most 0.83 ε (∇φ over the
+    samples and one target per level-8 box, 10⁻⁸, Rotation). No correction, no S7 degrees.
+  - The levels at 10⁻⁸ (each raised to the rule at 10⁻¹¹): levels 2–4 0.6 %, 1.0 % and 0.6 % of Σ|e|² (φ),
+    level 6 (x = 13.5, p = 27, where the high-frequency branch first exceeds the plateau) 85 %.
+  - §9 item 8: the under-resolved W3 (N = 10⁶) within ε at kD = 200 (at most 0.61 ε) and 500
+    (0.72 ε), the three densities, 10⁻⁸, 10⁻⁶, 10⁻³, both M2Ls.
+  - A defect, fixed: `HelmholtzFmmBuilder` sized the exponential M2L's waves buffer for the
+    plan's boxes before setting its bound, so the buffer held a whole level until then (218 GB
+    on W3 at kD = 500, refused by the node; job 633324). The bound is set first;
+    `HelmholtzOperator::plane_wave_buffer_peak_bytes` reports the most the buffer held.
+  - The rule's measured range (10⁻⁸ ≤ ε ≤ 10⁻³, x ≤ 65; checked at x = 108 and 216) stated in
+    `helmholtz::degree`'s docs and fmm-exec/CLAUDE.md; CH3.3's 10⁻¹⁸ to 10⁻¹ named as a
+    comparison of formulas (review M6, M7).
+  - `helmholtz_boxes` prints each run's degrees, errors and times as it finishes;
+    `tools/helmholtz/ch4-0c-runs.sh`. Report `fmm-validate/results/helmholtz-ch4-0c.md`; raw
+    outputs in `~/projects/fmm-archive/kathleen/logs/ch4-0c/` (jobs 633320, 633321, 633323,
+    633324, 633429–633431).
+- Tests: `check_plane_wave_buffer` (`tests/helmholtz_fmm.rs`) asserts the floor build's peak
+  buffer is the bound's buffer (red before the fix, green after). The acceptance is the
+  machine runs against the direct sum.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default
+  and workspace tests at opt-level 1, the MPI list at 2 and 4 ranks (`helmholtz_fmm` 43 s and
+  75 s). The opt-level 0 debug time was not measured (one assertion added to an existing check).
+  Nothing pending.
+- Decisions: question 1 of the PR, proposal §3.5's check at x = 216 (pending).
+- Laplace: not touched (the Helmholtz builder and operator, nd-fmm-validate's example, docs).
+- Follow-ups: CH4.0d (roadmap: the under-resolved W3's leaves of about one point and the M2L
+  of its empty boxes, 61 % of 2.06 million leaves, every V pair run; level 7's M2L 86 % of the
+  evaluation at kD = 500; the design of 2026-11-13: empty boxes left out by an opt-in plan rule,
+  then V pairs of few points as near pairs); CH4.0g (roadmap: Laplace's empty boxes counted,
+  the rule adopted only if it pays); CH4.3 (the high-frequency recalibration; the tightest level at
+  kD = 1000 is where the branch leaves the plateau).

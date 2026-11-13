@@ -255,16 +255,46 @@ fn measure<C: Communicator>(
     threads: usize,
     world: &C,
 ) -> Measured {
+    let start = Instant::now();
     let run = run_output(case, problem, oracle, threads, world).unwrap_or_else(|e| {
         eprintln!("helmholtz_boxes: {label}: {e}");
         std::process::exit(1);
     });
+    let fmm = start.elapsed().as_secs_f64();
     let errors = Errors::of(&run.output, 0, reference);
     let own = Grid {
         domain: run.domain,
         level: run.row.levels - 1,
     };
     let boxes = errors.boxes(reference, &problem.points, grid.unwrap_or(&own));
+    // The run as it finishes (the tables print after the last run): §9.1's errors and those
+    // at the reference's targets, the build, the evaluation and its M2L by level, the rest
+    // of `run_output` (the samples' errors) and the errors at the reference's targets.
+    let row = &run.row;
+    let m2l: Vec<String> = row
+        .m2l_seconds
+        .iter()
+        .enumerate()
+        .filter(|&(_, &s)| s > 0.0)
+        .map(|(l, s)| format!("{l}: {s:.1}"))
+        .collect();
+    let all = errors.l2(reference);
+    eprintln!(
+        "helmholtz_boxes: {label}: p {}; §9.1 φ, ∇φ {:.2e}, {:.2e}, all {:.2e}, {:.2e}; \
+         build {:.1} s, evaluate {:.1} s (M2L by level {}), the rest of the run {:.1} s, the \
+         errors at {} targets {:.1} s",
+        degrees_string(&row.degrees),
+        row.errors[0][0],
+        row.errors[0][1],
+        all[0],
+        all[1],
+        row.build,
+        row.evaluate,
+        m2l.join(", "),
+        fmm - row.build - row.evaluate,
+        reference.targets.len(),
+        start.elapsed().as_secs_f64() - fmm,
+    );
     Measured {
         label,
         eps,
@@ -437,6 +467,7 @@ fn main() {
     case.charges = args.charges;
     case.density = args.density;
     case.m2l = m2l_of(default_m2l);
+    let setup = Instant::now();
     let problem = Problem::new(&case);
     let n = problem.len();
     if let Some(margin) = args.margin {
@@ -459,6 +490,10 @@ fn main() {
     });
     let k = complex_k(&case);
     let oracle = Oracle::sharded(k, &problem, true, args.threads, &world);
+    eprintln!(
+        "helmholtz_boxes: the problem and the samples' oracle, {:.1} s",
+        setup.elapsed().as_secs_f64()
+    );
 
     let m2l_name = |default: bool| if default { "default" } else { "Rotation" };
     println!(

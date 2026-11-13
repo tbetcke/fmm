@@ -372,7 +372,11 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `tests/helmholtz/plane_wave.rs` checks the buffer's sizes and `plane_wave_bytes` at every
   bound. The bound is not a hard cap: the floor may exceed it, and the positions (4 bytes
   per box of the largest level with waves) lie outside it, both counted in
-  `plane_wave_bytes`.
+  `plane_wave_bytes`. Since Helmholtz CH4.0c the builder sets the bound before it sizes the
+  buffer for the plan's boxes (sized first, it held every box of the largest level with waves
+  until the bound came: 218 GB on W3 at N = 10⁶ and kD = 500, refused by a Kathleen node);
+  `plane_wave_buffer_peak_bytes` reports the most it held, and the floor check asserts that is
+  the bound's buffer.
   Since Helmholtz CH6.2b (docs/helmholtz/tasks/CH6.2b.md) every M2L level call of the
   Helmholtz operator, under every setting, is timed on the calling thread's clock and
   summed per level (`HelmholtzOperator::m2l_times`, reset with `plane_wave_counts` when the
@@ -512,7 +516,10 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),
   x = Re(k) a, calibrated in the full FMM (every measured degree at ε/2 covered, 10⁻⁸ ≤ ε
-  ≤ 10⁻³, x ≤ 65, checked at x = 108; an extrapolation beyond, below S7's p* there);
+  ≤ 10⁻³, x ≤ 65, checked at x = 108 by CH3.3 and at x = 216 and 108 by Helmholtz CH4.0c,
+  W1 at kD = 1000 within ε in ℓ2 (fmm-validate/results/helmholtz-ch4-0c.md); an
+  extrapolation beyond, below S7's p* there; CH3.3's 10⁻¹⁸ to 10⁻¹ compared the two formulas
+  and is not a measured range, review 2026-11-12 M6);
   S7's closed form, the default before, is `s7_degree`, the per-pair bound. Tests of single pairs or chains (`tests/helmholtz/operator.rs`) take `s7_degree`;
   tests of the whole FMM the default. `DegreeRule`'s ceilings forgive 10⁻⁹. A change of
   the constants is a recalibration: rerun `nd-fmm-validate`'s `helmholtz_calibrate` and

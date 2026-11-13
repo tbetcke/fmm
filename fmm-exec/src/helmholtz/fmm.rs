@@ -732,10 +732,12 @@ impl HelmholtzFmmBuilder {
         .with_level_shapes(shapes)
         .with_m2l_block_targets(self.m2l_block_targets)
         .with_m2l(self.m2l, dense_budget)
-        .with_plane_wave_boxes(&level_boxes)
+        // The bound first: sized for the boxes without it, the buffer would hold every box of
+        // the largest level until the bound came (218 GB on W3 at kD = 500; Helmholtz CH4.0c).
         .with_plane_wave_buffer(
             (self.plane_wave_budget != usize::MAX).then(|| self.plane_wave_budget / ranks_per_node),
-        );
+        )
+        .with_plane_wave_boxes(&level_boxes);
         if let Some(mul_add) = self.m2l_mul_add {
             operator = operator.with_m2l_mul_add(mul_add);
         }
