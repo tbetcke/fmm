@@ -95,6 +95,12 @@ rule, and Laplace's `Fmm` unchanged.
   empty_boxes }` on `Plan::with_rules_on`), from the counts the builder already exchanges.
 - Off by default in this PR's code until the sign-off; the PR proposes `CostModel` as the
   default or not, on the gain measured.
+- As built (after open question 3 and the first rounds of runs): on a level whose M2L is the
+  exponential one the rule decides per parent P and source s, not per pair (`v_group`:
+  every child of P reading s converts if all are leaves and n_s n_P < n m_s), the builder
+  predicting those levels before the plan and asserting them against the operator's; the
+  cost model's constants are per machine class (`VCosts`: x86 from Kathleen, NEON from
+  locust, by the ISA as Auto's), the crossovers agreed over the ranks (all-reduce min).
 - W and X conversions stay off under Helmholtz (the predicate's `LeafPair` arms false): out of
   this task's scope; a follow-up line if the measurements show them worth it.
 
@@ -184,6 +190,11 @@ the cost model on the same cases (`custom`), which decides the default's proposa
 
 ## Open questions
 
+1. The interface (above): `VPair` and `NearRule::with_v_pairs`, opt-in, no new `LeafPair`
+   variant. Approved by the user on 2026-11-13 before the code: "Approve (Recommended)".
+2. The crossover: the cheapest M2L Auto may choose per level (conservative, no circularity),
+   with a named crossover for the measurements; off by default until the sign-off. Approved by
+   the user on 2026-11-13: "As planned (Recommended)".
 3. Found in Kathleen job 633811 (W1 at kD = 500 under the default, a partial crossover: φ
    4·10⁵× the rule off's) and reproduced in `check_near_v` under PlaneWave (1.8·10⁻² against
    1.2·10⁻⁵): on a level with waves merge and shift serves each source of a parent's slots
@@ -195,9 +206,3 @@ the cost model on the same cases (`custom`), which decides the default's proposa
    n_s n_P < n m_s (`v_group`), with the builder's levels with waves asserted to be the
    operator's. The matrix jobs 633813–633815 ran the per-pair rule: their wave levels'
    errors at partial crossovers are not usable, their times are (the work is the same).
-
-1. The interface (above): `VPair` and `NearRule::with_v_pairs`, opt-in, no new `LeafPair`
-   variant. Approved by the user on 2026-11-13 before the code: "Approve (Recommended)".
-2. The crossover: the cheapest M2L Auto may choose per level (conservative, no circularity),
-   with a named crossover for the measurements; off by default until the sign-off. Approved by
-   the user on 2026-11-13: "As planned (Recommended)".

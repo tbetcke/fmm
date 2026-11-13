@@ -199,7 +199,7 @@ exchanges", are the contract.
 The root checks cover this crate. For this crate alone, add `-p nd-fmm-plan` (e.g.
 `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan`).
 
-`cargo test -p nd-fmm-plan` gives 64 unit tests plus the integration test **on one rank
+`cargo test -p nd-fmm-plan` gives 66 unit tests plus the integration test **on one rank
 only**. It exercises no ghost exchange and no ghost layer, which is where the
 interesting bugs are.
 

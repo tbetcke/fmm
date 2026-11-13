@@ -2320,7 +2320,8 @@ const NEAR_ERROR_BOUND: f64 = 1.1;
 /// The V pairs between leaves as near pairs (Helmholtz CH4.0d2;
 /// `HelmholtzFmmBuilder::near_v`), under Rotation, PlaneWave (whose levels with waves decide
 /// per parent and source: converted alone, a pair's source would still reach its target
-/// through the parent's waves) and the default, at a crossover of n_s n_t
+/// through the parent's waves), the default and Auto with waves from degree 0, at a
+/// crossover of n_s n_t
 /// that converts some pairs and keeps others and at one that converts every V pair between
 /// leaves, and with the cost model's crossovers: the errors against the direct sum within
 /// [`NEAR_ERROR_BOUND`] of the rule off's,
@@ -2341,9 +2342,20 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
             default_builder(scenario).m2l(HelmholtzM2l::PlaneWave),
         ),
         ("the default", default_builder(scenario)),
+        // Auto with waves from degree 0, so that Auto's levels with waves (predicted before
+        // the plan, asserted against the operator's) take part at ε = 10⁻³.
+        (
+            "Auto with waves",
+            default_builder(scenario).m2l_plane_wave_min_degree(0),
+        ),
     ] {
         let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
         assert_eq!(fmm_off.near_v(), VNear::Off, "the rule is off by default");
+        if setting == "Auto with waves" || setting == "PlaneWave" {
+            let waves = (0..fmm_off.nlevels())
+                .any(|l| fmm_off.operator().plane_wave_precision(l).is_some());
+            assert!(waves, "{}, {setting}: a level with waves", scenario.name);
+        }
         let (phi_off, grad_off) = errors(scenario, &inputs, &output_off, 0, comm);
         let received_off = fmm_off.source_points_exchanged().1;
         let interactions = |fmm: &HelmholtzFmm<'_, f64>| {

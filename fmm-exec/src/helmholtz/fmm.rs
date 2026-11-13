@@ -1090,6 +1090,12 @@ fn v_group(
                 let Some(children) = morton::children(p) else {
                     return false;
                 };
+                // Every sibling of a local leaf is held (it touches the leaf), and so are P's
+                // counts (P is local or a top-tree key): a gap would decide unlike one rank.
+                debug_assert!(
+                    children.iter().all(|child| keys.contains_key(child)),
+                    "the siblings of a local leaf are held"
+                );
                 let leaves = children.iter().enumerate().fold(0u8, |mask, (o, child)| {
                     match keys.get(child) {
                         Some(KeyType::LocalLeaf | KeyType::GhostLeaf(_)) => mask | (1 << o),
@@ -1097,6 +1103,10 @@ fn v_group(
                     }
                 });
                 let targets = counts.box_targets(p);
+                debug_assert!(
+                    targets.is_some(),
+                    "the target count of a local leaf's parent"
+                );
                 parent.set(Some((p, leaves, targets)));
                 (leaves, targets)
             }
@@ -1231,6 +1241,7 @@ where
     ranks_per_node: usize,
     /// Whether the plan has the empty-box rule.
     empty_boxes: bool,
+    /// The V pairs' near rule as built (Helmholtz CH4.0d2).
     near_v: VNear,
 }
 
