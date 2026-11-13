@@ -171,7 +171,16 @@ opt-level 1; the MPI list at 2 and 4 ranks; `mpi_regressions` at 8), `cargo deny
 
 ## Pending runs
 
-(none yet)
+Kathleen, `singlenode` (6 h cap per job), one rank × 40 threads, tree e6ea63e, outputs in
+`/scratch/scratch/ucahtbe/fmm/logs/ch4-0d2/<job>/`, `tools/helmholtz/ch4-0d2-runs.sh`:
+- 633813 (a): `matrix`, W1 and W3; 633814 (b): `matrix`, W4's cube and sphere; 633815 (c):
+  `matrix`, W4's Plummer sphere and clusters: the named crossovers swept, both orders;
+- 633811 (d): `large` (W1 at kD = 500, W3 at kD = 100);
+- 633812 (e): `w3` (the under-resolved W3 at kD = 500) and `traffic` (4 × 10 against 1 × 40);
+- 633816: `plan_build_cost`, `main` (7f4466c, `src/main`) and the branch alternately three
+  times (constraint 1).
+They decide the cost model's constants (`ch4-0d2-tables.py levels`), then a second round runs
+the cost model on the same cases (`custom`), which decides the default's proposal.
 
 ## Open questions
 
