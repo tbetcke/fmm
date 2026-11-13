@@ -42,7 +42,8 @@
 //! in the full FMM at x = 108 (W1 at kD = 500, 0.63 ε at ε = 10⁻⁸; CH3.3) and at x = 216 and
 //! 108 (W1 at kD = 1000, levels 2 and 3, at 10⁻⁸ to 10⁻³, all-RCR and the default, random
 //! charges, the plane wave's trace and the constant density: within ε in ℓ2, at most 0.83 ε,
-//! the levels beyond x = 65 about 1 % of the error at 10⁻⁸; Helmholtz CH4.0c,
+//! the levels beyond x = 65 about 1 % of the error at 10⁻⁸; and the under-resolved W3 at
+//! N = 10⁶, x = 108 at kD = 500, at most 0.72 ε; Helmholtz CH4.0c,
 //! `fmm-validate/results/helmholtz-ch4-0c.md`). Beyond, it is an extrapolation that falls
 //! increasingly below S7's per-pair p* as x grows and ε falls (157 against 161 at x = 128,
 //! 292 against 297 at x = 256, both at 10⁻⁸): the measured excess p − x grows about linearly

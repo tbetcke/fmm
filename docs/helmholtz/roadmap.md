@@ -7,14 +7,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
 `docs/helmholtz/gates/<milestone>.md`.
 
-Status (2026-11-12): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). The RCR FMM on every level meets ε against FMM3D
-(CH3.6); `Auto` takes the exponential M2L on the low-frequency levels at every ε ≥ 10⁻⁸ (D8).
-Of the H4 list, CH4.0 (Batched's term, split and node budget) is merged and CH4.0b (the
-worst boxes: corner placement on the coarsest plateau level; the smooth densities within ε;
-ε stays an ℓ2 tolerance, the worst box a gate bound of 100 ε) is signed off on #212. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of
-H0, CH0.4 and CH0.6. Next: CH4.0c. The history of this line until H6.G is in `progress.md`
-and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
+Status (2026-11-13): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0 and CH4.0b are merged; CH4.0c
+(the degree rule within ε at x = 216 on W1 at kD = 1000 and on the under-resolved W3; the
+builder's waves-buffer sizing fixed) waits for its sign-off on proposal §3.5's range. HR, H0,
+H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0d.
+The history of this line until H6.G is in `progress.md` and in this file's history
+(`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
 ## How `/next-task` reads this file
 
@@ -492,22 +491,19 @@ task's full line is in its record or report and its progress entry
   Signed off (the user, 2026-11-12, on #212, "Sign off 1 and 2 as recommended"): ε stays §9.1's ℓ2
   tolerance and the box measure a gate bound of 100 ε (proposal §9.1 amended); the gates keep
   the random charges (D12), CH4.0c, CH4.3 and CH4.4 verify on the smooth densities too. *Needs:* CH3.6.
-- [ ] **CH4.0c The degree rule beyond its measured range.** Added on 2026-11-02 at the H3
-  gate (question 4b; CH3.3's sign-off 2): the high-frequency branch is measured to x = 65
-  and checked at x = 108 only, and falls below S7's per-pair p* above that at ε ≤ 10⁻⁷.
-  W1 at kD ≈ 1000 and 10⁻⁸ on all-RCR against the sampled direct sum; and proposal §9
-  item 8's under-resolved W3 (N = 10⁶ at kD = 200 and 500), the FMM run H3 did not make.
-  *Done when:* within ε, or the rule corrected or S7's degrees named per level above its
-  range. Also (review 2026-11-12, M6, M7): the range of ε the rule is measured on (D1's
-  10⁻³ to 10⁻⁸) stated where the rule is documented, in place of CH3.3's 10⁻¹⁸ to 10⁻¹; it
-  stays before CH4.1, as CH4.4 runs at kD = 1000 on a second new source of error. Also
-  (CH4.0b, report §4): on W1 at kD = 100 the constant density misses ε in ℓ2 below 10⁻⁸
-  (1.5× at 10⁻⁹, 3.4× at 10⁻¹⁰), all of it from level 2 on the high-frequency branch (p = 40
-  at x = 21.7); the random charges do not show it. CH4.0c's runs include the constant density
-  (CH4.0b's sign-off 2).
-  *Needs:* CH3.6. *Machines:* Kathleen.
+- [x] **CH4.0c The degree rule beyond its measured range.** Report:
+  `fmm-validate/results/helmholtz-ch4-0c.md`. Within ε, no correction: W1 at kD = 1000 (levels 2
+  and 3 at x = 216 and 108) at 10⁻⁸ to 10⁻³, all-RCR and the default, the random charges, the
+  plane wave's trace and the constant density, at most 0.83 ε; the levels beyond x = 65 about
+  1 % of the error at 10⁻⁸. §9 item 8: the under-resolved W3 (N = 10⁶) within ε at kD = 200 and
+  500 (at most 0.72 ε). The rule's measured range stated in its documentation (review M6, M7).
+  Found and fixed: the builder sized the waves buffer before its bound (218 GB on W3 at
+  kD = 500). Proposal §3.5's range: question 1 of the PR. *Needs:* CH3.6.
 - [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
-  "Can you add leaf size tuning to the roadmap?"). `HelmholtzFmmBuilder` refines to a fixed
+  "Can you add leaf size tuning to the roadmap?"). Also (CH4.0c, report §3.2): on the
+  under-resolved W3 (N = 10⁶) at kD = 500 the leaf rule gives 2.06 million leaves on level 7,
+  most empty, and level 7's M2L takes 1,056 s of the 1,232 s evaluation under Rotation at 10⁻⁸
+  (247 of 340 s under the default); the empty leaves' cost is part of this task. `HelmholtzFmmBuilder` refines to a fixed
   `DEFAULT_MAX_POINTS_PER_LEAF` = 64 points per leaf. That is Laplace's base value without
   Phase 6 T11's per-p rule (`default_max_points_per_leaf`: 128 from p = 12 on the host).
   The leaf rule of §3.7 (c_leaf = 1 wavelength, D11) only refines further. FMM3D's

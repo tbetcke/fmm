@@ -160,9 +160,8 @@ Done: jobs 633320 (`w1-random`), 633321 (`w1-levels`), 633323 (`w1-smooth`), 633
 kD = 200 complete, kD = 500 aborted in the default's build, the defect above). Outputs in
 `~/projects/fmm-archive/kathleen/logs/ch4-0c/`; results in the report.
 
-Pending: W3 at kD = 500 with the fix, one job per density (`ONLY=w3-500-<density>
-tools/helmholtz/ch4-0c-runs.sh w3 logs/ch4-0c/w3-500`): 633429 (random), 633430 (plane wave),
-633431 (constant). Decides §9 item 8 at kD = 500.
+W3 at kD = 500 with the fix, one job per density: 633429 (random), 633430 (plane wave),
+633431 (constant), all completed (within ε, at most 0.72 ε). None pending.
 
 ## Open questions
 
