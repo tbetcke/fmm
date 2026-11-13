@@ -110,7 +110,7 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::plan::{Plan, PlanRules};
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
-use nd_fmm_tables::helmholtz::plane_wave::merge::select;
+use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, select};
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
 use nd_octree::octree::KeyType;
@@ -195,6 +195,10 @@ pub enum VNear {
     /// The pairs with n_s n_t below this crossover on every level, for the measurements;
     /// `f64::INFINITY` converts every V pair between leaves.
     Crossover(f64),
+    /// The crossover of each level from the cost model ([`v_crossover`]): the thread time a
+    /// V pair's M2L takes on the level, under the cheapest M2L the setting may run there,
+    /// over the P2P's per interaction.
+    CostModel,
 }
 
 impl std::fmt::Display for VNear {
@@ -202,6 +206,7 @@ impl std::fmt::Display for VNear {
         match self {
             Self::Off => write!(f, "off"),
             Self::Crossover(n) => write!(f, "{n}"),
+            Self::CostModel => write!(f, "cost"),
         }
     }
 }
@@ -797,22 +802,46 @@ impl HelmholtzFmmBuilder {
             None
         };
         let no_leaf_pairs = |_: LeafPair| false;
-        let v_crossover = match self.near_v {
-            VNear::Off => 0.0,
-            VNear::Crossover(n) => n,
-        };
+        // The crossover of each level: named, or the cost model's for the cheapest M2L the
+        // setting may run there (Auto's choice after the plan reads the pairs left, so a
+        // dearer one only means that more pairs would have paid).
+        let crossovers: Vec<f64> = (0..degrees.len())
+            .map(|l| match self.near_v {
+                VNear::Off => 0.0,
+                VNear::Crossover(n) => n,
+                VNear::CostModel => {
+                    let p = degrees[l];
+                    let (m2l, p) = if waves[l] {
+                        let p_w = match tolerance {
+                            Some(epsilon) => plane_wave_degree(p, epsilon),
+                            None => p,
+                        };
+                        (HelmholtzM2l::PlaneWave, p_w)
+                    } else {
+                        let cheapest = match self.m2l {
+                            HelmholtzM2l::Auto if p <= max_degree as usize => HelmholtzM2l::Batched,
+                            HelmholtzM2l::Auto | HelmholtzM2l::PlaneWave => HelmholtzM2l::Rotation,
+                            m2l => m2l,
+                        };
+                        (cheapest, p)
+                    };
+                    v_crossover(m2l, p, self.gradients)
+                }
+            })
+            .collect();
         let all_keys = octree.all_keys();
         let v_pairs = |pair: VPair| {
-            if waves[morton::level(pair.target)] {
+            let level = morton::level(pair.target);
+            if waves[level] {
                 counts
                     .as_ref()
-                    .is_some_and(|counts| v_group(pair, v_crossover, all_keys, counts))
+                    .is_some_and(|counts| v_group(pair, crossovers[level], all_keys, counts))
             } else {
-                ((pair.sources * pair.targets) as f64) < v_crossover
+                ((pair.sources * pair.targets) as f64) < crossovers[level]
             }
         };
         let near = match (&counts, self.near_v) {
-            (Some(counts), VNear::Crossover(_)) => {
+            (Some(counts), VNear::Crossover(_) | VNear::CostModel) => {
                 Some(NearRule::new(counts, &no_leaf_pairs).with_v_pairs(&v_pairs))
             }
             _ => None,
@@ -958,6 +987,47 @@ impl HelmholtzFmmBuilder {
             near_v: self.near_v,
         })
     }
+}
+
+/// The P2P's thread-nanoseconds per interaction in [`VNear::CostModel`] (Helmholtz CH4.0d2):
+/// complex charges with gradients in f64, fitted on Kathleen (AVX-512, one rank × 40 threads)
+/// from the P2P times per level added by the V pairs converted
+/// (fmm-validate/results/helmholtz-ch4-0d2.md; 5–9 over the levels, smaller leaves dearer).
+pub const V_P2P_NS: f64 = 6.5;
+
+/// The share of [`V_P2P_NS`] without gradients: the P2P kernel's potential over its
+/// potential and gradient (Helmholtz CH3.4b, Laplace's AVX-512 f64 0.40 against 0.60 ns).
+pub const V_P2P_POTENTIAL_SHARE: f64 = 0.67;
+
+/// Rotation's thread-nanoseconds per V pair in [`VNear::CostModel`], a + b (p + 1)³, fitted
+/// as [`V_P2P_NS`] from the M2L time per level saved per pair removed (p = 7 to 24).
+pub const V_ROTATION_NS: [f64; 2] = [800.0, 6.0];
+
+/// Batched's thread-nanoseconds per V pair in [`VNear::CostModel`], b (p + 1)⁴ (about 1 µs at
+/// p = 7, fitted as [`V_P2P_NS`]); also Dense's and Classes'.
+pub const V_BATCHED_NS: f64 = 0.25;
+
+/// The exponential M2L's thread-nanoseconds per V pair in [`VNear::CostModel`], b (p_w + 1)²
+/// at the degree its level runs (fitted as [`V_P2P_NS`] at p_w = 15 and 32, where removing
+/// the pairs removes most of the level's waves too).
+pub const V_PLANE_WAVE_NS: f64 = 11.0;
+
+/// The crossover of n_s n_t on a level of degree `p` whose cheapest M2L is `m2l` (the
+/// waves' degree for the exponential M2L), with or without gradients (Helmholtz CH4.0d2,
+/// [`VNear::CostModel`]): the M2L's thread time per pair over the P2P's per interaction.
+pub fn v_crossover(m2l: HelmholtzM2l, p: usize, gradients: bool) -> f64 {
+    let q = (p + 1) as f64;
+    let m2l = match m2l {
+        HelmholtzM2l::Rotation => V_ROTATION_NS[0] + V_ROTATION_NS[1] * q.powi(3),
+        HelmholtzM2l::PlaneWave => V_PLANE_WAVE_NS * q * q,
+        _ => V_BATCHED_NS * q.powi(4),
+    };
+    let p2p = if gradients {
+        V_P2P_NS
+    } else {
+        V_P2P_NS * V_P2P_POTENTIAL_SHARE
+    };
+    m2l / p2p
 }
 
 /// The V rule's decision for `pair` on a level with waves (Helmholtz CH4.0d2): the

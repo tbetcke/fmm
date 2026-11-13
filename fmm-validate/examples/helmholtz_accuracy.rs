@@ -67,9 +67,10 @@
 //!   the run loops); the column "M2L" of a row with the rule off ends with `/full`. A last
 //!   table has a row per run with what the rule left out (`Row::left_out`, summed over the
 //!   ranks) and the multipoles the ranks read from other ranks (`Row::remote_multipoles`).
-//! - `--near-v off|n|inf,…` (Helmholtz CH4.0d2, `HelmholtzFmmBuilder::near_v`): the V pairs
-//!   between leaves with n_s n_t below n become near pairs (`off`, the default, the
-//!   library's; `inf` every V pair between leaves), every run at each in turn, inside
+//! - `--near-v off|cost|n|inf,…` (Helmholtz CH4.0d2, `HelmholtzFmmBuilder::near_v`): the V
+//!   pairs between leaves with n_s n_t below n become near pairs (`off`, the default, the
+//!   library's; `cost` the cost model's crossover per level; `inf` every V pair between
+//!   leaves), every run at each in turn, inside
 //!   `--empty-boxes`' loop; the column "M2L" of a row with the rule on ends with `/v<n>`. A
 //!   last table "Near pairs" has a row per run with the V pairs offered and converted
 //!   (`Row::v_near`), the V pairs that ran, the multipoles read from other ranks, the source
@@ -431,6 +432,7 @@ fn arguments() -> Arguments {
                         .split(',')
                         .map(|v| match v {
                             "off" => Some(VNear::Off),
+                            "cost" => Some(VNear::CostModel),
                             "inf" => Some(VNear::Crossover(f64::INFINITY)),
                             n => n
                                 .parse::<f64>()

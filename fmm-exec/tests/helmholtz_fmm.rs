@@ -2322,7 +2322,8 @@ const NEAR_ERROR_BOUND: f64 = 1.1;
 /// per parent and source: converted alone, a pair's source would still reach its target
 /// through the parent's waves) and the default, at a crossover of n_s n_t
 /// that converts some pairs and keeps others and at one that converts every V pair between
-/// leaves: the errors against the direct sum within [`NEAR_ERROR_BOUND`] of the rule off's,
+/// leaves, and with the cost model's crossovers: the errors against the direct sum within
+/// [`NEAR_ERROR_BOUND`] of the rule off's,
 /// 2 threads the one-thread output bit for bit, on P ranks the one-rank FMM's of the same
 /// rule bit for bit, and the ghost leaves' points received at least the rule off's. A
 /// crossover of 0 converts nothing: the rule off's output bit for bit. Returns the V pairs
@@ -2365,14 +2366,19 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
         assert_same(name, &output, &output_off, comm);
         drop(fmm);
 
-        for n in [crossover, f64::INFINITY] {
-            let name = &format!("{}, V pairs below {n}, {setting}", scenario.name);
-            let on = off.clone().near_v(VNear::Crossover(n));
+        let choices = [
+            VNear::Crossover(crossover),
+            VNear::Crossover(f64::INFINITY),
+            VNear::CostModel,
+        ];
+        for choice in choices {
+            let name = &format!("{}, V pairs {choice}, {setting}", scenario.name);
+            let on = off.clone().near_v(choice);
             let (fmm, output) = run(&on, &inputs, kind, comm);
-            assert_eq!(fmm.near_v(), VNear::Crossover(n), "{name}");
+            assert_eq!(fmm.near_v(), choice, "{name}");
             let pairs = fmm.plan().near_pairs();
             let (offered, converted) = (pairs.v_leaf_pairs, pairs.v_converted);
-            if n == f64::INFINITY {
+            if choice == VNear::Crossover(f64::INFINITY) {
                 assert_eq!(converted, offered, "{name}: every V pair between leaves");
             }
             assert_eq!(
@@ -2415,11 +2421,11 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
             let (_, threaded) = run(&on.clone().threads(2), &inputs, kind, comm);
             assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
             check_one_rank(name, &on, &inputs, kind, &output, comm);
-            if setting == "Rotation" && n == crossover {
+            if setting == "Rotation" && choice == VNear::Crossover(crossover) {
                 let local = [offered, converted, received - received_off];
                 comm.all_reduce_into(&local[..], &mut totals[..3], SystemOperation::sum());
             }
-            if setting == "PlaneWave" && n == crossover {
+            if setting == "PlaneWave" && choice == VNear::Crossover(crossover) {
                 let local = [offered, converted];
                 comm.all_reduce_into(&local[..], &mut totals[3..], SystemOperation::sum());
             }

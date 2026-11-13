@@ -24,6 +24,9 @@
 #   invariance with the rule on);
 # - `custom`: CROSSOVERS (a `--near-v` list) on CASES (`name|arguments` entries separated by
 #   `;`), for the cost model's check once its constants are set.
+# CROSSOVERS (a `--near-v` list, e.g. `off,cost,inf`) replaces every stage's list (the
+# matrix's second order is its reverse): the second round, the cost model against the rule
+# off and every pair converted.
 # One rank × THREADS threads (default 40, a Kathleen node) unless named. Each launch's output
 # in <out-dir>/<stage>-<case>-<order>.md, a line per launch in <out-dir>/runs.log. Times are
 # read on Kathleen's exclusive nodes only, never asserted. TIMEOUT (default 18000) bounds a
@@ -48,6 +51,10 @@ launch() {
 }
 
 M2L=(--m2l rotation,auto-pw --levels)
+# `crossovers <default>`: CROSSOVERS if set, else the stage's own list.
+crossovers() { echo "${CROSSOVERS:-$1}"; }
+# `reversed <list>`: the comma-separated list in reverse order.
+reversed() { echo "$1" | tr ',' '\n' | awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) printf "%s%s", a[i], (i > 1 ? "," : "\n") }'; }
 for stage in "$@"; do
     case $stage in
     matrix)
@@ -58,7 +65,8 @@ for stage in "$@"; do
         done
         for entry in "${cases[@]}"; do
             name=${entry%%|*}
-            for order in off,300,1000,3000,10000,inf inf,10000,3000,1000,300,off; do
+            list=$(crossovers off,300,1000,3000,10000,inf)
+            for order in "$list" "$(reversed "$list")"; do
                 # Word splitting of the arguments is intended.
                 # shellcheck disable=SC2086
                 launch "matrix-$name-${order%%,*}" "$X" ${entry#*|} --eps 1e-3,1e-6,1e-8 \
@@ -71,26 +79,26 @@ for stage in "$@"; do
             name=${entry%%|*}
             # shellcheck disable=SC2086
             launch "large-$name" "$X" ${entry#*|} --eps 1e-6,1e-8 "${M2L[@]}" \
-                --evaluations 2 --near-v off,1000,3000,10000,30000,inf --threads "$T"
+                --evaluations 2 --near-v "$(crossovers off,1000,3000,10000,30000,inf)" --threads "$T"
         done
         ;;
     w3)
         launch "w3-500" "$X" --workload w3:1000000 --kd 500 --eps 1e-6,1e-8 "${M2L[@]}" \
-            --near-v off,3,30,inf --threads "$T"
+            --near-v "$(crossovers off,3,30,inf)" --threads "$T"
         ;;
     traffic)
         for entry in "w3-500|--workload w3:1000000 --kd 500|off,inf" \
             "w1-500|--workload w1 --kd 500|off,3000"; do
             name=${entry%%|*}
             rest=${entry#*|}
-            crossovers=${rest#*|}
+            list=$(crossovers "${rest#*|}")
             # shellcheck disable=SC2086
             launch "traffic-$name-4x" mpirun -n 4 --map-by "slot:PE=$((T / 4))" \
                 --bind-to core "$X" ${rest%|*} --eps 1e-6 --m2l auto-pw --levels \
-                --near-v "$crossovers" --threads "$((T / 4))"
+                --near-v "$list" --threads "$((T / 4))"
             # shellcheck disable=SC2086
             launch "traffic-$name-1x" "$X" ${rest%|*} --eps 1e-6 --m2l auto-pw --levels \
-                --near-v "$crossovers" --threads "$T"
+                --near-v "$list" --threads "$T"
         done
         ;;
     custom)
