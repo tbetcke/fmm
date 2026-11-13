@@ -9,7 +9,7 @@ use super::EmptyBoxes;
 use crate::interaction_manager::is_leaf;
 use crate::near::{LeafCounts, LeafPair, NearRule};
 use crate::plan::{
-    Plan, PlanError, PlanRules,
+    Plan, PlanError, PlanRules, index_from_keys,
     tests::{cases, nlevels, one_rank_map, rows_by_key},
 };
 
@@ -297,5 +297,59 @@ fn the_near_rule_sees_the_entries_the_rule_keeps() {
         assert_eq!(both.empty_boxes(), empty.empty_boxes(), "{name}");
         let pairs = both.near_pairs();
         assert_eq!((pairs.w_converted, pairs.x_converted), converted, "{name}");
+    }
+}
+
+#[test]
+fn a_plan_on_a_prebuilt_index_is_the_plan_and_another_index_is_not_one() {
+    for (name, map) in cases() {
+        let n = nlevels(&map);
+        let partition = one_rank_map(&map);
+        let counts = counts_of(&map, count);
+        let rule = NearRule::new(&counts, &predicate);
+        let near = PlanRules {
+            near: Some(&rule),
+            ..PlanRules::default()
+        };
+        let both = PlanRules {
+            near: Some(&rule),
+            empty_boxes: Some(&counts),
+        };
+        for (label, rules) in [
+            ("no rule", PlanRules::default()),
+            ("near", near),
+            ("empty", empty_rule(&counts)),
+            ("both", both),
+        ] {
+            let index = index_from_keys(&map, n).unwrap();
+            assert!(index.is_index_of(&map, n), "{name}, {label}");
+            let on = Plan::from_index_with_rules(index, &map, &partition, &rules).unwrap();
+            assert_eq!(on, plan_with(&map, &rules).unwrap(), "{name}, {label}");
+        }
+
+        let index = index_from_keys(&map, n).unwrap();
+        assert!(
+            !index.is_index_of(&map, n + 1),
+            "{name}: another level count"
+        );
+        // A plan's index is one only without numbered ghost leaves.
+        let plan = plan_with(&map, &PlanRules::default()).unwrap();
+        let leaves = plan.index().leaves();
+        assert_eq!(
+            plan.index().is_index_of(&map, n),
+            leaves.len() == leaves.nlocal(),
+            "{name}: a plan's index"
+        );
+        // A key less, a key more, a kind changed.
+        let leaf = *map.keys().filter(|&&key| is_leaf(map[&key])).min().unwrap();
+        let mut fewer = map.clone();
+        fewer.remove(&leaf);
+        assert!(!index.is_index_of(&fewer, n), "{name}: a key less");
+        let mut more = map.clone();
+        more.insert(morton::children(leaf).unwrap()[0], KeyType::LocalLeaf);
+        assert!(!index.is_index_of(&more, n), "{name}: a key more");
+        let mut kinds = map.clone();
+        kinds.insert(leaf, KeyType::GhostLeaf(7));
+        assert!(!index.is_index_of(&kinds, n), "{name}: a kind changed");
     }
 }

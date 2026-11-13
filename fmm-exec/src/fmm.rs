@@ -2037,7 +2037,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // Step 6: the points of every local leaf, its radius, and the output order.
         let (points, owned) = Points::route(
             &octree,
-            &plan,
+            plan.index(),
             (&keys, sources.len()),
             &coordinates,
             &domain,

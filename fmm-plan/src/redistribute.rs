@@ -119,6 +119,7 @@ use mpi::{
 use nd_octree::{MortonKey, Octree};
 use rlst::distributed_tools::SparseRoutes;
 
+use super::index::BoxIndex;
 use super::plan::Plan;
 
 /// The reasons a [`Redistribution`] cannot be built.
@@ -129,8 +130,8 @@ pub enum RedistributionError {
         /// The position of the item in the keys of this rank.
         index: usize,
     },
-    /// The local leaves of the plan are not the octree's: the plan was built from
-    /// another octree.
+    /// The local leaves of the plan (or the box index) are not the octree's: it was built
+    /// from another octree.
     PlanMismatch,
     /// The items sent or received by some rank do not fit MPI's `i32` counts.
     Overflow,
@@ -220,9 +221,28 @@ impl Redistribution {
         plan: &Plan,
         keys: &[MortonKey],
     ) -> Result<Self, RedistributionError> {
+        Self::with_index(octree, plan.index(), keys)
+    }
+
+    /// Route the items with the finest-level `keys` to the owners of their leaves, grouped
+    /// by the local leaves of `index`, a box index of `octree`: [`new`](Self::new) on a
+    /// plan's index, or [`BoxIndex::of_octree`] before a plan is built (Helmholtz
+    /// CH4.0d1b). Every plan of the octree has the same local leaves, so the redistribution
+    /// is the one [`new`](Self::new) builds on any of them.
+    ///
+    /// # Collective operation
+    /// Those of [`new`](Self::new).
+    ///
+    /// # Errors
+    /// Those of [`new`](Self::new); [`RedistributionError::PlanMismatch`] if the local
+    /// leaves of `index` are not the octree's.
+    pub fn with_index<C: CommunicatorCollectives>(
+        octree: &Octree<'_, C>,
+        index: &BoxIndex,
+        keys: &[MortonKey],
+    ) -> Result<Self, RedistributionError> {
         let comm = octree.comm();
         let nranks = comm.size() as usize;
-        let index = plan.index();
         let nlocal = index.leaves().nlocal();
 
         // The owners, without communication; a rank with an invalid key sends nothing.
