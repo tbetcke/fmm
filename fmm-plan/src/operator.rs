@@ -193,8 +193,9 @@ pub struct M2m<'a, T> {
     /// The pass: which parents have rows.
     pub pass: UpwardPass,
     /// Row t: the eight children of parent t (box indices on `level + 1`) with their
-    /// octants, by octant; empty for a box of the other pass, a leaf or a ghost. Batch o:
-    /// (parents, children) of octant o.
+    /// octants, by octant (under the empty-box rule only those whose subtrees hold a
+    /// source; [`empty`](crate::empty)); empty for a box of the other pass, a leaf or a
+    /// ghost. Batch o: (parents, children) of octant o.
     pub children: &'a Children,
     /// Multipoles of `level + 1`, by box index.
     pub child_multipoles: LevelSlice<'a, T>,

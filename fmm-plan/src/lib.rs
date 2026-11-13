@@ -19,6 +19,9 @@
 //! - [`near`]: the optional near rule (Phase 6 T12, C6.9): W and X pairs between two
 //!   leaves that an operator-supplied predicate names become near pairs, from the leaves'
 //!   point counts ([`near::LeafCounts`]); [`Plan::with_near_rule`](plan::Plan::with_near_rule).
+//! - [`empty`]: the optional empty-box rule (Helmholtz CH4.0d1): the rows of boxes whose
+//!   subtree holds no target, and the entries naming boxes whose subtree holds no source,
+//!   left out ([`empty::EmptyBoxes`]); [`Plan::with_rules`](plan::Plan::with_rules).
 //! - [`store`]: the data of an evaluation, one buffer per level and kind for
 //!   multipoles and locals, and CSR leaf stores with variable counts per leaf.
 //! - [`exchange`]: the ghost exchanges of sources and multipoles, the upward reduction of
@@ -109,6 +112,7 @@
 //! - Device-resident data: the views are flat index arrays and the stores flat buffers,
 //!   so both can be uploaded once (design §10).
 
+pub mod empty;
 pub mod evaluator;
 pub mod exchange;
 pub mod index;
