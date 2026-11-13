@@ -2973,3 +2973,40 @@ request, using this template:
   then V pairs of few points as near pairs); CH4.0g (roadmap: Laplace's empty boxes counted,
   the rule adopted only if it pays); CH4.3 (the high-frequency recalibration; the tightest level at
   kD = 1000 is where the branch leaves the plateau).
+
+## 2026-11-13: CH4.0d1 Empty boxes left out of the lists
+- Done:
+  - CH4.0d split into CH4.0d1–d3 (the user, 2026-11-13: "d1/d2/d3 (Recommended)"); the design
+    of #214 with the W rows of boxes without targets ("Also drop W (Recommended)").
+  - `nd-fmm-plan`: the empty-box rule (`src/empty.rs`, `EmptyBoxes`), `PlanRules { near,
+    empty_boxes }` with `Plan::with_rules` and `from_key_types_with_rules`, `LeafCounts`' box
+    counts and `exchange_with_boxes` (local subtree sums; the coarse blocks' counts all-gathered
+    for every top-tree key; the other V and W rows' ghost boxes from their owners in the near
+    rule's ghost communicator), `Plan::empty_boxes`. `Plan::new` is `with_rules` with no rule.
+  - The top-tree keys are not exempt, unlike #214's design (the user, 2026-11-13: "Global counts
+    (Recommended)"): an exemption depends on the rank count and broke the one-rank comparison.
+  - `nd-fmm-exec`: `HelmholtzFmmBuilder::empty_boxes` (default on), the rule's plan after the
+    routes from their leaf counts; `HelmholtzFmm::empty_boxes`.
+  - `nd-fmm-validate`: `Case::empty_boxes`, `Row::{empty_boxes, left_out, remote_multipoles}`,
+    `--empty-boxes`; `tools/helmholtz/ch4-0d1-runs.sh`, `ch4-0d1-tables.py`.
+  - Kathleen: the evaluation 0.20–0.56 of the rule off's on W1 at kD = 500 and the
+    under-resolved W3 at kD = 500, noise on uniform trees; the build 1.1–1.7× (a second serial
+    plan). Report `fmm-validate/results/helmholtz-ch4-0d1.md`; raw outputs in
+    `~/projects/fmm-archive/kathleen/logs/ch4-0d1/`.
+- Tests: `src/empty_tests.rs` (5); `check_empty_boxes` in `tests/mpi_regressions.rs` (every
+  scenario at 1, 2, 4 and 8 ranks: the counts by brute force, the rule's oracle, the exchanges,
+  the one-rank plan bit for bit, multipoles from other ranks no longer read); in
+  `tests/helmholtz_fmm.rs` (a sphere at kD = 30 and the clusters with separate targets: the rule
+  off's values under four M2Ls, 2 threads and one rank bit for bit; `check_plane_wave` now on
+  the full plan so its floor still chunks); in `tests/helmholtz_accuracy.rs`.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and
+  workspace tests at opt-level 1 (1,252 and 1,366 passed), the MPI list at 2 and 4 ranks (24 of
+  24), `mpi_regressions` at 8; `helmholtz_fmm` again at 1, 2 and 4 after the last change. The
+  opt-level 0 one-rank times: `helmholtz_fmm` 460 s (`main` 524 s), `mpi_regressions` 3.9 s
+  (`main` 2.0 s). Nothing pending.
+- Decisions: questions for sign-off in the PR: (1) the default on; (2) CH4.0d1b's place, next.
+- Laplace: `Plan::new` unchanged (every Laplace test; counts without a zero give its plan);
+  `plan_build_cost` on Kathleen job 633567 within `main`'s spread; no D9 evaluation runs (the
+  user, 2026-11-13: "Tests + build time (Recommended)").
+- Follow-ups: CH4.0d1b (roadmap: the rule's build cost, one plan build); CH4.0g (Laplace's empty
+  boxes, now with the rule to count with).

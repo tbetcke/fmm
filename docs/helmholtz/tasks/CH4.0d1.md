@@ -214,14 +214,30 @@ time of `helmholtz_fmm` and `mpi_regressions` before and after.
 
 ## Pending runs
 
-Kathleen, branch tree synced at 8631669 (`tools/kathleen/sync.sh`), outputs in
-`/scratch/scratch/ucahtbe/fmm/logs/ch4-0d1/<stage>/`, one node each (`singlenode`, 6 h):
+None. Ran on Kathleen (report `fmm-validate/results/helmholtz-ch4-0d1.md` §1): jobs 633564
+(`matrix`, `traffic`), 633565 (`large`), 633566 (`w3`), 633567 (`plan_build_cost`, `main` and
+the branch), all on 8631669; job 633596 (`matrix`, `large`) on d2a9efc, after the counts were
+taken from the routes. Raw outputs in `~/projects/fmm-archive/kathleen/logs/ch4-0d1/`.
 
-- job 633564: the release build, `tools/helmholtz/ch4-0d1-runs.sh … matrix`, then `traffic`;
-- job 633565: `large`;
-- job 633566: `w3`;
-- job 633567: `plan_build_cost` of `main` (f32e5ba, `src/base-ch4-0d1`) and of the branch,
-  alternately three times each on one node (constraint 1, the user's "Tests + build time").
+## Results
+
+- The output is the rule off's bit for bit (checksum and errors) in every row where both runs
+  used the same M2L per level; Auto's term moved a level from Batched to Rotation on five
+  rows at 10⁻³ (W1 at kD = 100, W4's sphere at kD = 100, W4's clusters), each faster.
+- The evaluation: 0.20–0.56 of the rule off's on W1 at kD = 500 and the under-resolved W3 at
+  kD = 500, 0.36–0.73 on W1 at kD = 100 and W4's sphere, 0.79–1.04 on W4's Plummer sphere and
+  clusters, 0.95–1.08 (noise) on uniform trees.
+- The build: 1.1–1.7× the rule off's, from the second serial plan build; build plus one
+  evaluation 0.30–0.72 on W1 at kD = 500, up to 1.33 on W3 at N = 4·10⁶. CH4.0d1b added.
+- 4 ranks × 10 threads, W3 at kD = 500: the multipoles read from other ranks 95,284 against
+  175,800, the same checksum.
+- `plan_build_cost`: `main` and the branch within each other's spread on all three trees.
+- Debug test times on the M6 at opt-level 0, one rank: `helmholtz_fmm` 460 s on the branch
+  against 524 s on `main` (load falling from about 15 to 2; both above the crate's minute,
+  as `main` was), `mpi_regressions` 3.9 s against 2.0 s. At CI's opt-level 1: `helmholtz_fmm`
+  21–25 s at 1, 2 and 4 ranks.
+- Self-review (a subagent, 2026-11-13): no blocking finding; the nine others fixed or recorded
+  (N7, rank-local assertions in `check_empty_boxes`, follows `check_near_rule`'s style).
 
 ## Open questions
 

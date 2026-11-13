@@ -8,10 +8,12 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-13): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0 and CH4.0b are merged; CH4.0c
-(the degree rule within ε at x = 216 on W1 at kD = 1000 and on the under-resolved W3; the
-builder's waves-buffer sizing fixed) waits for its sign-off on proposal §3.5's range. HR, H0,
-H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0d.
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0, CH4.0b and CH4.0c are merged;
+CH4.0d was split into CH4.0d1–d3 and CH4.0d1b added. CH4.0d1 (the empty-box rule of
+`nd-fmm-plan`, on under the Helmholtz builder: the evaluation 0.2–0.56 of before on sparse
+trees, the build 1.1–1.7× from a second plan) waits for its sign-off on the default. HR, H0,
+H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next:
+CH4.0d1b, then CH4.0d2 (as the PR proposes).
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -58,9 +60,10 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
 3. CH4.0c The degree rule beyond its measured range
-4. CH4.0d1, CH4.0d2, CH4.0d3 The Helmholtz leaf size (added on 2026-11-12, the user: "After
-   CH4.0c (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and CH4.5's
-   timings run on; split on 2026-11-13): the empty boxes, the V pairs of few points, the sweep
+4. CH4.0d1, CH4.0d1b, CH4.0d2, CH4.0d3 The Helmholtz leaf size (added on 2026-11-12, the user:
+   "After CH4.0c (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and
+   CH4.5's timings run on; split on 2026-11-13): the empty boxes, their build cost (added at
+   CH4.0d1; its place here is the PR's question 2), the V pairs of few points, the sweep
 5. CH4.0e The comparison under the default, and H4's expected gain (review A1 and B2; its
    sign-off is H4's go-ahead and order)
 6. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
@@ -517,24 +520,28 @@ task's full line is in its record or report and its progress entry
   kD ≈ 100 much of that is likely the shallower trees (our P2P is vectorised, CH3.4b). Not
   measured. Split on 2026-11-13 into CH4.0d1–d3 (the user: "d1/d2/d3 (Recommended)"): the
   empty boxes first, then the V pairs of few points, then the sweep on the trees they leave.
-- [ ] **CH4.0d1 Empty boxes left out of the lists.** The design of 2026-11-13 (the user, on
-  #214: "Yes. Please."; plan `docs/helmholtz/tasks/CH4.0d1.md`): an opt-in rule of
-  `nd-fmm-plan`, so `Plan::new` and Laplace stay as they are. A box whose subtree holds no
-  target point loses its V, X and W rows and the L2L into it (W added 2026-11-13, the user:
-  "Also drop W (Recommended)"); one holding no source point leaves every V and W row and its
-  parent's M2M. The target side is local. For the source side each owner gives a count per box,
-  interior boxes included (its leaf counts summed up its tree), fetched with the near rule's
-  counts in one exchange. Top-tree keys (`Global` boxes and their ghosts) are never left out:
-  they have no single owner of their subtree, lie on coarse levels, and the reduction and the
-  replicated top stay unchanged. The multipole exchange follows the rows, so empty boxes'
-  multipoles are not sent. The interface (the user, 2026-11-13: "Approve (Recommended)"):
-  `PlanRules { near, empty_boxes }` with `Plan::with_rules`, `LeafCounts` with box counts and
-  `exchange_with_boxes` (`LeafCounts::exchange` unchanged), `Plan::empty_boxes`. *Done when:*
-  only exact zeros go: the output the rule off's (−0 and +0 equal), on P ranks the one-rank
-  FMM's bit for bit, the traffic counters showing the multipoles no longer sent; the rule on
-  under the Helmholtz builder with its gain per case (*Sign-off*: the default); Laplace bit for
-  bit, with `plan_build_cost` on Kathleen before and after and no D9 evaluation runs (the user,
-  2026-11-13: "Tests + build time (Recommended)"). *Needs:* CH6.2h, CH3.4c. *Machines:* Kathleen.
+- [x] **CH4.0d1 Empty boxes left out of the lists.** Report:
+  `fmm-validate/results/helmholtz-ch4-0d1.md`; record `docs/helmholtz/tasks/CH4.0d1.md`.
+  `Plan::with_rules` with `PlanRules::empty_boxes` (`nd_fmm_plan::empty`): a box whose subtree
+  holds no target loses its V, X, W and L2L rows, one without sources leaves the V, W and M2M
+  rows naming it; every box, `Global` boxes too, by whole-subtree counts (the user,
+  2026-11-13: "Global counts (Recommended)", so that P ranks leave out what one rank does);
+  on under `HelmholtzFmmBuilder` by default. The output the rule off's bit for bit wherever
+  the M2L per level agreed; the evaluation 0.20–0.56 of the rule off's on W1 at kD = 500 and
+  the under-resolved W3, noise on uniform trees; the build 1.1–1.7× (a second serial plan,
+  CH4.0d1b). `Plan::new` and Laplace unchanged (plan build within spread on Kathleen).
+  *Sign-off pending* (the PR's question 1): the default.
+- [ ] **CH4.0d1b The empty-box rule's build cost.** Added at CH4.0d1 (report §0, §5): the rule
+  builds the plan twice (`Plan::new` for the counts' exchange lists, then `Plan::with_rules`),
+  and a plan is built serially at about 17 µs per box on Kathleen, so the build with the rule is
+  1.1–1.7× the rule off's (W3 at N = 4·10⁶: 24.5 s against 15.6 s; the under-resolved W3 at
+  kD = 500: 139 s against 93 s), a loss of up to 1.33× in build plus one evaluation on uniform
+  trees. Build the rule's plan once: the counts' exchange lists without a first plan (every
+  held ghost box requested, the routes on the box index), or the rule applied to the first
+  plan's rows. It changes `nd-fmm-plan`'s interface (a stop-and-ask when it starts).
+  *Done when:* the build with the rule within 1.1× the rule off's on W3 at N = 4·10⁶ and on the
+  under-resolved W3 at kD = 500 (one rank × 40 threads, Kathleen), the plans and outputs
+  CH4.0d1's bit for bit, Laplace unchanged. *Needs:* CH4.0d1. *Machines:* Kathleen.
 - [ ] **CH4.0d2 V pairs between leaves of few points as near pairs.** By the near rule's
   mechanism (n_s n_t below a crossover of the cost model; a Rotation pair at p = 24 costs about
   110 µs of thread time on Kathleen, CH4.0c report §3.2): decided on the target's rank from the
