@@ -267,9 +267,9 @@ fn measure<C: Communicator>(
         level: run.row.levels - 1,
     };
     let boxes = errors.boxes(reference, &problem.points, grid.unwrap_or(&own));
-    // The run's times as it finishes (the tables print after the last run): the build, the
-    // evaluation and its M2L by level, the rest of `run_output` (the samples' errors) and
-    // the errors at the reference's targets.
+    // The run as it finishes (the tables print after the last run): §9.1's errors and those
+    // at the reference's targets, the build, the evaluation and its M2L by level, the rest
+    // of `run_output` (the samples' errors) and the errors at the reference's targets.
     let row = &run.row;
     let m2l: Vec<String> = row
         .m2l_seconds
@@ -278,10 +278,16 @@ fn measure<C: Communicator>(
         .filter(|&(_, &s)| s > 0.0)
         .map(|(l, s)| format!("{l}: {s:.1}"))
         .collect();
+    let all = errors.l2(reference);
     eprintln!(
-        "helmholtz_boxes: {label}: p {}; build {:.1} s, evaluate {:.1} s (M2L by level {}), \
-         the rest of the run {:.1} s, the errors at {} targets {:.1} s",
+        "helmholtz_boxes: {label}: p {}; §9.1 φ, ∇φ {:.2e}, {:.2e}, all {:.2e}, {:.2e}; \
+         build {:.1} s, evaluate {:.1} s (M2L by level {}), the rest of the run {:.1} s, the \
+         errors at {} targets {:.1} s",
         degrees_string(&row.degrees),
+        row.errors[0][0],
+        row.errors[0][1],
+        all[0],
+        all[1],
         row.build,
         row.evaluate,
         m2l.join(", "),
