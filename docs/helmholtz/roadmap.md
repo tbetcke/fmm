@@ -501,9 +501,14 @@ task's full line is in its record or report and its progress entry
   kD = 500). Proposal §3.5's check at x = 216: question 1 of the PR. *Needs:* CH3.6.
 - [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
   "Can you add leaf size tuning to the roadmap?"). Also (CH4.0c, report §3.2): on the
-  under-resolved W3 (N = 10⁶) at kD = 500 the leaf rule gives 2.06 million leaves on level 7,
-  most empty, and level 7's M2L takes 1,056 s of the 1,232 s evaluation under Rotation at 10⁻⁸
-  (247 of 340 s under the default); the empty leaves' cost is part of this task. `HelmholtzFmmBuilder` refines to a fixed
+  under-resolved W3 (N = 10⁶) at kD = 500 the leaf rule fills level 7 and the complete octree
+  gives 2.06 million leaves, 61 % empty and 0.62 million of one point; level 7's M2L runs every
+  V pair of the full level, empty boxes included (the plan's lists come from the keys alone),
+  and takes 1,056 s of the 1,232 s evaluation under Rotation at 10⁻⁸ (247 of 340 s under the
+  default). Both parts belong here: the leaves of about one point, and the M2L of empty boxes
+  (about 38 % of level 7's pairs have a source holding a point, 14 % a source and a target).
+  Skipping the latter changes the plan or the shared drivers, Laplace's paths (constraint 1), so
+  it is a question first. `HelmholtzFmmBuilder` refines to a fixed
   `DEFAULT_MAX_POINTS_PER_LEAF` = 64 points per leaf. That is Laplace's base value without
   Phase 6 T11's per-p rule (`default_max_points_per_leaf`: 128 from p = 12 on the host).
   The leaf rule of §3.7 (c_leaf = 1 wavelength, D11) only refines further. FMM3D's

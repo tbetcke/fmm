@@ -25,7 +25,9 @@ item 8 (the under-resolved W3), §9.1 (workloads, norms, the box measure), §10 
   10⁻⁸, 10⁻⁶ and 10⁻³, both M2Ls (at most 0.61 ε, ∇φ of the plane wave's trace at the samples,
   10⁻⁸, Rotation); at kD = 500 too (at most 0.72 ε, the plane wave's trace, the same case),
   after a defect it found. So §9 item 8 holds. Its tree there has 2.06 million leaves for 10⁶
-  points, and level 7's M2L takes 86 % of the evaluation under Rotation (§3.2), CH4.0d's.
+  points, 61 % of them empty (the leaf rule fills level 7, and the octree is complete), and
+  level 7's M2L, which runs every V pair of the full level, empty boxes included, takes 86 % of
+  the evaluation under Rotation (§3.2), CH4.0d's.
 - **A defect in the default M2L, fixed here.** On W3 at kD = 500 the default's build asked
   for 218 GB and aborted (all three densities): `HelmholtzFmmBuilder` sized the exponential
   M2L's waves buffer for the plan's boxes before it set the buffer's bound (CH6.2a's 8 GiB
@@ -202,11 +204,29 @@ Rotation. So §9 item 8 holds: the under-resolved inputs of W3 meet the toleranc
 and 500.
 
 **The cost of the under-resolved tree** (reported, not this task's to change). The leaf rule
-puts the leaves on level 7, and the tree has 2,056,727 leaves for 10⁶ points: most leaves are
-empty or hold one point. Under Rotation at 10⁻⁸ level 7's M2L takes 1,056 s of the 1,232 s
-evaluation (level 6 116 s, levels 2–5 37 s); the default's waves bring it to 247 s of 340 s.
-W1 at kD = 1000, with 8 million points, evaluates in 518 s. The leaf size and the empty leaves
-of the minimum leaf level are CH4.0d's (a sentence there).
+puts every leaf that holds a point on level 7 (λ = 2π/500 ≈ 0.0126 D, and level 6's boxes are
+0.0156 D wide), and nd-octree's tree is complete: a refined box has all eight children, and an
+empty child is a leaf. With 10⁶ uniform points over 128³ = 2,097,152 cells (0.477 per cell)
+nearly every level-6 box holds a point, so level 7 is nearly full. Poisson counts give 62 % of
+the cells empty, and 262,144 · e^(−8 · 0.477) ≈ 5,780 level-6 boxes whose eight children are
+all empty, which stay leaves: 2,097,152 − 7 · 5,780 ≈ 2,056,700 leaves, against 2,056,727
+measured. About 1.26 million leaves (61 %) are empty, 0.62 million hold one point and
+0.17 million more.
+
+The plan treats an empty leaf as any other box. Its lists come from the keys alone
+(`nd_fmm_plan::interaction_manager`), so it is a target and a source of V pairs; its P2M and
+L2P are no-ops on an empty chunk; and the drivers skip a box with no V row, never one without
+points. A full level 7 has 383,233,032 V pairs, level 6 46,298,376 (8.3×). At p = 24 on both
+levels, level 7's M2L took 9.1× level 6's (1,056 against 116 s; 7.9× for the plane wave's
+trace), so it ran every pair. About 38 % of those pairs have a source that holds a point and
+14 % a source and a target that do; the rest translate a zero multipole or give a local that no
+point reads. Under Rotation at 10⁻⁸ level 7's M2L takes 1,056 s of the 1,232 s evaluation
+(level 6 116 s, levels 2–5 37 s); the default's waves bring it to 247 s of 340 s. W1 at
+kD = 1000, with 8 million points, evaluates in 518 s.
+
+Two parts are CH4.0d's (a sentence there): the leaves of about one point that the rule makes
+here (even without the empty boxes, about 795 thousand boxes of 1.3 points each, each with an
+M2L at p = 24), and the work on empty boxes.
 
 ## 4. Questions for sign-off
 

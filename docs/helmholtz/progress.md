@@ -2966,6 +2966,7 @@ request, using this template:
   Nothing pending.
 - Decisions: question 1 of the PR, proposal §3.5's check at x = 216 (pending).
 - Laplace: not touched (the Helmholtz builder and operator, nd-fmm-validate's example, docs).
-- Follow-ups: CH4.0d (roadmap: the under-resolved W3's empty leaves, level 7's M2L 86 % of the
+- Follow-ups: CH4.0d (roadmap: the under-resolved W3's leaves of about one point and the M2L
+  of its empty boxes, 61 % of 2.06 million leaves, every V pair run; level 7's M2L 86 % of the
   evaluation at kD = 500); CH4.3 (the high-frequency recalibration; the tightest level at
   kD = 1000 is where the branch leaves the plateau).
