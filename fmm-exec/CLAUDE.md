@@ -561,7 +561,23 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `unpack_output_many` run unchanged with m replaced by the columns and output columns
   (CH3.0c's chunks); `HelmholtzFmmError` wraps `FmmError` for the shared steps. Doc-hidden
   for the tests: `pair_calls` (the evaluator runs `PerPair` of the operator) and
-  `reference_output` (the pass of `Densities::write_leaf_output`). `tests/helmholtz_fmm.rs`
+  `reference_output` (the pass of `Densities::write_leaf_output`).
+  Since Helmholtz CH4.0d1 (docs/helmholtz/tasks/CH4.0d1.md) the builder's plan has the
+  empty-box rule of `nd_fmm_plan::empty` by default (`HelmholtzFmmBuilder::empty_boxes`,
+  `HelmholtzFmm::empty_boxes`; what it left out is `plan().empty_boxes()`): step 4 counts
+  every local leaf's points where they are (`cost::leaf_point_counts`, used, not changed),
+  takes every box's subtree counts (`LeafCounts::exchange_with_boxes`) and builds the plan
+  again with `Plan::with_rules`. A box whose subtree holds no target loses its V, X, W and
+  L2L rows, one with no source leaves the V, W and M2M rows naming it; only exact zeros go,
+  so the output is the rule off's as values (−0 and +0 equal), and on P ranks the one-rank
+  FMM's of the same setting bit for bit. Auto's term counts the rule's V pairs, so under
+  the default a level's M2L may differ from the rule off's (it did on both test cases).
+  `check_empty_boxes` (a sphere at kD = 30 under the leaf rule, and the clusters with
+  separate targets) checks the rule off's values under Rotation, Batched, PlaneWave and Auto
+  without the term (and under the default where every level's M2L agrees), 2 threads and the
+  one-rank FMM bit for bit; `check_plane_wave` names the rule off, so that the clusters'
+  finest level still chunks at the waves buffer's floor. `FmmBuilder` (Laplace) has no rule
+  (CH4.0g decides). `tests/helmholtz_fmm.rs`
   (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,

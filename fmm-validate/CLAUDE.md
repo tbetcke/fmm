@@ -493,6 +493,16 @@ leaf size, and the box study against `crosscheck` (about 15 % more on its one-ra
 83–87 → 95–99 s on a loaded M6). `tools/helmholtz/ch4-0b-runs.sh` runs the task's stages.
 Its report is `results/helmholtz-ch4-0b.md`.
 
+Helmholtz CH4.0d1 (the empty-box rule; docs/helmholtz/tasks/CH4.0d1.md) added
+`helmholtz_accuracy::Case::empty_boxes` (`HelmholtzFmmBuilder::empty_boxes`, `true` in
+`Case::new` and named always) and `Row::{empty_boxes, left_out, remote_multipoles}` (what
+the rule left out, summed over the ranks, in `EmptyBoxes`' field order without naming the
+type, so no `nd-fmm-plan` dependency; the distinct multipoles each rank's V and W rows read
+from other ranks, summed), and to the example `--empty-boxes on|off,…` (the outermost run
+loop; the column "M2L" ending `/full` with the rule off) and a last table "Empty boxes".
+`tools/helmholtz/ch4-0d1-runs.sh` runs the task's measurements. Its report is
+`results/helmholtz-ch4-0d1.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
