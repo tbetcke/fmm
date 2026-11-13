@@ -138,7 +138,8 @@ pub struct PlanRules<'a> {
     pub near: Option<&'a NearRule<'a>>,
     /// The empty-box rule from these counts (Helmholtz CH4.0d1; the
     /// [`empty`](crate::empty) module): the subtree counts of every box with rows and of
-    /// every box a V, W or M2M row names ([`LeafCounts::exchange_with_boxes`]).
+    /// every box a V, W or M2M row names; [`LeafCounts::exchange_with_boxes`] gives those
+    /// of every held box.
     pub empty_boxes: Option<&'a LeafCounts>,
 }
 
@@ -352,6 +353,11 @@ impl Plan {
     ) -> Result<Self, PlanError> {
         let nlevels = octree.global_max_level() + 1;
         let map = octree.partition_map();
+        debug_assert_eq!(
+            &map.blocks()[map.rank_blocks(map.rank())],
+            &octree.coarse_tree_leafs()[..],
+            "the partition map names this rank's coarse blocks"
+        );
         let local = if !octree.options().ghost_children() {
             Err(PlanError::MissingGhostChildren)
         } else if !index.is_index_of(octree.all_keys(), nlevels) {
@@ -651,7 +657,8 @@ pub(crate) fn index_from_keys(
     Ok(BoxIndex::new(keys, kinds))
 }
 
-/// Agree the outcome of a local build (a plan or a box index) on every rank of `octree`'s communicator: one
+/// Agree the outcome of a local build (a plan or a box index) on every rank of `octree`'s
+/// communicator: one
 /// all-reduce; a rank whose build succeeded returns [`PlanError::OtherRank`] if another
 /// rank's failed.
 pub(crate) fn agree<T, C: CommunicatorCollectives>(

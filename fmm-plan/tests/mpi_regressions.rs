@@ -3273,7 +3273,9 @@ fn check_redistribution_errors<C: CommunicatorCollectives>(
     let error = Redistribution::with_index(octree, other.index(), &mine).err();
     assert_eq!(error, expected, "{name}: index of another tree");
     // A plan on the index of another tree: `IndexMismatch` where the keys differ.
-    let local_mismatch = *octree.all_keys() != map || octree.global_max_level() != 1;
+    // `global_max_level` is collective: every rank calls it.
+    let nlevels = octree.global_max_level() + 1;
+    let local_mismatch = *octree.all_keys() != map || nlevels != 2;
     comm.all_reduce_into(
         &local_mismatch,
         &mut any_mismatch,

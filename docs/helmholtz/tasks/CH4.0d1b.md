@@ -66,7 +66,9 @@ CH4.0d1's bit for bit, Laplace unchanged."
 5. **`nd-fmm-exec`.** `pipeline::Points::route` takes the `BoxIndex` (crate-private; `Fmm`
    passes `plan.index()`, the same bits). `HelmholtzFmmBuilder::build`, step 4, with the
    rule: `BoxIndex::of_octree`, the routes on it, the counts, `Plan::with_rules_on`; without
-   the rule `Plan::new` as now.
+   the rule `Plan::new` as now. (As built: without the rule too the index first and
+   `Plan::with_rules_on` with no rule, which is `Plan::new`'s plan bit for bit
+   (`mpi_regressions`); one path, and the routes on the index either way.)
 
 Alternatives, not proposed:
 - **The rule applied to the first plan's rows** (a `Plan::apply_empty_boxes`): keeps
