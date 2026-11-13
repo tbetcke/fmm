@@ -165,4 +165,7 @@ Decides: the *Done when*.
 
 ## Open questions
 
-1. The design above (the `nd-fmm-plan` interface): asked before the code.
+Asked before the code (`/next-task` step 3: the plan changes `nd-fmm-plan`'s interface),
+answered on 2026-11-13 by the user:
+
+1. The design above (the `nd-fmm-plan` interface): "Approve (Recommended)".
