@@ -174,6 +174,9 @@ pub enum HelmholtzFmmError {
     /// A named V crossover ([`VNear::Crossover`]) is negative or not a number.
     #[error("the V crossover must be at least 0, got {0}")]
     VCrossover(f64),
+    /// A named W or X crossover ([`WxNear::Crossovers`]) is negative or not a number.
+    #[error("the W and X crossovers must be at least 0, got {0} and {1}")]
+    WxCrossover(f64, f64),
     /// The input is invalid on another rank.
     #[error("the input is invalid on another rank")]
     OtherRank,
@@ -207,6 +210,43 @@ impl std::fmt::Display for VNear {
         match self {
             Self::Off => write!(f, "off"),
             Self::Crossover(n) => write!(f, "{n}"),
+            Self::CostModel => write!(f, "cost"),
+        }
+    }
+}
+
+/// Which W and X pairs between two leaves the plan makes near pairs (Helmholtz CH4.0d3;
+/// [`HelmholtzFmmBuilder::near_wx`]; `nd_fmm_plan::near::NearRule`, Laplace's mechanism of
+/// Phase 6 T12): a W pair (a leaf t and a finer leaf s of its W list) converts where s holds
+/// fewer source points than the crossover of s's level, its M2P at t's points replaced by
+/// the exact P2P; an X pair (a leaf t and a coarser leaf s of its X list) where t holds fewer
+/// target points than the crossover of t's level, its P2L from s's points replaced by the
+/// P2P. Interior W entries never convert. Each target point's work is then n_s P2P
+/// interactions in place of one M2P (or each source point's n_t in place of one P2L).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum WxNear {
+    /// No W or X pair converts.
+    #[default]
+    Off,
+    /// The W pairs whose finer leaf holds fewer than `w` source points and the X pairs whose
+    /// finer leaf holds fewer than `x` target points, on every level, for the measurements;
+    /// `f64::INFINITY` converts every one.
+    Crossovers {
+        /// The crossover of the W pairs, in source points.
+        w: f64,
+        /// The crossover of the X pairs, in target points.
+        x: f64,
+    },
+    /// The crossovers of each level from the cost model ([`wx_crossovers`]): the thread time
+    /// of an M2P (P2L) per point at the finer leaf's degree over the P2P's per interaction.
+    CostModel,
+}
+
+impl std::fmt::Display for WxNear {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Off => write!(f, "off"),
+            Self::Crossovers { w, x } => write!(f, "w{w}x{x}"),
             Self::CostModel => write!(f, "cost"),
         }
     }
@@ -254,6 +294,7 @@ pub struct HelmholtzFmmBuilder {
     p2p: P2pChoice,
     empty_boxes: bool,
     near_v: VNear,
+    near_wx: WxNear,
     pair_calls: bool,
 }
 
@@ -296,6 +337,7 @@ impl HelmholtzFmmBuilder {
             p2p: P2pChoice::Auto,
             empty_boxes: true,
             near_v: VNear::Off,
+            near_wx: WxNear::Off,
             pair_calls: false,
         }
     }
@@ -453,9 +495,21 @@ impl HelmholtzFmmBuilder {
     /// output is not the rule off's; the source exchange then delivers the converted ghost
     /// leaves' points too, and a multipole no row reads is no longer sent.
     /// [`HelmholtzFmm::plan`]'s `near_pairs` reports the pairs offered and converted. W and
-    /// X pairs are never converted here.
+    /// X pairs are [`near_wx`](Self::near_wx)'s.
     pub fn near_v(mut self, choice: VNear) -> Self {
         self.near_v = choice;
+        self
+    }
+
+    /// Which W and X pairs between two leaves become near pairs (Helmholtz CH4.0d3,
+    /// [`WxNear`]; default [`WxNear::Off`]), by the same near rule and counts as
+    /// [`near_v`](Self::near_v), in the same plan: each pair decided on its target's rank
+    /// from counts by key and crossovers agreed over the ranks, so the output on P ranks is
+    /// the one-rank FMM's of the same setting bit for bit. A converted pair is exact, so the
+    /// output is not the rule off's. [`HelmholtzFmm::plan`]'s `near_pairs` reports the W and
+    /// X pairs offered and converted.
+    pub fn near_wx(mut self, choice: WxNear) -> Self {
+        self.near_wx = choice;
         self
     }
 
@@ -606,6 +660,11 @@ impl HelmholtzFmmBuilder {
             && (n.is_nan() || n < 0.0)
         {
             return Err(HelmholtzFmmError::VCrossover(n));
+        }
+        if let WxNear::Crossovers { w, x } = self.near_wx
+            && (w.is_nan() || w < 0.0 || x.is_nan() || x < 0.0)
+        {
+            return Err(HelmholtzFmmError::WxCrossover(w, x));
         }
         if let Degrees::Tolerance(_) = self.degrees {
             // The tolerance's own check; the levels come with the plan.
@@ -789,7 +848,8 @@ impl HelmholtzFmmBuilder {
         // The plan, once, on the index: with the empty-box rule and the V pairs' near rule
         // (Helmholtz CH4.0d2) from the routes' points per local leaf. Every plan of the
         // octree has the index's local leaves, so the routes and the leaf ranges hold for it.
-        let counts = if self.empty_boxes || self.near_v != VNear::Off {
+        let counts = if self.empty_boxes || self.near_v != VNear::Off || self.near_wx != WxNear::Off
+        {
             Some(
                 LeafCounts::exchange_with_boxes(
                     &octree,
@@ -802,7 +862,25 @@ impl HelmholtzFmmBuilder {
         } else {
             None
         };
-        let no_leaf_pairs = |_: LeafPair| false;
+        // The W and X crossovers of each level (Helmholtz CH4.0d3), by the finer leaf's
+        // level: named, or the cost model's at the level's degree; agreed over the ranks.
+        let local: Vec<f64> = (0..degrees.len())
+            .flat_map(|l| match self.near_wx {
+                WxNear::Off => [0.0, 0.0],
+                WxNear::Crossovers { w, x } => [w, x],
+                WxNear::CostModel => wx_crossovers(&wx_costs(isa), &v_costs(isa), degrees[l]),
+            })
+            .collect();
+        let mut wx = vec![0.0f64; local.len()];
+        comm.all_reduce_into(&local[..], &mut wx[..], SystemOperation::min());
+        let leaf_pairs = |pair: LeafPair| match pair {
+            LeafPair::W {
+                source, sources, ..
+            } => (sources as f64) < wx[2 * morton::level(source)],
+            LeafPair::X {
+                target, targets, ..
+            } => (targets as f64) < wx[2 * morton::level(target) + 1],
+        };
         // The crossover of each level: named, or the cost model's for the cheapest M2L the
         // setting may run there (Auto's choice after the plan reads the pairs left, so a
         // dearer one only means that more pairs would have paid).
@@ -847,9 +925,12 @@ impl HelmholtzFmmBuilder {
                 ((pair.sources * pair.targets) as f64) < crossovers[level]
             }
         };
-        let near = match (&counts, self.near_v) {
-            (Some(counts), VNear::Crossover(_) | VNear::CostModel) => {
-                Some(NearRule::new(counts, &no_leaf_pairs).with_v_pairs(&v_pairs))
+        let near = match (&counts, self.near_v, self.near_wx) {
+            (Some(counts), VNear::Crossover(_) | VNear::CostModel, _) => {
+                Some(NearRule::new(counts, &leaf_pairs).with_v_pairs(&v_pairs))
+            }
+            (Some(counts), VNear::Off, WxNear::Crossovers { .. } | WxNear::CostModel) => {
+                Some(NearRule::new(counts, &leaf_pairs))
             }
             _ => None,
         };
@@ -994,6 +1075,7 @@ impl HelmholtzFmmBuilder {
             ranks_per_node,
             empty_boxes: self.empty_boxes,
             near_v: self.near_v,
+            near_wx: self.near_wx,
         })
     }
 }
@@ -1034,6 +1116,52 @@ pub const V_COSTS_NEON: VCosts = VCosts {
     batched: 0.07,
     plane_wave: 6.0,
 };
+
+/// The cost model of the W and X pairs' near rule for one machine class (Helmholtz CH4.0d3,
+/// [`WxNear::CostModel`]), in thread-nanoseconds: an M2P per target point and a P2L per
+/// source point, each a + b (p + 1)² at the degree p of the finer leaf's level, complex
+/// charges with gradients in f64 (the P2P per interaction is [`VCosts::p2p`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WxCosts {
+    /// M2P per target point, [a, b].
+    pub m2p: [f64; 2],
+    /// P2L per source point, [a, b].
+    pub p2l: [f64; 2],
+}
+
+/// [`WxCosts`] of x86 (AVX-512 and AVX2; measured on Kathleen, Xeon Gold 6248, one rank ×
+/// 40 threads).
+pub const WX_COSTS_X86: WxCosts = WxCosts {
+    m2p: [0.0, 5.0],
+    p2l: [0.0, 5.0],
+};
+
+/// [`WxCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads; the M6 takes
+/// them unmeasured).
+pub const WX_COSTS_NEON: WxCosts = WxCosts {
+    m2p: [0.0, 5.0],
+    p2l: [0.0, 5.0],
+};
+
+/// The [`WxCosts`] of the machine class of `isa` (NEON's for NEON, x86's otherwise).
+pub fn wx_costs(isa: Isa) -> WxCosts {
+    match isa {
+        Isa::Neon => WX_COSTS_NEON,
+        _ => WX_COSTS_X86,
+    }
+}
+
+/// The crossovers [W, X] of a level of degree `p` (Helmholtz CH4.0d3, [`WxNear::CostModel`]):
+/// an M2P per target point over the P2P per interaction, in the W leaf's source points, and a
+/// P2L per source point over it, in the X leaf's target points. The gradients scale both
+/// sides alike, so the crossovers do not read them.
+pub fn wx_crossovers(costs: &WxCosts, v_costs: &VCosts, p: usize) -> [f64; 2] {
+    let q2 = ((p + 1) * (p + 1)) as f64;
+    [
+        (costs.m2p[0] + costs.m2p[1] * q2) / v_costs.p2p,
+        (costs.p2l[0] + costs.p2l[1] * q2) / v_costs.p2p,
+    ]
+}
 
 /// The share of the P2P's time per interaction without gradients: the P2P kernel's
 /// potential over its potential and gradient (Helmholtz CH3.4b, Laplace's AVX-512 f64 0.40
@@ -1249,6 +1377,8 @@ where
     empty_boxes: bool,
     /// The V pairs' near rule as built (Helmholtz CH4.0d2).
     near_v: VNear,
+    /// The W and X pairs' near rule as built (Helmholtz CH4.0d3).
+    near_wx: WxNear,
 }
 
 impl<'o, T, C> HelmholtzFmm<'o, T, C>
@@ -1489,10 +1619,42 @@ where
             .collect()
     }
 
+    /// The point interactions of each level's P2L and M2P on this rank (Helmholtz CH4.0d3):
+    /// `[Σ_X n_s, Σ_W n_t]`, over the boxes of the level the source points of every leaf of
+    /// their X rows, and over the local leaves of the level their target points times the
+    /// entries of their W rows (the work of P2L and M2P, each per point and expansion).
+    pub fn far_interactions(&self) -> Vec<[u64; 2]> {
+        let plan = self.evaluator.plan();
+        let sources = self.evaluator.source_exchange().leaf_counts();
+        let targets = &self.points.target_leaves.counts;
+        let leaves = plan.index().leaves();
+        (0..plan.nlevels())
+            .map(|level| {
+                let lists = plan.level(level);
+                let x = lists.x();
+                let p2l: usize = (0..x.nrows())
+                    .map(|t| x.row(t).iter().map(|&j| sources[j as usize]).sum::<usize>())
+                    .sum();
+                let w = lists.w();
+                let first = leaves.local(level).start;
+                let m2p: usize = (0..w.nrows())
+                    .map(|r| targets[first + r] * w.row(r).len())
+                    .sum();
+                [p2l as u64, m2p as u64]
+            })
+            .collect()
+    }
+
     /// The V pairs' near rule as built ([`HelmholtzFmmBuilder::near_v`]); the pairs offered
     /// and converted on this rank are [`plan`](Self::plan)'s `near_pairs`.
     pub fn near_v(&self) -> VNear {
         self.near_v
+    }
+
+    /// The W and X pairs' near rule as built ([`HelmholtzFmmBuilder::near_wx`]); the pairs
+    /// offered and converted on this rank are [`plan`](Self::plan)'s `near_pairs`.
+    pub fn near_wx(&self) -> WxNear {
+        self.near_wx
     }
 
     /// The domain.

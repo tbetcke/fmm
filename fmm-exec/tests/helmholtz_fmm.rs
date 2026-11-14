@@ -96,7 +96,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
     DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber, WxNear,
     auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
     auto_plane_wave_min_degree,
 };
@@ -2115,6 +2115,18 @@ fn check_errors(comm: &SimpleCommunicator) {
         );
     }
 
+    // W and X crossovers below 0 or not a number (CH4.0d3).
+    for (w, x) in [(-1.0, 1.0), (1.0, f64::NAN)] {
+        let error = builder(scenario)
+            .near_wx(WxNear::Crossovers { w, x })
+            .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+            .err();
+        assert!(
+            matches!(error, Some(HelmholtzFmmError::WxCrossover(..))),
+            "rank {rank}: W and X crossovers of {w} and {x}: {error:?}"
+        );
+    }
+
     // An ISA this machine lacks, on every rank: its own error everywhere.
     if let Some(isa) = Isa::all().find(|isa| !isa.is_available()) {
         let error = builder(scenario)
@@ -2525,6 +2537,129 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
     totals
 }
 
+/// The W and X pairs between leaves as near pairs (Helmholtz CH4.0d3;
+/// `HelmholtzFmmBuilder::near_wx`), under Rotation and the default, at crossovers that
+/// convert some pairs and keep others, at ∞ (every W and X pair between leaves), by the cost
+/// model, and by the cost model with the V rule's: the errors against the direct sum within
+/// [`NEAR_ERROR_BOUND`] of the rule off's, 2 threads the one-thread output bit for bit, on P
+/// ranks the one-rank FMM's of the same rule bit for bit, and the P2L and M2P interactions at
+/// most the rule off's. Crossovers of 0 convert nothing: the rule off's output bit for bit.
+/// Returns the W pairs between leaves offered and converted and the X pairs offered and
+/// converted at the middle crossover under Rotation, over every rank.
+fn check_near_wx(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) -> [usize; 4] {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let mut totals = [0usize; 4];
+    let far = |fmm: &HelmholtzFmm<'_, f64>| {
+        let local: Vec<u64> = fmm.far_interactions().iter().flatten().copied().collect();
+        let mut summed = vec![0u64; local.len()];
+        comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+        summed.iter().sum::<u64>()
+    };
+    for (setting, off) in [
+        ("Rotation", builder(scenario)),
+        ("the default", default_builder(scenario)),
+    ] {
+        let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
+        assert_eq!(fmm_off.near_wx(), WxNear::Off, "the rule is off by default");
+        let (phi_off, grad_off) = errors(scenario, &inputs, &output_off, 0, comm);
+        let far_off = far(&fmm_off);
+        drop(fmm_off);
+
+        let name = &format!("{}, W and X pairs at 0, {setting}", scenario.name);
+        let zero = WxNear::Crossovers { w: 0.0, x: 0.0 };
+        let (fmm, output) = run(&off.clone().near_wx(zero), &inputs, kind, comm);
+        let pairs = fmm.plan().near_pairs();
+        assert_eq!(pairs.w_converted + pairs.x_converted, 0, "{name}");
+        assert_same(name, &output, &output_off, comm);
+        drop(fmm);
+
+        let choices = [
+            (
+                WxNear::Crossovers {
+                    w: crossover,
+                    x: crossover,
+                },
+                VNear::Off,
+            ),
+            (
+                WxNear::Crossovers {
+                    w: f64::INFINITY,
+                    x: f64::INFINITY,
+                },
+                VNear::Off,
+            ),
+            (WxNear::CostModel, VNear::Off),
+            (WxNear::CostModel, VNear::CostModel),
+        ];
+        for (choice, near_v) in choices {
+            let name = &format!(
+                "{}, W and X pairs {choice}, V {near_v}, {setting}",
+                scenario.name
+            );
+            let on = off.clone().near_wx(choice).near_v(near_v);
+            let (fmm, output) = run(&on, &inputs, kind, comm);
+            assert_eq!(fmm.near_wx(), choice, "{name}");
+            let pairs = fmm.plan().near_pairs();
+            if matches!(choice, WxNear::Crossovers { w, .. } if w == f64::INFINITY) {
+                assert_eq!(
+                    pairs.w_converted, pairs.w_leaf_pairs,
+                    "{name}: every W pair"
+                );
+                assert_eq!(
+                    pairs.x_converted, pairs.x_leaf_pairs,
+                    "{name}: every X pair"
+                );
+            }
+            if near_v == VNear::Off {
+                assert_eq!(pairs.v_converted, 0, "{name}: W and X pairs only");
+            }
+            let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
+            if comm.rank() == 0 {
+                println!(
+                    "{name}: relative L2 φ {phi:.3e} (off {phi_off:.3e}), ∇φ {grad:.3e} \
+                     (off {grad_off:.3e})"
+                );
+            }
+            assert!(
+                phi <= NEAR_ERROR_BOUND * phi_off && grad <= NEAR_ERROR_BOUND * grad_off,
+                "{name}: φ {phi:.3e}, ∇φ {grad:.3e} against the rule off's {phi_off:.3e}, \
+                 {grad_off:.3e}"
+            );
+            let far_on = far(&fmm);
+            assert!(
+                far_on <= far_off,
+                "{name}: {far_on} P2L and M2P interactions, off {far_off}"
+            );
+            let (_, threaded) = run(&on.clone().threads(2), &inputs, kind, comm);
+            assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+            check_one_rank(name, &on, &inputs, kind, &output, comm);
+            if setting == "Rotation"
+                && choice
+                    == (WxNear::Crossovers {
+                        w: crossover,
+                        x: crossover,
+                    })
+            {
+                let local = [
+                    pairs.w_leaf_pairs,
+                    pairs.w_converted,
+                    pairs.x_leaf_pairs,
+                    pairs.x_converted,
+                ];
+                comm.all_reduce_into(&local[..], &mut totals[..], SystemOperation::sum());
+            }
+        }
+    }
+    if comm.rank() == 0 {
+        println!(
+            "{}, W and X pairs below {crossover}: W {} of {}, X {} of {} converted",
+            scenario.name, totals[1], totals[0], totals[3], totals[2]
+        );
+    }
+    totals
+}
+
 /// The scenario of [`check_empty_boxes`] whose leaves the leaf rule fills with empty boxes:
 /// points on a sphere at kD = 30, leaves on level 3 or finer, about three quarters of
 /// level 3 empty.
@@ -2759,6 +2894,23 @@ fn helmholtz_fmm() {
     }
     // The leaf size and c_leaf (CH4.0d3): the sphere under the leaf rule.
     check_leaf_sizes(&sphere_scenario(), &comm);
+    // The W and X pairs as near pairs (CH4.0d3): the clusters with separate targets and the
+    // sphere under the leaf rule, adaptive trees with W and X lists.
+    let mut wx = [0usize; 4];
+    for scenario in [&scenarios()[2], &sphere_scenario()] {
+        let totals = check_near_wx(scenario, 12.0, &comm);
+        for (sum, total) in wx.iter_mut().zip(totals) {
+            *sum += total;
+        }
+    }
+    assert!(
+        0 < wx[1] && wx[1] < wx[0] && 0 < wx[3] && wx[3] < wx[2],
+        "the W and X rule converted none or all: W {} of {}, X {} of {}",
+        wx[1],
+        wx[0],
+        wx[3],
+        wx[2]
+    );
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);
     check_vectors(&scenarios()[2], &comm);

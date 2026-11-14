@@ -23,6 +23,10 @@
 #   core`) and again on one rank × T threads, at the sizes TRAFFIC_SIZES (default
 #   auto,256): W1 at kD = 500 and W4's Plummer sphere at kD = 10, 10⁻⁶ (the checksums of 4
 #   ranks against one: rank-count invariance at each size);
+# - `calibrate`: the W and X rule's constants (`--near-wx off`, `--levels`, the table "Leaf
+#   operators": thread-ns per P2L and M2P interaction by degree): W4's Plummer sphere, clusters
+#   and sphere at N = 10⁵ and kD = 1, 10, 100, and W1 at kD = 100, at 10⁻³, 10⁻⁶, 10⁻⁸, leaf
+#   sizes 64 and 256, one evaluation;
 # - `custom`: CASES (`name|arguments` entries separated by `;`) at SIZES and their
 #   reverse, for round 2 (the proposed rule, `auto`, against 64).
 # NEAR (a `--near-v` list, default off,cost) replaces every stage's. One rank × THREADS
@@ -112,6 +116,17 @@ for stage in "$@"; do
             # shellcheck disable=SC2086
             launch "traffic-$name-1x" "$X" ${entry#*|} --eps 1e-6 "${RUN[@]}" \
                 --leaf-size "$sizes" --threads "$T"
+        done
+        ;;
+    calibrate)
+        for entry in "w4-plummer|--workload w4-plummer:100000 --kd 1,10,100" \
+            "w4-clusters|--workload w4-clusters:100000 --kd 1,10,100" \
+            "w4-sphere|--workload w4-sphere:100000 --kd 1,10,100" \
+            "w1|--workload w1 --kd 100"; do
+            name=${entry%%|*}
+            # shellcheck disable=SC2086
+            launch "calibrate-$name" "$X" ${entry#*|} --eps "$EPS" --m2l auto-pw --levels \
+                --near-wx off --leaf-size 64,256 --threads "$T"
         done
         ;;
     custom)

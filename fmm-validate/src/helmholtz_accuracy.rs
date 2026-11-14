@@ -60,7 +60,11 @@
 //!   interaction.
 //!   [`Case::max_points_per_leaf`] and [`Case::c_leaf`] (Helmholtz CH4.0d3) the tree;
 //!   [`Row::leaves_by_level`] its leaves, [`Row::kind_seconds`] the other kinds' level calls
-//!   per level and [`Row::far_leaf_entries`] the X and W entries, for the leaf size's cost.
+//!   per level and [`Row::far_leaf_entries`] the X and W entries, for the leaf size's cost;
+//!   [`Case::near_wx`] which W and X pairs between leaves become near pairs (off by default,
+//!   the library's), [`Row::wx_near`] the pairs offered and converted and
+//!   [`Row::far_interactions`] the P2L and M2P point interactions per level, for the rule's
+//!   cost model.
 
 use std::ops::Range;
 use std::thread;
@@ -72,7 +76,7 @@ use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber,
+    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber, WxNear,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -169,6 +173,9 @@ pub struct Case {
     /// Which V pairs between leaves become near pairs (`HelmholtzFmmBuilder::near_v`,
     /// Helmholtz CH4.0d2; [`VNear::Off`] in [`Case::new`], the library's default).
     pub near_v: VNear,
+    /// Which W and X pairs between leaves become near pairs (`HelmholtzFmmBuilder::near_wx`,
+    /// Helmholtz CH4.0d3; [`WxNear::Off`] in [`Case::new`], the library's default).
+    pub near_wx: WxNear,
 }
 
 impl Case {
@@ -207,6 +214,7 @@ impl Case {
             c_leaf: None,
             empty_boxes: true,
             near_v: VNear::Off,
+            near_wx: WxNear::Off,
         }
     }
 }
@@ -637,6 +645,14 @@ pub struct Row {
     /// Per level, the plan's X entries (P2L, leaves of the next coarser level) and W entries
     /// (M2P, boxes of the next finer level), summed over the ranks (Helmholtz CH4.0d3).
     pub far_leaf_entries: Vec<[usize; 2]>,
+    /// Per level, the point interactions of P2L and M2P, [Σ_X n_s, Σ_W n_t], summed over the
+    /// ranks (`HelmholtzFmm::far_interactions`; Helmholtz CH4.0d3).
+    pub far_interactions: Vec<[u64; 2]>,
+    /// The W and X pairs' near rule as built (Helmholtz CH4.0d3).
+    pub near_wx: WxNear,
+    /// The W pairs between leaves the rule offered and converted, and the X pairs, summed
+    /// over the ranks (`NearPairs`' W and X fields; Helmholtz CH4.0d3).
+    pub wx_near: [usize; 4],
     /// The build, seconds (slowest rank).
     pub build: f64,
     /// The evaluation, seconds (slowest rank); the last of [`Case::evaluations`].
@@ -805,6 +821,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         .batched_term(case.batched_term)
         .empty_boxes(case.empty_boxes)
         .near_v(case.near_v)
+        .near_wx(case.near_wx)
         .plane_wave_precision(case.plane_wave.clone());
     if let Some(width) = case.m2l_block_targets {
         builder = builder.m2l_block_targets(width);
@@ -922,7 +939,20 @@ pub fn run_output<C: CommunicatorCollectives>(
         &mut near_interactions[..],
         SystemOperation::sum(),
     );
+    let local: Vec<u64> = fmm.far_interactions().into_iter().flatten().collect();
+    let mut summed = vec![0u64; local.len()];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let far_interactions: Vec<[u64; 2]> = summed.as_chunks::<2>().0.to_vec();
     let pairs = fmm.plan().near_pairs();
+    let local = [
+        pairs.w_leaf_pairs,
+        pairs.w_converted,
+        pairs.x_leaf_pairs,
+        pairs.x_converted,
+    ]
+    .map(|n| n as u64);
+    let mut wx_totals = [0u64; 4];
+    comm.all_reduce_into(&local[..], &mut wx_totals[..], SystemOperation::sum());
     let (sent, received) = fmm.source_points_exchanged();
     let local = [pairs.v_leaf_pairs, pairs.v_converted, sent, received].map(|n| n as u64);
     let mut v_totals = [0u64; 4];
@@ -1094,6 +1124,9 @@ pub fn run_output<C: CommunicatorCollectives>(
         left_out: core::array::from_fn(|i| totals[i] as usize),
         remote_multipoles: totals[8] as usize,
         near_v: fmm.near_v(),
+        far_interactions,
+        near_wx: fmm.near_wx(),
+        wx_near: wx_totals.map(|n| n as usize),
         v_near: [v_totals[0] as usize, v_totals[1] as usize],
         source_points: [v_totals[2] as usize, v_totals[3] as usize],
         p2p_seconds,

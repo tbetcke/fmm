@@ -27,7 +27,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzM2l, LevelShape, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, VNear, Wavenumber, WavenumberKind, auto_m2l_mul_add, s7_degree,
+    PlaneWaveRaise, PlaneWaveSplit, VNear, Wavenumber, WavenumberKind, WxNear, auto_m2l_mul_add,
+    s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -651,6 +652,63 @@ fn helmholtz_accuracy_harness() {
     check_empty_boxes(&world);
     check_near_v(&world);
     check_leaves(&world);
+    check_near_wx(&world);
+}
+
+/// The W and X pairs as near pairs (Helmholtz CH4.0d3) on W4's clusters (N = 2,000, kD = 10;
+/// an adaptive tree): off by default with nothing offered; at `inf` every W and X pair
+/// between leaves converted, the P2L and M2P interactions fewer and the near interactions
+/// more than off, the errors within 1.1× the rule off's.
+fn check_near_wx(world: &SimpleCommunicator) {
+    let off = Case::new(
+        Workload::W4 {
+            distribution: Distribution::Clusters,
+            n: 2000,
+        },
+        (10.0, 0.0),
+        Degrees::Tolerance(1e-3),
+    );
+    assert_eq!(off.near_wx, WxNear::Off, "the library's default");
+    let on = Case {
+        near_wx: WxNear::Crossovers {
+            w: f64::INFINITY,
+            x: f64::INFINITY,
+        },
+        max_points_per_leaf: Some(16),
+        ..off.clone()
+    };
+    let off = Case {
+        max_points_per_leaf: Some(16),
+        ..off
+    };
+    let problem = Problem::new(&off);
+    let oracle = Oracle::sharded(complex_k(&off), &problem, off.gradients, 2, world);
+    let row_off = run(&off, &problem, &oracle, 1, world).expect("the FMM runs");
+    let row_on = run(&on, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row_off.near_wx, WxNear::Off);
+    assert_eq!(row_on.near_wx, on.near_wx);
+    let [w, w_converted, x, x_converted] = row_on.wx_near;
+    assert!(
+        w + x > 0 && w_converted == w && x_converted == x,
+        "{:?}",
+        row_on.wx_near
+    );
+    assert_eq!(row_off.wx_near[1] + row_off.wx_near[3], 0);
+    let far = |row: &Row| row.far_interactions.iter().flatten().sum::<u64>();
+    assert!(
+        far(&row_on) < far(&row_off),
+        "{} {}",
+        far(&row_on),
+        far(&row_off)
+    );
+    let near = |row: &Row| row.near_interactions.iter().sum::<u64>();
+    assert!(near(&row_on) > near(&row_off));
+    for (on, off) in row_on.errors.iter().zip(&row_off.errors) {
+        assert!(
+            on[0] <= 1.1 * off[0] && on[1] <= 1.1 * off[1],
+            "{on:?}, {off:?}"
+        );
+    }
 }
 
 /// The leaf size and c_leaf (Helmholtz CH4.0d3) on W1 at kD = 100 (leaves on the leaf
