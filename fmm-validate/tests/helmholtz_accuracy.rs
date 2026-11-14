@@ -666,7 +666,7 @@ fn helmholtz_accuracy_harness() {
 }
 
 /// The W and X pairs as near pairs (Helmholtz CH4.0d3) on W4's clusters (N = 2,000, kD = 10;
-/// an adaptive tree): off by default with nothing offered; at `inf` every W and X pair
+/// an adaptive tree): off in `Case::new` with nothing offered; at `inf` every W and X pair
 /// between leaves converted, the P2L and M2P interactions fewer and the near interactions
 /// more than off, the errors within 1.1× the rule off's.
 fn check_near_wx(world: &SimpleCommunicator) {
@@ -678,7 +678,7 @@ fn check_near_wx(world: &SimpleCommunicator) {
         (10.0, 0.0),
         Degrees::Tolerance(1e-3),
     );
-    assert_eq!(off.near_wx, WxNear::Off, "the library's default");
+    assert_eq!(off.near_wx, WxNear::Off, "Case::new's");
     let on = Case {
         near_wx: WxNear::Crossovers {
             w: f64::INFINITY,
@@ -796,7 +796,7 @@ fn check_leaves(world: &SimpleCommunicator) {
 /// the P2P timed on every level with interactions.
 fn check_near_v(world: &SimpleCommunicator) {
     let off = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
-    assert_eq!(off.near_v, VNear::Off, "the library's default");
+    assert_eq!(off.near_v, VNear::Off, "Case::new's");
     let on = Case {
         near_v: VNear::Crossover(f64::INFINITY),
         ..off.clone()

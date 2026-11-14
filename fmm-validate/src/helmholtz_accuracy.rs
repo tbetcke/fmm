@@ -164,17 +164,20 @@ pub struct Case {
     /// `None` the library's); above N, a tree of leaves on the leaf rule's level alone.
     pub max_points_per_leaf: Option<usize>,
     /// The maximum leaf width in wavelengths (`HelmholtzFmmBuilder::c_leaf`, Helmholtz
-    /// CH4.0d3; `None` the library's, `C_LEAF`).
+    /// CH4.0d3; `None` the library's, `DEFAULT_C_LEAF`).
     pub c_leaf: Option<f64>,
     /// Whether the plan leaves out the work of empty boxes
     /// (`HelmholtzFmmBuilder::empty_boxes`, Helmholtz CH4.0d1; `true` in [`Case::new`], the
     /// library's default); named always, as `auto_plane_wave`.
     pub empty_boxes: bool,
     /// Which V pairs between leaves become near pairs (`HelmholtzFmmBuilder::near_v`,
-    /// Helmholtz CH4.0d2; [`VNear::Off`] in [`Case::new`], the library's default).
+    /// Helmholtz CH4.0d2; [`VNear::Off`] in [`Case::new`], the library's default before
+    /// Helmholtz CH4.0d3, `VNear::CostModel` since; named always, so a case's pairs do not
+    /// move with the library's default).
     pub near_v: VNear,
     /// Which W and X pairs between leaves become near pairs (`HelmholtzFmmBuilder::near_wx`,
-    /// Helmholtz CH4.0d3; [`WxNear::Off`] in [`Case::new`], the library's default).
+    /// Helmholtz CH4.0d3; [`WxNear::Off`] in [`Case::new`]; the library's default is
+    /// `WxNear::CostModel`; named always, as `near_v`).
     pub near_wx: WxNear,
 }
 
@@ -734,7 +737,9 @@ impl Row {
     /// CH3.4b's contract range): a near pair's leaves are adjacent, or V leaves of one level
     /// made near (`near_v`, at most three boxes apart per axis), and no leaf holding a point
     /// is wider than [`widest_occupied_leaf`](Self::widest_occupied_leaf) w, so r ≤ 2√3 w,
-    /// or 4√3 w with V pairs converted.
+    /// or 4√3 w with V pairs converted. A converted W or X pair (`near_wx`) joins a leaf to
+    /// a finer one inside a neighbour of its width, so its points lie within 2√3 times the
+    /// coarser leaf's width and it adds nothing to the bound.
     pub fn phase_bound(&self, re_k: f64) -> f64 {
         let span = if self.v_near[1] > 0 { 4.0 } else { 2.0 };
         re_k * span * 3f64.sqrt() * self.widest_occupied_leaf()

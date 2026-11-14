@@ -2364,7 +2364,9 @@ fn check_leaf_sizes(scenario: &Scenario, comm: &SimpleCommunicator) {
             "{name}: {by_level:?}"
         );
         // The other kinds timed (CH4.0d3), on this rank: L2P on every level with a leaf
-        // holding a point, P2L on every level whose plan has X entries; agreed.
+        // holding a point (the sphere's targets are its sources, so every such leaf holds a
+        // target; with separate targets a leaf of sources alone runs no L2P under the
+        // empty-box rule), P2L on every level whose plan has X entries; agreed.
         let times = fmm.operator().kind_times();
         let timed = times.len() == fmm.nlevels()
             && by_level.iter().enumerate().all(|(level, count)| {

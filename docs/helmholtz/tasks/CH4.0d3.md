@@ -88,8 +88,8 @@ Conventions: none. Dependencies: none. `nd-fmm-plan`'s interface: unchanged.
 - `fmm-exec/tests/helmholtz/` (no MPI): the rule's table, its inputs only (a function of ε or
   the degrees, the ISA and the planes; monotone where the measurements say so), the named
   size kept, zero refused as before.
-- `fmm-exec/tests/helmholtz_fmm.rs` (1, 2, 4 ranks): at small and large leaf sizes (16 and
-  512 on the existing scenarios, with c_leaf 1 and 2 where the rule binds), the FMM against
+- `fmm-exec/tests/helmholtz_fmm.rs` (1, 2, 4 ranks): at small and large leaf sizes (8 and
+  512 on the sphere, as built; 16 planned), with c_leaf 1 and 2 where the rule binds), the FMM against
   the direct sum within the scenario's bound, 2 threads and the one-rank FMM bit for bit
   (rank invariance and determinism at each leaf size); the default builder reports the rule's
   size; with the V rule's proposed default the existing `check_near_v` bounds.

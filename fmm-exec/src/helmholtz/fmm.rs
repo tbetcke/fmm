@@ -139,10 +139,15 @@ use crate::threading::REQUIRED_MPI_THREADING;
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
 
 /// The default maximum leaf width in wavelengths of [`HelmholtzFmmBuilder::c_leaf`], 2
-/// (Helmholtz CH4.0d3; fmm-validate/results/helmholtz-ch4-0d3.md): with leaves of 128 points
-/// or more, one level coarser than D11's [`C_LEAF`](super::C_LEAF) where the leaf rule binds (W1 at
-/// kD = 500: build and one evaluation 0.63–0.69× c_leaf 1's on Kathleen, 0.71× on locust),
-/// the errors within ε and the P2P's phase within Re(k) r ≤ 22 c_leaf.
+/// (Helmholtz CH4.0d3, a sign-off question; fmm-validate/results/helmholtz-ch4-0d3.md §4):
+/// the leaves one level coarser than D11's [`C_LEAF`](super::C_LEAF) where the leaf rule
+/// binds, which pays with the default leaf sizes (W1 at kD = 500, both near rules: build and
+/// one evaluation 0.62, 0.71 and 0.78× c_leaf 1's at 256 points on Kathleen, 0.84, 0.84 and
+/// 0.70× at NEON's 128, 128 and 256 points on locust, at 10⁻³, 10⁻⁶ and 10⁻⁸), the errors
+/// within ε. The P2P's phase reaches Re(k) r ≤ 22 c_leaf, 44 c_leaf with converted V pairs.
+/// D11 chose 1 as the largest c_leaf with no leaf on a high-frequency level in the census
+/// (spikes/census/SPIKE_REPORT.md: at 2, 9 trees at 10⁻⁶); no high-frequency M2L runs yet
+/// (CH4.2, CH4.3).
 pub const DEFAULT_C_LEAF: f64 = 2.0;
 
 /// The points per leaf of [`HelmholtzFmmBuilder`] when it names none (Helmholtz CH4.0d3;
@@ -152,9 +157,11 @@ pub const DEFAULT_C_LEAF: f64 = 2.0;
 /// on x86 (`isa` AVX-512, AVX2 or scalar; Kathleen: 0.64, 0.54 and 0.42× the 64 points with
 /// both rules off, the geometric means); on NEON 128 at a tolerance of at least 10⁻⁷ or
 /// named degrees, 256 below (locust: 0.84, 0.75 and 0.58×; 256 at 10⁻³ and 10⁻⁶ made the
-/// evaluation alone slower than 128's, 1.10 and 0.66× against 0.89 and 0.56×). The
-/// multipole planes changed no choice by 5 %, so the rule does not read them. It reads the
-/// tolerance and the ISA only (constraint 9). Laplace's rule is
+/// evaluation alone slower than 128's, 1.10 and 0.66× against 0.89 and 0.56×). The rule does
+/// not read the multipole planes: with one plane only NEON at 10⁻⁶ crossed the 5 % line (256
+/// 5.7 % faster on build plus one evaluation over two cases, the evaluation 1 % slower). It
+/// reads the tolerance and the ISA only (constraint 9); [`P2pChoice::Reference`] takes the
+/// scalar kernel's class, x86's. Laplace's rule is
 /// [`crate::fmm::default_max_points_per_leaf`].
 ///
 /// ```
@@ -914,6 +921,9 @@ impl HelmholtzFmmBuilder {
         };
         // The W and X crossovers of each level (Helmholtz CH4.0d3), by the finer leaf's
         // level: named, or the cost model's at the level's degree; agreed over the ranks.
+        // The degrees are those given, before the exponential M2L's raise: where a raised
+        // level runs M2P and P2L at p_w (`PlaneWaveRaise::Level`, `Leaves`), the crossovers
+        // are low, which converts fewer pairs, never a wrong one.
         let local: Vec<f64> = (0..degrees.len())
             .flat_map(|l| match self.near_wx {
                 WxNear::Off => [0.0, 0.0],
@@ -1170,7 +1180,10 @@ pub const V_COSTS_NEON: VCosts = VCosts {
 /// The cost model of the W and X pairs' near rule for one machine class (Helmholtz CH4.0d3,
 /// [`WxNear::CostModel`]), in thread-nanoseconds: an M2P per target point and a P2L per
 /// source point, each a + b (p + 1)² at the degree p of the finer leaf's level, complex
-/// charges with gradients in f64 (the P2P per interaction is [`VCosts::p2p`]).
+/// charges with gradients in f64 (the P2P per interaction is [`VCosts::p2p`], CH4.0d2's: the
+/// calibration of these constants measured 6.9 and 16.6 ns, so the crossovers lie 6 % and 18 %
+/// above its own P2P's on x86 and NEON; the rule's gain was measured with them). The fits
+/// overestimate M2P at p = 11, a level of few rows (about 1.9×; the report's §2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WxCosts {
     /// M2P per target point, [a, b].
@@ -1180,14 +1193,15 @@ pub struct WxCosts {
 }
 
 /// [`WxCosts`] of x86 (AVX-512 and AVX2; measured on Kathleen, Xeon Gold 6248, one rank ×
-/// 40 threads, at p = 7, 11, 15 and 32: fmm-validate/results/helmholtz-ch4-0d3.md).
+/// 40 threads, P2L at p = 7, 15 and 32, M2P also at 11: fmm-validate/results/helmholtz-ch4-0d3.md).
 pub const WX_COSTS_X86: WxCosts = WxCosts {
     m2p: [274.0, 26.4],
     p2l: [339.0, 7.85],
 };
 
-/// [`WxCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads, at p = 7,
-/// 15 and 32: fmm-validate/results/helmholtz-ch4-0d3.md; the M6 takes them unmeasured).
+/// [`WxCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads, P2L at p = 7,
+/// 15 and 32, M2P also at 11: fmm-validate/results/helmholtz-ch4-0d3.md; the fitted M2P
+/// constant term, −87 ns, set to 0; the M6 takes them unmeasured).
 pub const WX_COSTS_NEON: WxCosts = WxCosts {
     m2p: [0.0, 20.2],
     p2l: [129.0, 5.67],
@@ -1203,8 +1217,8 @@ pub fn wx_costs(isa: Isa) -> WxCosts {
 
 /// The crossovers [W, X] of a level of degree `p` (Helmholtz CH4.0d3, [`WxNear::CostModel`]):
 /// an M2P per target point over the P2P per interaction, in the W leaf's source points, and a
-/// P2L per source point over it, in the X leaf's target points. The gradients scale both
-/// sides alike, so the crossovers do not read them.
+/// P2L per source point over it, in the X leaf's target points. Every constant was measured
+/// with gradients; without them the crossovers are not corrected (unmeasured).
 pub fn wx_crossovers(costs: &WxCosts, v_costs: &VCosts, p: usize) -> [f64; 2] {
     let q2 = ((p + 1) * (p + 1)) as f64;
     [

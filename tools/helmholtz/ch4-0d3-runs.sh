@@ -31,8 +31,9 @@
 #   reverse, for round 2 (the proposed rule, `auto`, against 64).
 # NEAR (a `--near-v` list, default off,cost) replaces every stage's; NEAR_WX (a `--near-wx`
 # list, default off: round 1 ran without the W and X rule) and C_LEAF (a `--c-leaf` list,
-# default the library's; not with `cleaf`, which names its own) add to every stage but
-# `calibrate` (round 2: NEAR_WX=off,cost C_LEAF=1,2). One rank × THREADS
+# default the library's, `DEFAULT_C_LEAF` = 2 since this task's proposed defaults, 1 when
+# round 1 ran: repeat round 1 with C_LEAF=1; not with `cleaf`, which names its own) add to
+# every stage but `calibrate` (round 2: NEAR_WX=off,cost C_LEAF=1,2; round 3: report §7). One rank × THREADS
 # threads (default 40, a Kathleen node) unless named. Each launch's output in
 # <out-dir>/<stage>-<case>-<order>.md, a line per launch in <out-dir>/runs.log. Times are
 # read on Kathleen's exclusive nodes and a quiet locust only, never asserted. TIMEOUT
