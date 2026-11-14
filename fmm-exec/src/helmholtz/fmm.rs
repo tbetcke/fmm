@@ -139,7 +139,7 @@ use crate::threading::REQUIRED_MPI_THREADING;
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
 
 /// The default maximum leaf width in wavelengths of [`HelmholtzFmmBuilder::c_leaf`], 2
-/// (Helmholtz CH4.0d3, a sign-off question; fmm-validate/results/helmholtz-ch4-0d3.md §4):
+/// (Helmholtz CH4.0d3, signed off 2026-11-14, D11 amended; fmm-validate/results/helmholtz-ch4-0d3.md §4):
 /// the leaves one level coarser than D11's [`C_LEAF`](super::C_LEAF) where the leaf rule
 /// binds, which pays with the default leaf sizes (W1 at kD = 500, both near rules: build and
 /// one evaluation 0.62, 0.71 and 0.78× c_leaf 1's at 256 points on Kathleen, 0.84, 0.84 and

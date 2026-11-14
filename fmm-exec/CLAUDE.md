@@ -635,7 +635,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   one-rank FMM bit for bit) and `check_leaf_sizes` (8 and 512 points, c_leaf 2: the
   settings, the leaves, the kind times, the errors, 2 threads and one rank) in
   `tests/helmholtz_fmm.rs`; `check_errors` the refused crossovers. The builder's defaults
-  since CH4.0d3 (proposed for sign-off; reverted if not signed off): the points per leaf of
+  since CH4.0d3 (signed off as built on #219, 2026-11-14, D11 amended): the points per leaf of
   `helmholtz::default_max_points_per_leaf(tolerance, isa)` unless named (256 on x86; on NEON
   128 at ε ≥ 10⁻⁷ or named degrees, 256 below; the multipole planes not read; agreed over
   the ranks in step 2's all-reduce, max; Laplace's `fmm::default_max_points_per_leaf`

@@ -3148,13 +3148,13 @@ request, using this template:
   15–19 (CH4.0d2 766 s at 16–20); after the self-review's edits fmt, workspace Clippy, docs, the
   `helmholtz` unit tests, the doctests, the harness test and `helmholtz_fmm` again. Nothing
   pending.
-- Decisions: questions for sign-off: (1) the leaf size rule (alternatives: by the evaluation
-  alone; x86 1024 below 10⁻⁷; NEON with one plane 256 from 10⁻⁶), (2) `WxNear::CostModel`,
-  (3) `VNear::CostModel` (the P2P's phase range 44 c_leaf against the acceptance's 22),
-  (4) c_leaf 2 (against D11's reason: the census's high-frequency leaves at 2; CH4.3 re-decides),
-  each reverted if not signed off.
+- Decisions: the PR's questions 1–4 signed off as built (the user on #219, 2026-11-14: "Merge 219 when ready"): (1) the leaf size
+  rule (the alternatives not taken: by the evaluation alone; x86 1024 below 10⁻⁷; NEON with one
+  plane 256 from 10⁻⁶), (2) `WxNear::CostModel`, (3) `VNear::CostModel` (the P2P's phase range
+  44 c_leaf), (4) c_leaf 2, D11 amended (CH4.3 re-decides with the high-frequency rule); the
+  proposal amended at §3.7 and Appendix A.
 - Laplace: not touched (`FmmBuilder`, `fmm::default_max_points_per_leaf`, the drivers, the
   pipeline, `nd-fmm-plan`, `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI
   list pass).
-- Follow-ups: CH4.3 (roadmap: c_leaf re-decided with the per-level high-frequency rule, if
-  c_leaf 2 is signed off); CH4.0e next (the comparison under the defaults).
+- Follow-ups: CH4.3 (roadmap: c_leaf re-decided with the per-level high-frequency rule);
+  CH4.0e next (the comparison under the defaults).
