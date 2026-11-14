@@ -2312,6 +2312,65 @@ fn check_empty_boxes(scenario: &Scenario, comm: &SimpleCommunicator) -> [usize; 
     left_out
 }
 
+/// The leaf size and c_leaf (Helmholtz CH4.0d3): under the default M2L, at 8 and 512 points
+/// per leaf and c_leaf 1 and 2 (on the sphere the leaf rule binds at 1, and 2 lets the
+/// leaves be one level coarser), the errors against the direct sum within the scenario's
+/// bound, the settings reported as built, the leaves by level summing to the leaves, 2
+/// threads the one-thread output bit for bit and on P ranks the one-rank FMM's bit for bit:
+/// deterministic and rank-invariant at each leaf size.
+fn check_leaf_sizes(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let mut levels = Vec::new();
+    for (points, c_leaf) in [(8, 1.0), (512, 1.0), (512, 2.0)] {
+        let name = &format!(
+            "{}, {points} points per leaf, c_leaf {c_leaf}",
+            scenario.name
+        );
+        let built = default_builder(scenario)
+            .max_points_per_leaf(points)
+            .c_leaf(c_leaf);
+        let (fmm, output) = run(&built, &inputs, kind, comm);
+        assert_eq!(fmm.max_points_per_leaf(), points, "{name}");
+        assert_eq!(fmm.c_leaf(), c_leaf, "{name}");
+        let by_level = fmm.leaves_by_level();
+        assert_eq!(by_level.len(), fmm.nlevels(), "{name}");
+        assert_eq!(
+            by_level.iter().map(|c| c[0]).sum::<usize>(),
+            fmm.nleaves(),
+            "{name}"
+        );
+        assert!(
+            by_level.iter().all(|c| c[1] <= c[0]),
+            "{name}: {by_level:?}"
+        );
+        let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
+        if comm.rank() == 0 {
+            println!(
+                "{name}: {} levels, leaf level {}, largest leaf {}: φ {phi:.2e}, ∇φ {grad:.2e}",
+                fmm.nlevels(),
+                fmm.min_leaf_level(),
+                fmm.max_leaf_points(),
+            );
+        }
+        assert!(
+            phi < scenario.bound && grad < scenario.bound,
+            "{name}: φ {phi:.2e}, ∇φ {grad:.2e}, bound {:.1e}",
+            scenario.bound
+        );
+        levels.push(fmm.min_leaf_level());
+        drop(fmm);
+        let (_, threaded) = run(&built.clone().threads(2), &inputs, kind, comm);
+        assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+        check_one_rank(name, &built, &inputs, kind, &output, comm);
+    }
+    assert_eq!(
+        levels[2] + 1,
+        levels[1],
+        "c_leaf 2: the leaf rule's level one coarser"
+    );
+}
+
 /// The errors of the V pairs' near rule may be this many times the rule off's (Helmholtz
 /// CH4.0d2; the near rule's bound of Phase 6 T12, `NEAR_ERROR_BOUND` of `tests/mpi_exec.rs`):
 /// a converted pair is exact, but the truncation errors of pairs may cancel.
@@ -2685,6 +2744,8 @@ fn helmholtz_fmm() {
             scenario.name
         );
     }
+    // The leaf size and c_leaf (CH4.0d3): the sphere under the leaf rule.
+    check_leaf_sizes(&sphere_scenario(), &comm);
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);
     check_vectors(&scenarios()[2], &comm);
