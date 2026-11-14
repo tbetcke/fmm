@@ -1868,7 +1868,7 @@ these.
   beyond the measured x ≤ 65 move the error by under 1 % when raised. A check of accuracy, not
   of the smallest degrees: CH4.3's recalibration stays.
 - **Amended at CH4.0d3, 2026-11-14** (fmm-validate/results/helmholtz-ch4-0d3.md; PR #219, its
-  questions 1–4 as built, signed off by the user, "Merge 219 when ready"): Section 3.7, the
+  questions 1–4 as built, signed off by the user, "I agree with the recommendation"): Section 3.7, the
   builder's c_leaf 2 (D11's 1 the leaf rule's constant; CH4.3 re-decides it with the
   high-frequency rule) and the P2P's phase below 44 c_leaf with V pairs made near pairs.
 

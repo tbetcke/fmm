@@ -303,7 +303,7 @@ checksums`: `892a1ee0805286d4`, `9e7a87efc1bbf055`, `6f542b0a00c3283a`, `3b5754d
 
 ## 6. Questions for sign-off
 
-Signed off as built, questions 1–4 (the user on #219, 2026-11-14: "Merge 219 when ready"): the
+Signed off as built, questions 1–4 (the user on #219, 2026-11-14: "I agree with the recommendation"): the
 leaf size rule, `WxNear::CostModel`, `VNear::CostModel` and c_leaf 2 (D11 amended; CH4.3
 re-decides c_leaf with the high-frequency rule).
 
