@@ -71,6 +71,13 @@ task's sign-off says otherwise.
   target used. If the measurements say 64 stays best, no code change here.
 - `near_v`'s default and `C_LEAF` changed only as the measurements propose, each a sign-off
   question; the PR builds the proposed defaults (as CH4.0d1 did), reverted if not signed off.
+- (Open question 1.) `HelmholtzFmmBuilder::near_wx(WxNear)`: `Off`, `Crossovers { w, x }`
+  (named, for the measurements) or `CostModel` (per level, N_W = α_M2P(p_s)/α_P2P in source
+  points of the W leaf, N_X = α_P2L(p_t)/α_P2P in target points of the X target, `WxCosts` per
+  machine class, agreed over the ranks), through `NearRule::new`'s `LeafPair` predicate in the
+  one plan build, with the empty-box rule and the V rule. `HelmholtzOperator::kind_times`
+  (P2M, M2M, L2L, L2P, P2L, M2P per level) and `HelmholtzFmm::far_interactions` (per level
+  Σ_X n_s and Σ_W n_t) for the constants.
 - No change to `FmmBuilder`, `DEFAULT_MAX_POINTS_PER_LEAF`, `default_max_points_per_leaf`
   (Laplace's), `nd-fmm-plan`, `nd-octree` or `nd-fmm-simd`.
 
@@ -142,4 +149,17 @@ Filled in step 6.
 
 ## Open questions
 
-None yet.
+1. Round 1 (Kathleen 633910, 633911; locust, both at 23e993c) and the diagnostic runs
+   (locust, ae7d541) found P2L and M2P, the W and X pairs, 40–67 % of the evaluation on
+   adaptive trees (W4's Plummer sphere at kD = 10, 10⁻⁶: M2P 0.10–0.29 s of 0.20–0.74 s), and
+   trees with leaves on two levels slow (W3 at kD = 100 with 128 points: the evaluation 3× 64's;
+   W1 at kD = 500 with 128 points at c_leaf 1.5 and 2: 1.14–1.37×): the Helmholtz builder
+   converts no W or X pair (Laplace's near rule of Phase 6 T12 does). Decided by the user on
+   2026-11-14: "Add W/X rule here (Recommended)": `HelmholtzFmmBuilder::near_wx` with
+   `nd_fmm_plan`'s existing `NearRule` (no plan change) and a cost model per machine class
+   from the P2L and M2P timings, then round 2 sweeps the leaf size with it and proposes the
+   leaf size, `near_v`, the W/X rule and c_leaf together.
+2. c_leaf: round 1's c_leaf 2 with 256–512 points cut build plus evaluation to 0.35–0.67
+   where the leaf rule binds, errors within ε, the phase within 22 c_leaf. Decided by the user
+   on 2026-11-14: "Yes, sweep 1 and 2 (Recommended)": round 2 runs c_leaf 1 and 2 and the PR
+   proposes c_leaf for sign-off (D11 amended only on that sign-off).
