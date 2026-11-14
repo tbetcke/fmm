@@ -613,7 +613,39 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   degree 0; on the sphere PlaneWave's groups convert in part): the errors within `NEAR_ERROR_BOUND` (1.1) of
   the rule off's, 2 threads and the one-rank FMM bit for bit, crossover 0 the rule off's bits,
   more near interactions and ghost points, the P2P timed on every level with near rows;
-  `check_errors` the refused crossovers. `tests/helmholtz_fmm.rs`
+  `check_errors` the refused crossovers.
+  Since Helmholtz CH4.0d3 (docs/helmholtz/tasks/CH4.0d3.md;
+  fmm-validate/results/helmholtz-ch4-0d3.md) `HelmholtzFmmBuilder::near_wx` (`WxNear`: `Off`,
+  `Crossovers { w, x }` named, negative or NaN `HelmholtzFmmError::WxCrossover`, or
+  `CostModel`) makes W and X pairs near pairs through `NearRule::new`'s `LeafPair` predicate
+  on the same counts, in the one plan build, with the V rule: a W pair where the W leaf's
+  sources are below N_W, an X pair where the X leaf's targets are below N_X, per level of the
+  finer leaf. `CostModel`: `wx_crossovers(&wx_costs(isa), &v_costs(isa), p)`, N_W =
+  α_M2P(p)/α_P2P and N_X = α_P2L(p)/α_P2P, α = a + b (p + 1)² per point from `WxCosts`
+  (`WX_COSTS_X86` from Kathleen, `WX_COSTS_NEON` from locust; the M6 takes NEON's
+  unmeasured), agreed over the ranks (all-reduce min). The output is not the rule off's
+  (converted pairs are exact); deterministic and on P ranks the one-rank FMM's bit for bit.
+  `HelmholtzOperator::kind_times` times P2M, M2M, L2L, L2P, P2L and M2P per level
+  (`TIMED_KINDS`; two clock reads per level call, as `m2l_times`), and
+  `HelmholtzFmm::{far_interactions, leaves_by_level, max_points_per_leaf, c_leaf}` report
+  the per-level X and W point interactions, the leaves and occupied leaves, and the tree's
+  settings. `check_near_wx` (the clusters and the sphere: crossover 0 the rule off's bits,
+  a named crossover, every pair, the cost model alone and with the V rule's; the errors
+  within `NEAR_ERROR_BOUND` of the rule off's, no more far interactions, 2 threads and the
+  one-rank FMM bit for bit) and `check_leaf_sizes` (8 and 512 points, c_leaf 2: the
+  settings, the leaves, the kind times, the errors, 2 threads and one rank) in
+  `tests/helmholtz_fmm.rs`; `check_errors` the refused crossovers. The builder's defaults
+  since CH4.0d3 (proposed for sign-off; reverted if not signed off): the points per leaf of
+  `helmholtz::default_max_points_per_leaf(tolerance, isa)` unless named (256 on x86; on NEON
+  128 at ε ≥ 10⁻⁷ or named degrees, 256 below; the multipole planes not read; agreed over
+  the ranks in step 2's all-reduce, max; Laplace's `fmm::default_max_points_per_leaf`
+  untouched), `DEFAULT_C_LEAF` = 2 (D11's `C_LEAF` = 1 stays the leaf rule's constant and
+  the census tests'), `VNear::CostModel` and `WxNear::CostModel`. `tests/helmholtz_fmm.rs`'s
+  `default_builder` names the settings before (32 points, `C_LEAF`, the three rules off), so
+  every other check keeps its tree and pairs; `check_defaults` (the sphere with a tolerance,
+  the clusters with named degrees) checks the defaults as built, the output the same
+  settings named bit for bit, the errors, 2 threads and the one-rank FMM;
+  `tests/helmholtz/leaf_rule.rs` the rule's table. `tests/helmholtz_fmm.rs`
   (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,

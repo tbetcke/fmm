@@ -120,12 +120,12 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use thiserror::Error;
 
 use super::{
-    C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
-    DensityError, HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind,
-    auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
+    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities, DensityError,
+    HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output, PlaneWavePrecision,
+    PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
+    auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
 };
-use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
+use crate::fmm::{FmmError, PointSet, SettingsError};
 use crate::geometry::{Domain, radius};
 use crate::helmholtz::operator::auto_plane_wave_levels;
 use crate::operator::{Isa, MulAdd, P2pChoice, SimdScalar};
@@ -137,6 +137,42 @@ use crate::threading::REQUIRED_MPI_THREADING;
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
+
+/// The default maximum leaf width in wavelengths of [`HelmholtzFmmBuilder::c_leaf`], 2
+/// (Helmholtz CH4.0d3; fmm-validate/results/helmholtz-ch4-0d3.md): with leaves of 128 points
+/// or more, one level coarser than D11's [`C_LEAF`](super::C_LEAF) where the leaf rule binds (W1 at
+/// kD = 500: build and one evaluation 0.63–0.69× c_leaf 1's on Kathleen, 0.71× on locust),
+/// the errors within ε and the P2P's phase within Re(k) r ≤ 22 c_leaf.
+pub const DEFAULT_C_LEAF: f64 = 2.0;
+
+/// The points per leaf of [`HelmholtzFmmBuilder`] when it names none (Helmholtz CH4.0d3;
+/// fmm-validate/results/helmholtz-ch4-0d3.md), from the build plus one evaluation under the
+/// W and X rule and the V rule of the cost model ([`WxNear::CostModel`],
+/// [`VNear::CostModel`]) on CH3.6's matrix and the large cases at 10⁻³, 10⁻⁶ and 10⁻⁸: 256
+/// on x86 (`isa` AVX-512, AVX2 or scalar; Kathleen: 0.64, 0.54 and 0.42× the 64 points with
+/// both rules off, the geometric means); on NEON 128 at a tolerance of at least 10⁻⁷ or
+/// named degrees, 256 below (locust: 0.84, 0.75 and 0.58×; 256 at 10⁻³ and 10⁻⁶ made the
+/// evaluation alone slower than 128's, 1.10 and 0.66× against 0.89 and 0.56×). The
+/// multipole planes changed no choice by 5 %, so the rule does not read them. It reads the
+/// tolerance and the ISA only (constraint 9). Laplace's rule is
+/// [`crate::fmm::default_max_points_per_leaf`].
+///
+/// ```
+/// use nd_fmm_exec::helmholtz::default_max_points_per_leaf;
+/// use nd_fmm_exec::operator::Isa;
+///
+/// assert_eq!(default_max_points_per_leaf(Some(1e-6), Isa::Avx512), 256);
+/// assert_eq!(default_max_points_per_leaf(Some(1e-6), Isa::Neon), 128);
+/// assert_eq!(default_max_points_per_leaf(Some(1e-8), Isa::Neon), 256);
+/// assert_eq!(default_max_points_per_leaf(None, Isa::Neon), 128);
+/// ```
+pub fn default_max_points_per_leaf(tolerance: Option<f64>, isa: Isa) -> usize {
+    match (isa, tolerance) {
+        (Isa::Neon, Some(epsilon)) if epsilon < 1e-7 => 256,
+        (Isa::Neon, _) => 128,
+        _ => 256,
+    }
+}
 
 /// The default bytes per node of the exponential M2L's waves buffer, 8 GiB
 /// ([`HelmholtzFmmBuilder::plane_wave_budget`]; Helmholtz CH6.2a, signed off 2026-11-04).
@@ -273,7 +309,7 @@ pub struct HelmholtzFmmBuilder {
     gradients: bool,
     threads: usize,
     domain: Option<[f64; 6]>,
-    max_points_per_leaf: usize,
+    max_points_per_leaf: Option<usize>,
     max_level: usize,
     block_budget: usize,
     m2l: HelmholtzM2l,
@@ -301,12 +337,13 @@ pub struct HelmholtzFmmBuilder {
 impl HelmholtzFmmBuilder {
     /// The settings for wavenumber `k` with the degrees `degrees`: complex charges, one
     /// vector, potentials only, one thread, the domain from the points,
-    /// [`DEFAULT_MAX_POINTS_PER_LEAF`] points per leaf, leaves down to level 16, the
+    /// [`default_max_points_per_leaf`] points per leaf, leaves down to level 16, the
     /// default block budget of the M2L y-blocks, M2L by the rule per level
     /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`] per rank and
     /// [`DEFAULT_DENSE_NODE_BUDGET`] per node, the exponential M2L's waves
-    /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the leaf width [`C_LEAF`] and the
-    /// P2P kernel of [`P2pChoice::Auto`].
+    /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the leaf width [`DEFAULT_C_LEAF`],
+    /// the P2P kernel of [`P2pChoice::Auto`], the empty-box rule and the V, W and X pairs
+    /// near pairs by the cost model.
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
         Self {
             k,
@@ -316,7 +353,7 @@ impl HelmholtzFmmBuilder {
             gradients: false,
             threads: 1,
             domain: None,
-            max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
+            max_points_per_leaf: None,
             max_level: DEEPEST,
             block_budget: DEFAULT_BLOCK_BUDGET,
             m2l: HelmholtzM2l::Auto,
@@ -333,11 +370,11 @@ impl HelmholtzFmmBuilder {
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
             plane_wave_split: PlaneWaveSplit::Auto,
             plane_wave_raise: PlaneWaveRaise::Rule,
-            c_leaf: C_LEAF,
+            c_leaf: DEFAULT_C_LEAF,
             p2p: P2pChoice::Auto,
             empty_boxes: true,
-            near_v: VNear::Off,
-            near_wx: WxNear::Off,
+            near_v: VNear::CostModel,
+            near_wx: WxNear::CostModel,
             pair_calls: false,
         }
     }
@@ -378,9 +415,12 @@ impl HelmholtzFmmBuilder {
     }
 
     /// The octree's refinement target, points per leaf (default
-    /// [`DEFAULT_MAX_POINTS_PER_LEAF`]). The leaf rule refines further where k needs it.
+    /// [`default_max_points_per_leaf`] of the tolerance and the P2P kernel's ISA, agreed over
+    /// the ranks; [`DEFAULT_MAX_POINTS_PER_LEAF`](crate::fmm::DEFAULT_MAX_POINTS_PER_LEAF) before Helmholtz CH4.0d3). The leaf rule
+    /// refines further where k needs it. [`HelmholtzFmm::max_points_per_leaf`] reports the
+    /// target used.
     pub fn max_points_per_leaf(mut self, max_points_per_leaf: usize) -> Self {
-        self.max_points_per_leaf = max_points_per_leaf;
+        self.max_points_per_leaf = Some(max_points_per_leaf);
         self
     }
 
@@ -486,7 +526,7 @@ impl HelmholtzFmmBuilder {
     }
 
     /// Which V pairs between two leaves become near pairs (Helmholtz CH4.0d2, [`VNear`];
-    /// default [`VNear::Off`]). The plan applies `nd_fmm_plan`'s near rule with V pairs on
+    /// default [`VNear::CostModel`] since Helmholtz CH4.0d3, [`VNear::Off`] before). The plan applies `nd_fmm_plan`'s near rule with V pairs on
     /// the counts the empty-box rule reads (the routes' points per local leaf, every held
     /// ghost leaf's from its owner; counted even with the empty-box rule off): each pair is
     /// decided on its target's rank from counts by key, so every rank count makes the
@@ -502,7 +542,7 @@ impl HelmholtzFmmBuilder {
     }
 
     /// Which W and X pairs between two leaves become near pairs (Helmholtz CH4.0d3,
-    /// [`WxNear`]; default [`WxNear::Off`]), by the same near rule and counts as
+    /// [`WxNear`]; default [`WxNear::CostModel`]), by the same near rule and counts as
     /// [`near_v`](Self::near_v), in the same plan: each pair decided on its target's rank
     /// from counts by key and crossovers agreed over the ranks, so the output on P ranks is
     /// the one-rank FMM's of the same setting bit for bit. A converted pair is exact, so the
@@ -607,7 +647,8 @@ impl HelmholtzFmmBuilder {
         self
     }
 
-    /// The maximum leaf width in wavelengths (default [`C_LEAF`], decision D11).
+    /// The maximum leaf width in wavelengths (default [`DEFAULT_C_LEAF`] since Helmholtz
+    /// CH4.0d3; D11's [`C_LEAF`](super::C_LEAF) before).
     pub fn c_leaf(mut self, c_leaf: f64) -> Self {
         self.c_leaf = c_leaf;
         self
@@ -639,7 +680,7 @@ impl HelmholtzFmmBuilder {
             Some(SettingsError::MaxLevelTooDeep {
                 max_level: self.max_level,
             })
-        } else if self.max_points_per_leaf == 0 {
+        } else if self.max_points_per_leaf == Some(0) {
             Some(SettingsError::ZeroPointsPerLeaf)
         } else if self.threads == 0 {
             Some(SettingsError::ZeroThreads)
@@ -736,14 +777,31 @@ impl HelmholtzFmmBuilder {
         let node = comm.split_shared(comm.rank());
 
         // Step 2: are there points at all? The same all-reduce agrees the largest number of
-        // ranks per node.
-        let local = [(sources.len() + targets.len()) as u64, node.size() as u64];
-        let mut agreed = [0u64; 2];
+        // ranks per node and the points per leaf (the rule's differ only where the ranks'
+        // ISAs do; constraints 2 and 9).
+        let tolerance = match self.degrees {
+            Degrees::Tolerance(epsilon) => Some(epsilon),
+            Degrees::PerLevel(_) => None,
+        };
+        let isa = match self.p2p.resolve() {
+            Ok(P2pChoice::Isa(isa)) => isa,
+            _ => Isa::Scalar,
+        };
+        let max_points_per_leaf = self
+            .max_points_per_leaf
+            .unwrap_or_else(|| default_max_points_per_leaf(tolerance, isa));
+        let local = [
+            (sources.len() + targets.len()) as u64,
+            node.size() as u64,
+            max_points_per_leaf as u64,
+        ];
+        let mut agreed = [0u64; 3];
         comm.all_reduce_into(&local[..], &mut agreed[..], SystemOperation::max());
         if agreed[0] == 0 {
             return Err(FmmError::NoPoints.into());
         }
         let ranks_per_node = agreed[1].max(1) as usize;
+        let max_points_per_leaf = agreed[2] as usize;
         drop(node);
 
         // Step 3: the domain, and every point strictly inside it.
@@ -753,7 +811,7 @@ impl HelmholtzFmmBuilder {
         let leaf_level = min_leaf_level(&self.k, &domain, self.c_leaf);
         let options = OctreeOptions::new()
             .with_max_level(self.max_level)
-            .with_max_fine_keys(self.max_points_per_leaf)
+            .with_max_fine_keys(max_points_per_leaf)
             .with_ghost_children(true)
             .with_min_leaf_level(leaf_level);
         let (keys, octree) = pipeline::octree(&coordinates, &domain, options, comm);
@@ -795,10 +853,6 @@ impl HelmholtzFmmBuilder {
         )?;
         // Auto's crossover, agreed over the ranks (constraints 2 and 9): the smallest of
         // every rank's, which differ only where the ranks' ISAs do.
-        let isa = match self.p2p.resolve() {
-            Ok(P2pChoice::Isa(isa)) => isa,
-            _ => Isa::Scalar,
-        };
         let local = self
             .m2l_max_degree
             .unwrap_or_else(|| auto_batched_max_degree(isa, densities.multipole_planes()))
@@ -820,10 +874,6 @@ impl HelmholtzFmmBuilder {
             self.k.re() * radius(0, &domain),
             self.k.im() * radius(0, &domain),
         );
-        let tolerance = match self.degrees {
-            Degrees::Tolerance(epsilon) => Some(epsilon),
-            Degrees::PerLevel(_) => None,
-        };
         let waves: Vec<bool> = match (self.m2l, &self.plane_wave_precision) {
             (HelmholtzM2l::PlaneWave, PlaneWavePrecision::Rule) => {
                 select(k_root, &degrees, tolerance)
@@ -1064,7 +1114,7 @@ impl HelmholtzFmmBuilder {
             degrees,
             min_leaf_level: leaf_level,
             max_leaf_points,
-            max_points_per_leaf: self.max_points_per_leaf,
+            max_points_per_leaf,
             c_leaf: self.c_leaf,
             pool,
             packed: Vec::new(),

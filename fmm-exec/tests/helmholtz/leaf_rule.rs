@@ -2,12 +2,18 @@
 //! (`spikes/census/src/tree.rs`, `width_level`, the same inequality) and against the
 //! closed form ⌈log₂(k w / (2π c_leaf))⌉ (an independent path, away from the level
 //! boundaries), its minimality, known levels, complex and Yukawa k, the cap and the
-//! domain's scaling.
+//! domain's scaling; and the points per leaf of Helmholtz CH4.0d3
+//! (`default_max_points_per_leaf`, fmm-validate/results/helmholtz-ch4-0d3.md): its table, a
+//! function of the tolerance and the ISA only, never fewer points at a smaller tolerance,
+//! and `DEFAULT_C_LEAF`.
 
 use std::f64::consts::{PI, TAU};
 
 use nd_fmm_exec::geometry::Domain;
-use nd_fmm_exec::helmholtz::{C_LEAF, Wavenumber, min_leaf_level};
+use nd_fmm_exec::helmholtz::{
+    C_LEAF, DEFAULT_C_LEAF, Wavenumber, default_max_points_per_leaf, min_leaf_level,
+};
+use nd_fmm_exec::operator::Isa;
 use nd_octree::PhysicalBox;
 
 /// The trusted path: the census spike's `width_level`, the shallowest level whose boxes
@@ -205,4 +211,58 @@ fn infinite_c_leaf_panics() {
 fn nan_c_leaf_panics() {
     let k = Wavenumber::new(1.0, 0.0).unwrap();
     min_leaf_level(&k, &cube(0.0, 1.0), f64::NAN);
+}
+
+/// The measured table: x86 (and the scalar kernel) 256 at every tolerance, NEON 128 at
+/// ε ≥ 10⁻⁷ or named degrees and 256 below.
+#[test]
+fn the_points_per_leaf_by_the_tolerance_and_the_isa() {
+    for isa in Isa::all() {
+        for (epsilon, neon) in [
+            (1e-3, 128),
+            (1e-6, 128),
+            (1e-7, 128),
+            (9e-8, 256),
+            (1e-8, 256),
+        ] {
+            let expected = if isa == Isa::Neon { neon } else { 256 };
+            assert_eq!(
+                default_max_points_per_leaf(Some(epsilon), isa),
+                expected,
+                "{isa:?}, ε = {epsilon:e}"
+            );
+        }
+        let named = if isa == Isa::Neon { 128 } else { 256 };
+        assert_eq!(
+            default_max_points_per_leaf(None, isa),
+            named,
+            "{isa:?}, named"
+        );
+    }
+}
+
+#[test]
+fn the_points_per_leaf_never_fall_with_the_tolerance() {
+    for isa in Isa::all() {
+        let sizes: Vec<usize> = (1..=12)
+            .map(|e| default_max_points_per_leaf(Some(10f64.powi(-e)), isa))
+            .collect();
+        assert!(sizes.windows(2).all(|w| w[0] <= w[1]), "{isa:?}: {sizes:?}");
+        assert!(sizes.iter().all(|&n| n >= 64), "{isa:?}: {sizes:?}");
+    }
+}
+
+#[test]
+fn the_default_leaf_width_is_two_wavelengths_one_level_coarser() {
+    assert_eq!(DEFAULT_C_LEAF, 2.0 * C_LEAF);
+    for kd in kd_sweep() {
+        let k = Wavenumber::new(kd, 0.0).unwrap();
+        let narrow = min_leaf_level(&k, &cube(0.0, 1.0), C_LEAF);
+        let wide = min_leaf_level(&k, &cube(0.0, 1.0), DEFAULT_C_LEAF);
+        // One level coarser, but never above the root, and at the cap both may hold 16.
+        assert!(
+            wide == narrow.saturating_sub(1) || (narrow == 16 && wide == 16),
+            "kD = {kd}: {wide} against {narrow}"
+        );
+    }
 }

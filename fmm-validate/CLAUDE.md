@@ -518,6 +518,22 @@ and a last table "Near pairs" (with `--levels` a row per level with P2P: thread-
 interaction). `tests/helmholtz_accuracy.rs` (`check_near_v`) checks the columns on W1 at
 kD = 30. `tools/helmholtz/ch4-0d2-runs.sh` runs the task's sweeps.
 
+Helmholtz CH4.0d3 (the leaf size, c_leaf and W and X pairs as near pairs;
+docs/helmholtz/tasks/CH4.0d3.md) added `helmholtz_accuracy::Case::{c_leaf, near_wx}`
+(`HelmholtzFmmBuilder::{c_leaf, near_wx}`; `None` and `WxNear::Off` in `Case::new`) and
+`Row::{max_points_per_leaf, c_leaf, leaves_by_level, kind_seconds, far_leaf_entries,
+far_interactions, near_wx, wx_near}` (the tree's settings as built; per level the leaves and
+occupied leaves, the six other kinds' seconds, the slowest rank's, the X and W entries and
+point interactions, summed; the W and X pairs offered and converted) with
+`Row::{widest_occupied_leaf, phase_bound}`, and to the example `--leaf-size auto|n,…` and
+`--c-leaf auto|c,…` (outermost loops: each changes the tree; the column "M2L" ending `/n<n>`,
+`/c<c>`), `--near-wx off|cost|n|inf,…` (inside `--near-v`'s loop; `/wx<n>`, `/wxcost`), and
+the tables "Leaves" (a row per run) and "Leaf operators" (with `--levels` a row per level:
+thread-nanoseconds per P2P, P2L and M2P interaction). `tests/helmholtz_accuracy.rs`
+(`check_leaves`, `check_near_wx`) checks the columns on W1 at kD = 100 and W4's clusters.
+`tools/helmholtz/ch4-0d3-runs.sh` runs the task's sweeps and the W and X calibration,
+`ch4-0d3-tables.py` makes the report's tables and fits `WxCosts` (`wx`).
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

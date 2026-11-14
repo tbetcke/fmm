@@ -96,7 +96,7 @@ fn check_harness(world: &SimpleCommunicator) {
         f64::from_bits(changed.gradient.as_ref().expect("gradients")[40][2].to_bits() ^ 1);
     assert_ne!(checksum(&changed, 0), whole);
 
-    let case = Case::new(
+    let case = case(
         Workload::W4 {
             distribution: Distribution::Plummer,
             n: 500,
@@ -124,6 +124,16 @@ fn check_harness(world: &SimpleCommunicator) {
     let serial = Oracle::of_samples(k, &problem, &all, true, 1);
     assert_eq!(Oracle::of_samples(k, &problem, &all, true, 3), serial);
     assert_eq!(Oracle::sharded(k, &problem, true, 2, world), serial);
+}
+
+/// `Case::new` on the tree before Helmholtz CH4.0d3's defaults (64 points per leaf, D11's
+/// c_leaf), on which these checks were written; `check_leaves` checks the library's.
+fn case(workload: Workload, k: (f64, f64), degrees: Degrees) -> Case {
+    Case {
+        max_points_per_leaf: Some(64),
+        c_leaf: Some(nd_fmm_exec::helmholtz::C_LEAF),
+        ..Case::new(workload, k, degrees)
+    }
 }
 
 /// The per-level columns of a row (Helmholtz CH6.2b): an entry per level, no V pairs on
@@ -265,7 +275,7 @@ fn check_fmm(world: &SimpleCommunicator, case: &Case) {
 /// CH6.2h) from degree 0 and no Batched level, the exponential M2L's checksum, the agreed
 /// degree reported and the errors within [`PLANE_WAVE_RATIO`] of Rotation's; off, none.
 fn check_auto(world: &SimpleCommunicator) {
-    let mut case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let mut case = case(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     let problem = Problem::new(&case);
     let oracle = Oracle::sharded(complex_k(&case), &problem, case.gradients, 2, world);
     let rotation = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
@@ -376,7 +386,7 @@ fn check_plane_wave(world: &SimpleCommunicator) {
         (Workload::W1, (10.0, 0.0), 1e-8),
         (clusters, (10.0, 1.0), 1e-3),
     ] {
-        let mut case = Case::new(workload, k, Degrees::Tolerance(eps));
+        let mut case = case(workload, k, Degrees::Tolerance(eps));
         if let Workload::W4 { .. } = workload {
             case.charges = ChargeKind::Real;
         }
@@ -520,7 +530,7 @@ fn check_plane_wave(world: &SimpleCommunicator) {
 /// The plateau scan of the calibration on W1 at kD = 10: one degree p = 1..=8 on every
 /// level ≥ 2, as the `helmholtz_calibrate` example runs it.
 fn check_calibration_scan(world: &SimpleCommunicator) {
-    let mut case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let mut case = case(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     let problem = Problem::new(&case);
     let oracle = Oracle::sharded(complex_k(&case), &problem, true, 2, world);
     let default = run(&case, &problem, &oracle, 2, world).expect("the FMM runs");
@@ -559,7 +569,7 @@ fn check_calibration_scan(world: &SimpleCommunicator) {
 /// The FMM3D comparison's measures on W1 at kD = 10 with every point sampled, the
 /// direct sum standing in for FMM3D's output (module documentation).
 fn check_fmm3d_measures(world: &SimpleCommunicator) {
-    let mut case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let mut case = case(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     case.samples = usize::MAX;
     let problem = Problem::new(&case);
     assert_eq!(problem.sample.len(), problem.len());
@@ -628,11 +638,11 @@ fn helmholtz_accuracy_harness() {
     check_harness(&world);
 
     // W1 at kD = 10 (796 points), two complex vectors with gradients.
-    let mut w1 = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let mut w1 = case(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     w1.vectors = 2;
     check_fmm(&world, &w1);
     // W4's clusters, complex k, real charges, no gradients.
-    let mut w4 = Case::new(
+    let mut w4 = case(
         Workload::W4 {
             distribution: Distribution::Clusters,
             n: 2000,
@@ -660,7 +670,7 @@ fn helmholtz_accuracy_harness() {
 /// between leaves converted, the P2L and M2P interactions fewer and the near interactions
 /// more than off, the errors within 1.1× the rule off's.
 fn check_near_wx(world: &SimpleCommunicator) {
-    let off = Case::new(
+    let off = case(
         Workload::W4 {
             distribution: Distribution::Clusters,
             n: 2000,
@@ -712,10 +722,11 @@ fn check_near_wx(world: &SimpleCommunicator) {
 }
 
 /// The leaf size and c_leaf (Helmholtz CH4.0d3) on W1 at kD = 100 (leaves on the leaf
-/// rule's level at 64 points per leaf): the library's as built by default, named values
-/// as built, the leaves per level summing to the leaves and the occupied ones to at most
-/// those, the phase bound within 22 c_leaf without V pairs made near and twice that with
-/// them, and c_leaf = 2 putting the leaf rule's level one level coarser.
+/// rule's level at 64 points per leaf): the library's as built by default (the leaf size
+/// rule's and `DEFAULT_C_LEAF`), named values as built, the leaves per level summing to the
+/// leaves and the occupied ones to at most those, the phase bound within 22 c_leaf without V
+/// pairs made near and twice that with them, and c_leaf = 2 putting the leaf rule's level
+/// one level coarser than 1.
 fn check_leaves(world: &SimpleCommunicator) {
     let default = Case::new(Workload::W1, (100.0, 0.0), Degrees::Tolerance(1e-3));
     assert_eq!(default.max_points_per_leaf, None, "the library's");
@@ -723,7 +734,18 @@ fn check_leaves(world: &SimpleCommunicator) {
     let problem = Problem::new(&default);
     let oracle = Oracle::sharded(complex_k(&default), &problem, default.gradients, 2, world);
     let row = run(&default, &problem, &oracle, 1, world).expect("the FMM runs");
-    assert_eq!(row.c_leaf, nd_fmm_exec::helmholtz::C_LEAF);
+    assert_eq!(row.c_leaf, nd_fmm_exec::helmholtz::DEFAULT_C_LEAF);
+    assert_eq!(
+        row.max_points_per_leaf,
+        nd_fmm_exec::helmholtz::default_max_points_per_leaf(Some(1e-3), Isa::detect())
+    );
+    let narrow = Case {
+        max_points_per_leaf: Some(64),
+        c_leaf: Some(nd_fmm_exec::helmholtz::C_LEAF),
+        ..default.clone()
+    };
+    let narrow = run(&narrow, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!((narrow.max_points_per_leaf, narrow.c_leaf), (64, 1.0));
     let named = Case {
         max_points_per_leaf: Some(256),
         c_leaf: Some(2.0),
@@ -733,7 +755,7 @@ fn check_leaves(world: &SimpleCommunicator) {
     assert_eq!((wide.max_points_per_leaf, wide.c_leaf), (256, 2.0));
     assert_eq!(
         wide.min_leaf_level + 1,
-        row.min_leaf_level,
+        narrow.min_leaf_level,
         "one level coarser"
     );
     let near = Case {
@@ -741,7 +763,7 @@ fn check_leaves(world: &SimpleCommunicator) {
         ..default.clone()
     };
     let converted = run(&near, &problem, &oracle, 1, world).expect("the FMM runs");
-    for (row, span) in [(&row, 2.0), (&wide, 2.0), (&converted, 4.0)] {
+    for (row, span) in [(&row, 2.0), (&narrow, 2.0), (&wide, 2.0), (&converted, 4.0)] {
         assert_eq!(row.leaves_by_level.len(), row.levels);
         let leaves: usize = row.leaves_by_level.iter().map(|c| c[0]).sum();
         assert_eq!(leaves, row.leaves);
@@ -773,7 +795,7 @@ fn check_leaves(world: &SimpleCommunicator) {
 /// pairs and more near interactions than off, the errors within 1.1× the rule off's, and
 /// the P2P timed on every level with interactions.
 fn check_near_v(world: &SimpleCommunicator) {
-    let off = Case::new(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
+    let off = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
     assert_eq!(off.near_v, VNear::Off, "the library's default");
     let on = Case {
         near_v: VNear::Crossover(f64::INFINITY),
@@ -825,7 +847,7 @@ fn check_near_v(world: &SimpleCommunicator) {
 /// level 3, most of it empty): on by default, with entries left out and fewer V pairs than
 /// off, the same errors, and nothing left out with it off.
 fn check_empty_boxes(world: &SimpleCommunicator) {
-    let on = Case::new(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
+    let on = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
     assert!(on.empty_boxes, "the library's default");
     let off = Case {
         empty_boxes: false,
@@ -864,7 +886,7 @@ fn check_empty_boxes(world: &SimpleCommunicator) {
 /// domain with a margin and a tree of one leaf level (no leaf size bound) within ε, the
 /// domain and the leaves as named.
 fn check_densities(world: &SimpleCommunicator) {
-    let case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let case = case(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     // §9.1's charges as before the field: Re q then Im q from the generator of seed + 1.
     let random = Problem::new(&case);
     let mut rng = SplitMix64::new(case.seed + 1);
@@ -946,7 +968,7 @@ fn check_densities(world: &SimpleCommunicator) {
 /// FMM3D comparison's `crosscheck` against the same reference bit for bit, its ℓ2 errors to
 /// rounding.
 fn check_box_study(world: &SimpleCommunicator) {
-    let case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let case = case(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     let problem = Problem::new(&case);
     let k = complex_k(&case);
     let oracle = Oracle::sharded(k, &problem, true, 2, world);

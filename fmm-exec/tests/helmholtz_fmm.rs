@@ -93,12 +93,12 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
+    C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
     DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
     PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber, WxNear,
     auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
-    auto_plane_wave_min_degree,
+    auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -420,7 +420,10 @@ fn builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
 }
 
 /// The scenario's settings with the library's default M2L ([`HelmholtzM2l::Auto`] since
-/// Helmholtz CH3.2d); `builder` names Rotation, the reference of every check.
+/// Helmholtz CH3.2d); `builder` names Rotation, the reference of every check. The tree and
+/// the near pairs stay those before Helmholtz CH4.0d3's defaults (32 points per leaf, D11's
+/// c_leaf, the V, W and X rules off), which the checks name where they vary them;
+/// `check_defaults` checks the library's.
 fn default_builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
     let k = Wavenumber::new(scenario.k.0, scenario.k.1).unwrap();
     HelmholtzFmmBuilder::new(k, scenario.degrees.clone())
@@ -428,6 +431,9 @@ fn default_builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
         .gradients(scenario.gradients)
         .domain(PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]))
         .max_points_per_leaf(32)
+        .c_leaf(C_LEAF)
+        .near_v(VNear::Off)
+        .near_wx(WxNear::Off)
 }
 
 /// Builds and evaluates; panics on an error.
@@ -2396,6 +2402,58 @@ fn check_leaf_sizes(scenario: &Scenario, comm: &SimpleCommunicator) {
     );
 }
 
+/// The library's defaults of Helmholtz CH4.0d3: the builder naming nothing but the scenario
+/// builds the leaf size of `default_max_points_per_leaf` (the scenario's tolerance, or
+/// none for named degrees, and this machine's ISA), `DEFAULT_C_LEAF` and the V, W and X
+/// rules of the cost model, and its output is that of the same settings named bit for bit;
+/// the errors against the direct sum within the scenario's bound, 2 threads and on P ranks
+/// the one-rank FMM bit for bit.
+fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let name = &format!("{}, the defaults", scenario.name);
+    let k = Wavenumber::new(scenario.k.0, scenario.k.1).unwrap();
+    let defaults = HelmholtzFmmBuilder::new(k, scenario.degrees.clone())
+        .charges(scenario.charges)
+        .gradients(scenario.gradients)
+        .domain(PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]));
+    let (fmm, output) = run(&defaults, &inputs, kind, comm);
+    let tolerance = match scenario.degrees {
+        Degrees::Tolerance(epsilon) => Some(epsilon),
+        Degrees::PerLevel(_) => None,
+    };
+    let points = default_max_points_per_leaf(tolerance, Isa::detect());
+    assert_eq!(fmm.max_points_per_leaf(), points, "{name}");
+    assert_eq!(fmm.c_leaf(), DEFAULT_C_LEAF, "{name}");
+    assert_eq!(fmm.near_v(), VNear::CostModel, "{name}");
+    assert_eq!(fmm.near_wx(), WxNear::CostModel, "{name}");
+    let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
+    if comm.rank() == 0 {
+        println!(
+            "{name}: {points} points per leaf, {} levels, leaf level {}: φ {phi:.2e}, ∇φ \
+             {grad:.2e}",
+            fmm.nlevels(),
+            fmm.min_leaf_level(),
+        );
+    }
+    assert!(
+        phi < scenario.bound && grad < scenario.bound,
+        "{name}: φ {phi:.2e}, ∇φ {grad:.2e}, bound {:.1e}",
+        scenario.bound
+    );
+    drop(fmm);
+    let named = default_builder(scenario)
+        .max_points_per_leaf(points)
+        .c_leaf(DEFAULT_C_LEAF)
+        .near_v(VNear::CostModel)
+        .near_wx(WxNear::CostModel);
+    let (_, output_named) = run(&named, &inputs, kind, comm);
+    assert_same(&format!("{name}: named"), &output_named, &output, comm);
+    let (_, threaded) = run(&defaults.clone().threads(2), &inputs, kind, comm);
+    assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+    check_one_rank(name, &defaults, &inputs, kind, &output, comm);
+}
+
 /// The errors of the V pairs' near rule may be this many times the rule off's (Helmholtz
 /// CH4.0d2; the near rule's bound of Phase 6 T12, `NEAR_ERROR_BOUND` of `tests/mpi_exec.rs`):
 /// a converted pair is exact, but the truncation errors of pairs may cancel.
@@ -2434,7 +2492,7 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
         ),
     ] {
         let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
-        assert_eq!(fmm_off.near_v(), VNear::Off, "the rule is off by default");
+        assert_eq!(fmm_off.near_v(), VNear::Off, "the rule off as named");
         if setting == "Auto with waves" || setting == "PlaneWave" {
             let waves = (0..fmm_off.nlevels())
                 .any(|l| fmm_off.operator().plane_wave_precision(l).is_some());
@@ -2561,7 +2619,7 @@ fn check_near_wx(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator)
         ("the default", default_builder(scenario)),
     ] {
         let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
-        assert_eq!(fmm_off.near_wx(), WxNear::Off, "the rule is off by default");
+        assert_eq!(fmm_off.near_wx(), WxNear::Off, "the rule off as named");
         let (phi_off, grad_off) = errors(scenario, &inputs, &output_off, 0, comm);
         let far_off = far(&fmm_off);
         drop(fmm_off);
@@ -2894,6 +2952,9 @@ fn helmholtz_fmm() {
     }
     // The leaf size and c_leaf (CH4.0d3): the sphere under the leaf rule.
     check_leaf_sizes(&sphere_scenario(), &comm);
+    // The library's defaults (CH4.0d3): a tolerance and named degrees.
+    check_defaults(&sphere_scenario(), &comm);
+    check_defaults(&scenarios()[2], &comm);
     // The W and X pairs as near pairs (CH4.0d3): the clusters with separate targets and the
     // sphere under the leaf rule, adaptive trees with W and X lists.
     let mut wx = [0usize; 4];
