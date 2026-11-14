@@ -93,12 +93,12 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
+    C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
     DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber, WxNear,
     auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
-    auto_plane_wave_min_degree,
+    auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -420,7 +420,10 @@ fn builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
 }
 
 /// The scenario's settings with the library's default M2L ([`HelmholtzM2l::Auto`] since
-/// Helmholtz CH3.2d); `builder` names Rotation, the reference of every check.
+/// Helmholtz CH3.2d); `builder` names Rotation, the reference of every check. The tree and
+/// the near pairs stay those before Helmholtz CH4.0d3's defaults (32 points per leaf, D11's
+/// c_leaf, the V, W and X rules off), which the checks name where they vary them;
+/// `check_defaults` checks the library's.
 fn default_builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
     let k = Wavenumber::new(scenario.k.0, scenario.k.1).unwrap();
     HelmholtzFmmBuilder::new(k, scenario.degrees.clone())
@@ -428,6 +431,9 @@ fn default_builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
         .gradients(scenario.gradients)
         .domain(PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]))
         .max_points_per_leaf(32)
+        .c_leaf(C_LEAF)
+        .near_v(VNear::Off)
+        .near_wx(WxNear::Off)
 }
 
 /// Builds and evaluates; panics on an error.
@@ -2115,6 +2121,18 @@ fn check_errors(comm: &SimpleCommunicator) {
         );
     }
 
+    // W and X crossovers below 0 or not a number (CH4.0d3).
+    for (w, x) in [(-1.0, 1.0), (1.0, f64::NAN)] {
+        let error = builder(scenario)
+            .near_wx(WxNear::Crossovers { w, x })
+            .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+            .err();
+        assert!(
+            matches!(error, Some(HelmholtzFmmError::WxCrossover(..))),
+            "rank {rank}: W and X crossovers of {w} and {x}: {error:?}"
+        );
+    }
+
     // An ISA this machine lacks, on every rank: its own error everywhere.
     if let Some(isa) = Isa::all().find(|isa| !isa.is_available()) {
         let error = builder(scenario)
@@ -2312,6 +2330,132 @@ fn check_empty_boxes(scenario: &Scenario, comm: &SimpleCommunicator) -> [usize; 
     left_out
 }
 
+/// The leaf size and c_leaf (Helmholtz CH4.0d3): under the default M2L, at 8 and 512 points
+/// per leaf and c_leaf 1 and 2 (on the sphere the leaf rule binds at 1, and 2 lets the
+/// leaves be one level coarser), the errors against the direct sum within the scenario's
+/// bound, the settings reported as built, the leaves by level summing to the leaves, 2
+/// threads the one-thread output bit for bit and on P ranks the one-rank FMM's bit for bit:
+/// deterministic and rank-invariant at each leaf size; and the other kinds' level calls timed
+/// (`HelmholtzOperator::kind_times`).
+fn check_leaf_sizes(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let mut levels = Vec::new();
+    for (points, c_leaf) in [(8, 1.0), (512, 1.0), (512, 2.0)] {
+        let name = &format!(
+            "{}, {points} points per leaf, c_leaf {c_leaf}",
+            scenario.name
+        );
+        let built = default_builder(scenario)
+            .max_points_per_leaf(points)
+            .c_leaf(c_leaf);
+        let (fmm, output) = run(&built, &inputs, kind, comm);
+        assert_eq!(fmm.max_points_per_leaf(), points, "{name}");
+        assert_eq!(fmm.c_leaf(), c_leaf, "{name}");
+        let by_level = fmm.leaves_by_level();
+        assert_eq!(by_level.len(), fmm.nlevels(), "{name}");
+        assert_eq!(
+            by_level.iter().map(|c| c[0]).sum::<usize>(),
+            fmm.nleaves(),
+            "{name}"
+        );
+        assert!(
+            by_level.iter().all(|c| c[1] <= c[0]),
+            "{name}: {by_level:?}"
+        );
+        // The other kinds timed (CH4.0d3), on this rank: L2P on every level with a leaf
+        // holding a point (the sphere's targets are its sources, so every such leaf holds a
+        // target; with separate targets a leaf of sources alone runs no L2P under the
+        // empty-box rule), P2L on every level whose plan has X entries; agreed.
+        let times = fmm.operator().kind_times();
+        let timed = times.len() == fmm.nlevels()
+            && by_level.iter().enumerate().all(|(level, count)| {
+                (count[1] == 0 || !times[level][3].is_zero())
+                    && (fmm.plan().level(level).x().is_empty() || !times[level][4].is_zero())
+            });
+        if !timed {
+            eprintln!("rank {}: {name}: kind times {times:?}", comm.rank());
+        }
+        assert!(everywhere(timed, comm), "{name}: a level call not timed");
+        let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
+        if comm.rank() == 0 {
+            println!(
+                "{name}: {} levels, leaf level {}, largest leaf {}: φ {phi:.2e}, ∇φ {grad:.2e}",
+                fmm.nlevels(),
+                fmm.min_leaf_level(),
+                fmm.max_leaf_points(),
+            );
+        }
+        assert!(
+            phi < scenario.bound && grad < scenario.bound,
+            "{name}: φ {phi:.2e}, ∇φ {grad:.2e}, bound {:.1e}",
+            scenario.bound
+        );
+        levels.push(fmm.min_leaf_level());
+        drop(fmm);
+        let (_, threaded) = run(&built.clone().threads(2), &inputs, kind, comm);
+        assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+        check_one_rank(name, &built, &inputs, kind, &output, comm);
+    }
+    assert_eq!(
+        levels[2] + 1,
+        levels[1],
+        "c_leaf 2: the leaf rule's level one coarser"
+    );
+}
+
+/// The library's defaults of Helmholtz CH4.0d3: the builder naming nothing but the scenario
+/// builds the leaf size of `default_max_points_per_leaf` (the scenario's tolerance, or
+/// none for named degrees, and this machine's ISA), `DEFAULT_C_LEAF` and the V, W and X
+/// rules of the cost model, and its output is that of the same settings named bit for bit;
+/// the errors against the direct sum within the scenario's bound, 2 threads and on P ranks
+/// the one-rank FMM bit for bit.
+fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let name = &format!("{}, the defaults", scenario.name);
+    let k = Wavenumber::new(scenario.k.0, scenario.k.1).unwrap();
+    let defaults = HelmholtzFmmBuilder::new(k, scenario.degrees.clone())
+        .charges(scenario.charges)
+        .gradients(scenario.gradients)
+        .domain(PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]));
+    let (fmm, output) = run(&defaults, &inputs, kind, comm);
+    let tolerance = match scenario.degrees {
+        Degrees::Tolerance(epsilon) => Some(epsilon),
+        Degrees::PerLevel(_) => None,
+    };
+    let points = default_max_points_per_leaf(tolerance, Isa::detect());
+    assert_eq!(fmm.max_points_per_leaf(), points, "{name}");
+    assert_eq!(fmm.c_leaf(), DEFAULT_C_LEAF, "{name}");
+    assert_eq!(fmm.near_v(), VNear::CostModel, "{name}");
+    assert_eq!(fmm.near_wx(), WxNear::CostModel, "{name}");
+    let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
+    if comm.rank() == 0 {
+        println!(
+            "{name}: {points} points per leaf, {} levels, leaf level {}: φ {phi:.2e}, ∇φ \
+             {grad:.2e}",
+            fmm.nlevels(),
+            fmm.min_leaf_level(),
+        );
+    }
+    assert!(
+        phi < scenario.bound && grad < scenario.bound,
+        "{name}: φ {phi:.2e}, ∇φ {grad:.2e}, bound {:.1e}",
+        scenario.bound
+    );
+    drop(fmm);
+    let named = default_builder(scenario)
+        .max_points_per_leaf(points)
+        .c_leaf(DEFAULT_C_LEAF)
+        .near_v(VNear::CostModel)
+        .near_wx(WxNear::CostModel);
+    let (_, output_named) = run(&named, &inputs, kind, comm);
+    assert_same(&format!("{name}: named"), &output_named, &output, comm);
+    let (_, threaded) = run(&defaults.clone().threads(2), &inputs, kind, comm);
+    assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+    check_one_rank(name, &defaults, &inputs, kind, &output, comm);
+}
+
 /// The errors of the V pairs' near rule may be this many times the rule off's (Helmholtz
 /// CH4.0d2; the near rule's bound of Phase 6 T12, `NEAR_ERROR_BOUND` of `tests/mpi_exec.rs`):
 /// a converted pair is exact, but the truncation errors of pairs may cancel.
@@ -2350,7 +2494,7 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
         ),
     ] {
         let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
-        assert_eq!(fmm_off.near_v(), VNear::Off, "the rule is off by default");
+        assert_eq!(fmm_off.near_v(), VNear::Off, "the rule off as named");
         if setting == "Auto with waves" || setting == "PlaneWave" {
             let waves = (0..fmm_off.nlevels())
                 .any(|l| fmm_off.operator().plane_wave_precision(l).is_some());
@@ -2448,6 +2592,129 @@ fn check_near_v(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) 
             "{}, V pairs below {crossover}: {} of {} converted, {} more source points received; \
              under PlaneWave (by parent and source on the levels with waves) {} of {}",
             scenario.name, totals[1], totals[0], totals[2], totals[4], totals[3]
+        );
+    }
+    totals
+}
+
+/// The W and X pairs between leaves as near pairs (Helmholtz CH4.0d3;
+/// `HelmholtzFmmBuilder::near_wx`), under Rotation and the default, at crossovers that
+/// convert some pairs and keep others, at ∞ (every W and X pair between leaves), by the cost
+/// model, and by the cost model with the V rule's: the errors against the direct sum within
+/// [`NEAR_ERROR_BOUND`] of the rule off's, 2 threads the one-thread output bit for bit, on P
+/// ranks the one-rank FMM's of the same rule bit for bit, and the P2L and M2P interactions at
+/// most the rule off's. Crossovers of 0 convert nothing: the rule off's output bit for bit.
+/// Returns the W pairs between leaves offered and converted and the X pairs offered and
+/// converted at the middle crossover under Rotation, over every rank.
+fn check_near_wx(scenario: &Scenario, crossover: f64, comm: &SimpleCommunicator) -> [usize; 4] {
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let mut totals = [0usize; 4];
+    let far = |fmm: &HelmholtzFmm<'_, f64>| {
+        let local: Vec<u64> = fmm.far_interactions().iter().flatten().copied().collect();
+        let mut summed = vec![0u64; local.len()];
+        comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+        summed.iter().sum::<u64>()
+    };
+    for (setting, off) in [
+        ("Rotation", builder(scenario)),
+        ("the default", default_builder(scenario)),
+    ] {
+        let (fmm_off, output_off) = run(&off, &inputs, kind, comm);
+        assert_eq!(fmm_off.near_wx(), WxNear::Off, "the rule off as named");
+        let (phi_off, grad_off) = errors(scenario, &inputs, &output_off, 0, comm);
+        let far_off = far(&fmm_off);
+        drop(fmm_off);
+
+        let name = &format!("{}, W and X pairs at 0, {setting}", scenario.name);
+        let zero = WxNear::Crossovers { w: 0.0, x: 0.0 };
+        let (fmm, output) = run(&off.clone().near_wx(zero), &inputs, kind, comm);
+        let pairs = fmm.plan().near_pairs();
+        assert_eq!(pairs.w_converted + pairs.x_converted, 0, "{name}");
+        assert_same(name, &output, &output_off, comm);
+        drop(fmm);
+
+        let choices = [
+            (
+                WxNear::Crossovers {
+                    w: crossover,
+                    x: crossover,
+                },
+                VNear::Off,
+            ),
+            (
+                WxNear::Crossovers {
+                    w: f64::INFINITY,
+                    x: f64::INFINITY,
+                },
+                VNear::Off,
+            ),
+            (WxNear::CostModel, VNear::Off),
+            (WxNear::CostModel, VNear::CostModel),
+        ];
+        for (choice, near_v) in choices {
+            let name = &format!(
+                "{}, W and X pairs {choice}, V {near_v}, {setting}",
+                scenario.name
+            );
+            let on = off.clone().near_wx(choice).near_v(near_v);
+            let (fmm, output) = run(&on, &inputs, kind, comm);
+            assert_eq!(fmm.near_wx(), choice, "{name}");
+            let pairs = fmm.plan().near_pairs();
+            if matches!(choice, WxNear::Crossovers { w, .. } if w == f64::INFINITY) {
+                assert_eq!(
+                    pairs.w_converted, pairs.w_leaf_pairs,
+                    "{name}: every W pair"
+                );
+                assert_eq!(
+                    pairs.x_converted, pairs.x_leaf_pairs,
+                    "{name}: every X pair"
+                );
+            }
+            if near_v == VNear::Off {
+                assert_eq!(pairs.v_converted, 0, "{name}: W and X pairs only");
+            }
+            let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
+            if comm.rank() == 0 {
+                println!(
+                    "{name}: relative L2 φ {phi:.3e} (off {phi_off:.3e}), ∇φ {grad:.3e} \
+                     (off {grad_off:.3e})"
+                );
+            }
+            assert!(
+                phi <= NEAR_ERROR_BOUND * phi_off && grad <= NEAR_ERROR_BOUND * grad_off,
+                "{name}: φ {phi:.3e}, ∇φ {grad:.3e} against the rule off's {phi_off:.3e}, \
+                 {grad_off:.3e}"
+            );
+            let far_on = far(&fmm);
+            assert!(
+                far_on <= far_off,
+                "{name}: {far_on} P2L and M2P interactions, off {far_off}"
+            );
+            let (_, threaded) = run(&on.clone().threads(2), &inputs, kind, comm);
+            assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
+            check_one_rank(name, &on, &inputs, kind, &output, comm);
+            if setting == "Rotation"
+                && choice
+                    == (WxNear::Crossovers {
+                        w: crossover,
+                        x: crossover,
+                    })
+            {
+                let local = [
+                    pairs.w_leaf_pairs,
+                    pairs.w_converted,
+                    pairs.x_leaf_pairs,
+                    pairs.x_converted,
+                ];
+                comm.all_reduce_into(&local[..], &mut totals[..], SystemOperation::sum());
+            }
+        }
+    }
+    if comm.rank() == 0 {
+        println!(
+            "{}, W and X pairs below {crossover}: W {} of {}, X {} of {} converted",
+            scenario.name, totals[1], totals[0], totals[3], totals[2]
         );
     }
     totals
@@ -2685,6 +2952,28 @@ fn helmholtz_fmm() {
             scenario.name
         );
     }
+    // The leaf size and c_leaf (CH4.0d3): the sphere under the leaf rule.
+    check_leaf_sizes(&sphere_scenario(), &comm);
+    // The library's defaults (CH4.0d3): a tolerance and named degrees.
+    check_defaults(&sphere_scenario(), &comm);
+    check_defaults(&scenarios()[2], &comm);
+    // The W and X pairs as near pairs (CH4.0d3): the clusters with separate targets and the
+    // sphere under the leaf rule, adaptive trees with W and X lists.
+    let mut wx = [0usize; 4];
+    for scenario in [&scenarios()[2], &sphere_scenario()] {
+        let totals = check_near_wx(scenario, 12.0, &comm);
+        for (sum, total) in wx.iter_mut().zip(totals) {
+            *sum += total;
+        }
+    }
+    assert!(
+        0 < wx[1] && wx[1] < wx[0] && 0 < wx[3] && wx[3] < wx[2],
+        "the W and X rule converted none or all: W {} of {}, X {} of {}",
+        wx[1],
+        wx[0],
+        wx[3],
+        wx[2]
+    );
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);
     check_vectors(&scenarios()[2], &comm);

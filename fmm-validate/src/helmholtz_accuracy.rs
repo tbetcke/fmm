@@ -58,6 +58,13 @@
 //!   [`Row::source_points`] the points the source exchange moves, and per level
 //!   [`Row::p2p_seconds`] and [`Row::near_interactions`], for the P2P's cost per
 //!   interaction.
+//!   [`Case::max_points_per_leaf`] and [`Case::c_leaf`] (Helmholtz CH4.0d3) the tree;
+//!   [`Row::leaves_by_level`] its leaves, [`Row::kind_seconds`] the other kinds' level calls
+//!   per level and [`Row::far_leaf_entries`] the X and W entries, for the leaf size's cost;
+//!   [`Case::near_wx`] which W and X pairs between leaves become near pairs (off by default,
+//!   the library's), [`Row::wx_near`] the pairs offered and converted and
+//!   [`Row::far_interactions`] the P2L and M2P point interactions per level, for the rule's
+//!   cost model.
 
 use std::ops::Range;
 use std::thread;
@@ -69,7 +76,7 @@ use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber,
+    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber, WxNear,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -156,13 +163,22 @@ pub struct Case {
     /// The points per leaf (`HelmholtzFmmBuilder::max_points_per_leaf`, Helmholtz CH4.0b;
     /// `None` the library's); above N, a tree of leaves on the leaf rule's level alone.
     pub max_points_per_leaf: Option<usize>,
+    /// The maximum leaf width in wavelengths (`HelmholtzFmmBuilder::c_leaf`, Helmholtz
+    /// CH4.0d3; `None` the library's, `DEFAULT_C_LEAF`).
+    pub c_leaf: Option<f64>,
     /// Whether the plan leaves out the work of empty boxes
     /// (`HelmholtzFmmBuilder::empty_boxes`, Helmholtz CH4.0d1; `true` in [`Case::new`], the
     /// library's default); named always, as `auto_plane_wave`.
     pub empty_boxes: bool,
     /// Which V pairs between leaves become near pairs (`HelmholtzFmmBuilder::near_v`,
-    /// Helmholtz CH4.0d2; [`VNear::Off`] in [`Case::new`], the library's default).
+    /// Helmholtz CH4.0d2; [`VNear::Off`] in [`Case::new`], the library's default before
+    /// Helmholtz CH4.0d3, `VNear::CostModel` since; named always, so a case's pairs do not
+    /// move with the library's default).
     pub near_v: VNear,
+    /// Which W and X pairs between leaves become near pairs (`HelmholtzFmmBuilder::near_wx`,
+    /// Helmholtz CH4.0d3; [`WxNear::Off`] in [`Case::new`]; the library's default is
+    /// `WxNear::CostModel`; named always, as `near_v`).
+    pub near_wx: WxNear,
 }
 
 impl Case {
@@ -198,8 +214,10 @@ impl Case {
             evaluations: 1,
             domain: None,
             max_points_per_leaf: None,
+            c_leaf: None,
             empty_boxes: true,
             near_v: VNear::Off,
+            near_wx: WxNear::Off,
         }
     }
 }
@@ -613,6 +631,31 @@ pub struct Row {
     pub leaves: usize,
     /// The most points in a leaf.
     pub max_leaf_points: usize,
+    /// The octree's refinement target as built (`HelmholtzFmm::max_points_per_leaf`;
+    /// Helmholtz CH4.0d3).
+    pub max_points_per_leaf: usize,
+    /// The maximum leaf width in wavelengths as built (`HelmholtzFmm::c_leaf`; Helmholtz
+    /// CH4.0d3).
+    pub c_leaf: f64,
+    /// Per level, its leaves and the leaves holding a source or a target, summed over the
+    /// ranks (`HelmholtzFmm::leaves_by_level`; Helmholtz CH4.0d3).
+    pub leaves_by_level: Vec<[usize; 2]>,
+    /// Per level, the level calls' seconds of the kinds of
+    /// `nd_fmm_exec::helmholtz::TIMED_KINDS` (P2M, M2M, L2L, L2P, P2L, M2P) in the last
+    /// evaluation, each the slowest rank's (`HelmholtzOperator::kind_times`; Helmholtz
+    /// CH4.0d3).
+    pub kind_seconds: Vec<[f64; 6]>,
+    /// Per level, the plan's X entries (P2L, leaves of the next coarser level) and W entries
+    /// (M2P, boxes of the next finer level), summed over the ranks (Helmholtz CH4.0d3).
+    pub far_leaf_entries: Vec<[usize; 2]>,
+    /// Per level, the point interactions of P2L and M2P, [Σ_X n_s, Σ_W n_t], summed over the
+    /// ranks (`HelmholtzFmm::far_interactions`; Helmholtz CH4.0d3).
+    pub far_interactions: Vec<[u64; 2]>,
+    /// The W and X pairs' near rule as built (Helmholtz CH4.0d3).
+    pub near_wx: WxNear,
+    /// The W pairs between leaves the rule offered and converted, and the X pairs, summed
+    /// over the ranks (`NearPairs`' W and X fields; Helmholtz CH4.0d3).
+    pub wx_near: [usize; 4],
     /// The build, seconds (slowest rank).
     pub build: f64,
     /// The evaluation, seconds (slowest rank); the last of [`Case::evaluations`].
@@ -678,6 +721,29 @@ pub struct Row {
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
     pub checksum: u64,
+}
+
+impl Row {
+    /// The width of the widest leaf holding a point, in the FMM's domain (Helmholtz
+    /// CH4.0d3; from the level's circumradius √3 r_l, w = 2 r_l).
+    pub fn widest_occupied_leaf(&self) -> f64 {
+        self.leaves_by_level
+            .iter()
+            .position(|&[_, occupied]| occupied > 0)
+            .map_or(0.0, |l| 2.0 * self.circumradii[l] / 3f64.sqrt())
+    }
+
+    /// A bound on the phase Re(k) r of the P2P's pairs (Helmholtz CH4.0d3; proposal §5.7,
+    /// CH3.4b's contract range): a near pair's leaves are adjacent, or V leaves of one level
+    /// made near (`near_v`, at most three boxes apart per axis), and no leaf holding a point
+    /// is wider than [`widest_occupied_leaf`](Self::widest_occupied_leaf) w, so r ≤ 2√3 w,
+    /// or 4√3 w with V pairs converted. A converted W or X pair (`near_wx`) joins a leaf to
+    /// a finer one inside a neighbour of its width, so its points lie within 2√3 times the
+    /// coarser leaf's width and it adds nothing to the bound.
+    pub fn phase_bound(&self, re_k: f64) -> f64 {
+        let span = if self.v_near[1] > 0 { 4.0 } else { 2.0 };
+        re_k * span * 3f64.sqrt() * self.widest_occupied_leaf()
+    }
 }
 
 /// The slowest rank's `seconds`.
@@ -760,6 +826,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         .batched_term(case.batched_term)
         .empty_boxes(case.empty_boxes)
         .near_v(case.near_v)
+        .near_wx(case.near_wx)
         .plane_wave_precision(case.plane_wave.clone());
     if let Some(width) = case.m2l_block_targets {
         builder = builder.m2l_block_targets(width);
@@ -791,6 +858,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(points) = case.max_points_per_leaf {
         builder = builder.max_points_per_leaf(points);
     }
+    if let Some(c_leaf) = case.c_leaf {
+        builder = builder.c_leaf(c_leaf);
+    }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -806,10 +876,12 @@ pub fn run_output<C: CommunicatorCollectives>(
     let (mut output, mut evaluate, mut first_evaluate) = (None, 0.0, 0.0);
     let mut before: Vec<Duration> = Vec::new();
     let mut p2p_before: Vec<Duration> = Vec::new();
+    let mut kinds_before: Vec<[Duration; 6]> = Vec::new();
     let mut passes_before: Vec<PlaneWaveTimes> = Vec::new();
     for evaluation in 0..case.evaluations.max(1) {
         before = fmm.operator().m2l_times().to_vec();
         p2p_before = fmm.operator().p2p_times().to_vec();
+        kinds_before = fmm.operator().kind_times().to_vec();
         passes_before = fmm.operator().plane_wave_times().to_vec();
         comm.barrier();
         let start = Instant::now();
@@ -824,6 +896,10 @@ pub fn run_output<C: CommunicatorCollectives>(
     let checksum = reduce_checksum(checksum(&output, block.start), comm);
     let mut leaves = 0usize;
     comm.all_reduce_into(&fmm.nleaves(), &mut leaves, SystemOperation::sum());
+    let local: Vec<usize> = fmm.leaves_by_level().into_iter().flatten().collect();
+    let mut summed = vec![0usize; local.len()];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let leaves_by_level: Vec<[usize; 2]> = summed.chunks(2).map(|c| [c[0], c[1]]).collect();
     let nlevels = fmm.nlevels();
     let seconds: Vec<f64> = fmm
         .operator()
@@ -843,13 +919,45 @@ pub fn run_output<C: CommunicatorCollectives>(
         .collect();
     let mut p2p_seconds = vec![0.0f64; nlevels];
     comm.all_reduce_into(&seconds[..], &mut p2p_seconds[..], SystemOperation::max());
+    let seconds: Vec<f64> = fmm
+        .operator()
+        .kind_times()
+        .iter()
+        .zip(&kinds_before)
+        .flat_map(|(after, before)| (0..6).map(|j| (after[j] - before[j]).as_secs_f64()))
+        .collect();
+    let mut slowest_kinds = vec![0.0f64; 6 * nlevels];
+    comm.all_reduce_into(&seconds[..], &mut slowest_kinds[..], SystemOperation::max());
+    let kind_seconds: Vec<[f64; 6]> = slowest_kinds.as_chunks::<6>().0.to_vec();
+    let local: Vec<usize> = (0..nlevels)
+        .flat_map(|l| {
+            let lists = fmm.plan().level(l);
+            [lists.x().len(), lists.w().len()]
+        })
+        .collect();
+    let mut summed = vec![0usize; local.len()];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let far_leaf_entries: Vec<[usize; 2]> = summed.chunks(2).map(|c| [c[0], c[1]]).collect();
     let mut near_interactions = vec![0u64; nlevels];
     comm.all_reduce_into(
         &fmm.near_interactions()[..],
         &mut near_interactions[..],
         SystemOperation::sum(),
     );
+    let local: Vec<u64> = fmm.far_interactions().into_iter().flatten().collect();
+    let mut summed = vec![0u64; local.len()];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let far_interactions: Vec<[u64; 2]> = summed.as_chunks::<2>().0.to_vec();
     let pairs = fmm.plan().near_pairs();
+    let local = [
+        pairs.w_leaf_pairs,
+        pairs.w_converted,
+        pairs.x_leaf_pairs,
+        pairs.x_converted,
+    ]
+    .map(|n| n as u64);
+    let mut wx_totals = [0u64; 4];
+    comm.all_reduce_into(&local[..], &mut wx_totals[..], SystemOperation::sum());
     let (sent, received) = fmm.source_points_exchanged();
     let local = [pairs.v_leaf_pairs, pairs.v_converted, sent, received].map(|n| n as u64);
     let mut v_totals = [0u64; 4];
@@ -990,6 +1098,11 @@ pub fn run_output<C: CommunicatorCollectives>(
             .collect(),
         leaves,
         max_leaf_points: fmm.max_leaf_points(),
+        max_points_per_leaf: fmm.max_points_per_leaf(),
+        c_leaf: fmm.c_leaf(),
+        leaves_by_level,
+        kind_seconds,
+        far_leaf_entries,
         build,
         evaluate,
         first_evaluate,
@@ -1016,6 +1129,9 @@ pub fn run_output<C: CommunicatorCollectives>(
         left_out: core::array::from_fn(|i| totals[i] as usize),
         remote_multipoles: totals[8] as usize,
         near_v: fmm.near_v(),
+        far_interactions,
+        near_wx: fmm.near_wx(),
+        wx_near: wx_totals.map(|n| n as usize),
         v_near: [v_totals[0] as usize, v_totals[1] as usize],
         source_points: [v_totals[2] as usize, v_totals[3] as usize],
         p2p_seconds,

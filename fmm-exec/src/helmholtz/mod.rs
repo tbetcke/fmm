@@ -67,15 +67,17 @@ use crate::geometry::Domain;
 pub use degree::{DegreeError, DegreeRule, Degrees, degree, s7_degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 pub use fmm::{
-    DEFAULT_DENSE_NODE_BUDGET, DEFAULT_PLANE_WAVE_NODE_BUDGET, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VCosts, VNear, v_costs,
-    v_crossover,
+    DEFAULT_C_LEAF, DEFAULT_DENSE_NODE_BUDGET, DEFAULT_PLANE_WAVE_NODE_BUDGET, HelmholtzFmm,
+    HelmholtzFmmBuilder, HelmholtzFmmError, V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE,
+    VCosts, VNear, WX_COSTS_NEON, WX_COSTS_X86, WxCosts, WxNear, default_max_points_per_leaf,
+    v_costs, v_crossover, wx_costs, wx_crossovers,
 };
 pub use operator::{
     AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator,
     LevelShape, M2L_MIN_BLOCK_TARGETS, MIN_BUFFER_BOXES, OperatorError, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, auto_batched_max_degree,
-    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree, batched_block_targets,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, TIMED_KINDS,
+    auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
+    auto_plane_wave_min_degree, batched_block_targets,
 };
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
@@ -84,7 +86,8 @@ const DEEPEST: usize = DEEPEST_LEVEL as usize;
 /// The maximum leaf width in wavelengths, c_leaf = 1: decision D11 of
 /// docs/helmholtz/roadmap.md (signed off on 2026-10-28; spikes/census/SPIKE_REPORT.md
 /// §3), the largest c_leaf with no high-frequency leaf on any reference workload at
-/// tolerances 10⁻⁶ and 10⁻⁸.
+/// tolerances 10⁻⁶ and 10⁻⁸. The default of `HelmholtzFmmBuilder::c_leaf` is
+/// [`DEFAULT_C_LEAF`] since Helmholtz CH4.0d3.
 pub const C_LEAF: f64 = 1.0;
 
 /// The kind of a wavenumber (CONVENTIONS §3.15, "Kernel and factors").

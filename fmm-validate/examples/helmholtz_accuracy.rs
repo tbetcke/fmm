@@ -77,6 +77,27 @@
 //!   points sent and received (`Row::source_points`), the P2P's seconds and near
 //!   interactions with its thread-nanoseconds per interaction, the M2L's seconds and the
 //!   evaluation; with `--levels` also a row per level with P2P.
+//! - `--leaf-size auto|n,…` and `--c-leaf auto|c,…` (Helmholtz CH4.0d3,
+//!   `HelmholtzFmmBuilder::{max_points_per_leaf, c_leaf}`): the octree's points per leaf and
+//!   the maximum leaf width in wavelengths (`auto`, the default, the library's), every run at
+//!   each pair in turn (outside `--empty-boxes`' loop: each a new tree); where one is named
+//!   the column "M2L" of a row ends with `/n<size>` or `/c<c>`. A last table "Leaves" has a
+//!   row per run with the leaf size and c_leaf as built, the leaves and those holding a
+//!   point (also per level, `occupied/leaves`), the points per occupied leaf, the largest
+//!   degree, the P2P's seconds and share of the evaluation, the M2L's seconds, the P2L's,
+//!   the M2P's and the other kinds' seconds (`Row::kind_seconds`), the X and W entries
+//!   (`Row::far_leaf_entries`), the bound
+//!   on the P2P's phase Re(k) r (`Row::phase_bound`, CH3.4b's contract range 22 c_leaf
+//!   without V pairs made near) and over c_leaf, the build, the evaluation and the errors.
+//! - `--near-wx off|cost|n|inf,…` (Helmholtz CH4.0d3, `HelmholtzFmmBuilder::near_wx`): the W
+//!   pairs whose finer leaf holds fewer than n source points and the X pairs whose finer leaf
+//!   holds fewer than n target points become near pairs (`off`, the default, the library's;
+//!   `cost` the cost model's crossovers per level; `inf` every one), every run at each in
+//!   turn, inside `--near-v`'s loop; the column "M2L" of a row with the rule on ends with
+//!   `/wx<n>`. A last table "Leaf operators" has a row per run with the P2P's, P2L's and
+//!   M2P's seconds, point interactions (`Row::far_interactions`) and thread-nanoseconds per
+//!   interaction, the W and X pairs offered and converted (`Row::wx_near`) and the
+//!   evaluation; with `--levels` also a row per level with that work and its degree.
 //! - `--term on|off,…` (Helmholtz CH4.0, `HelmholtzFmmBuilder::batched_term`): whether Auto
 //!   reads the levels' V lists (`on`, the default, the library's), each Auto run (`auto`,
 //!   `auto:<d>`, `sweep`, `auto-pw`) at each in turn; the column "M2L" of a row with the term
@@ -133,7 +154,7 @@ use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, VNear, Wavenumber, s7_degree,
+    PlaneWaveSplit, VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -170,6 +191,9 @@ struct Arguments {
     blocks: Vec<Option<usize>>,
     empty_boxes: Vec<bool>,
     near_v: Vec<VNear>,
+    near_wx: Vec<WxNear>,
+    leaf_sizes: Vec<Option<usize>>,
+    c_leaves: Vec<Option<f64>>,
     s7: bool,
     levels: bool,
     evaluations: usize,
@@ -240,7 +264,8 @@ fn arguments() -> Arguments {
              planewave|planewave:<1|2|3>|planewave-scan|planewave-scan:<1|2|3>,…] \
              [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] \
              [--split auto|parents|children,…] [--raise rule|level|leaves|m2l,…] \
-             [--term on|off,…] [--block auto|w,…] [--empty-boxes on|off,…] [--levels] \
+             [--term on|off,…] [--block auto|w,…] [--empty-boxes on|off,…] [--near-v off|cost|n|inf,…] [--near-wx off|cost|n|inf,…] \
+             [--leaf-size auto|n,…] [--c-leaf auto|c,…] [--levels] \
              [--evaluations n]; got {args:?}"
         );
         std::process::exit(2);
@@ -267,6 +292,9 @@ fn arguments() -> Arguments {
         blocks: vec![None],
         empty_boxes: vec![true],
         near_v: vec![VNear::Off],
+        near_wx: vec![WxNear::Off],
+        leaf_sizes: vec![None],
+        c_leaves: vec![None],
         s7: false,
         levels: false,
         evaluations: 1,
@@ -428,6 +456,46 @@ fn arguments() -> Arguments {
                         .collect::<Option<Vec<_>>>()
                         .map(|e| parsed.empty_boxes = e)
                         .is_some(),
+                    "--leaf-size" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "auto" => Some(None),
+                            n => n.parse::<usize>().ok().filter(|&n| n > 0).map(Some),
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|n| parsed.leaf_sizes = n)
+                        .is_some(),
+                    "--c-leaf" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "auto" => Some(None),
+                            c => c
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|c| *c > 0.0 && c.is_finite())
+                                .map(Some),
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|c| parsed.c_leaves = c)
+                        .is_some(),
+                    "--near-wx" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "off" => Some(WxNear::Off),
+                            "cost" => Some(WxNear::CostModel),
+                            "inf" => Some(WxNear::Crossovers {
+                                w: f64::INFINITY,
+                                x: f64::INFINITY,
+                            }),
+                            n => n
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|n| *n >= 0.0)
+                                .map(|n| WxNear::Crossovers { w: n, x: n }),
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|n| parsed.near_wx = n)
+                        .is_some(),
                     "--near-v" => value
                         .split(',')
                         .map(|v| match v {
@@ -559,14 +627,35 @@ fn m2l_string(row: &Row) -> String {
     }
 }
 
-/// For a row with the empty-box rule off `/full` (Helmholtz CH4.0d1), and with V pairs
-/// as near pairs `/v<n>` (Helmholtz CH4.0d2); else empty.
+/// For a row with the empty-box rule off `/full` (Helmholtz CH4.0d1), with V pairs as
+/// near pairs `/v<n>` (Helmholtz CH4.0d2) and with W and X pairs as near pairs `/wx<n>`
+/// (Helmholtz CH4.0d3); else empty.
 fn empty_suffix(row: &Row) -> String {
     let full = if row.empty_boxes { "" } else { "/full" };
-    match row.near_v {
-        VNear::Off => full.to_string(),
-        near => format!("{full}/v{near}"),
-    }
+    let v = match row.near_v {
+        VNear::Off => String::new(),
+        near => format!("/v{near}"),
+    };
+    let wx = match row.near_wx {
+        WxNear::Off => String::new(),
+        WxNear::Crossovers { w, .. } => format!("/wx{w}"),
+        WxNear::CostModel => "/wxcost".to_string(),
+    };
+    format!("{full}{v}{wx}")
+}
+
+/// For a row of a named leaf size `/n<size>` and of a named c_leaf `/c<c>` (Helmholtz
+/// CH4.0d3; `named` says which the command line named); else empty.
+fn leaf_suffix(row: &Row, named: (bool, bool)) -> String {
+    let size = match named.0 {
+        true => format!("/n{}", row.max_points_per_leaf),
+        false => String::new(),
+    };
+    let width = match named.1 {
+        true => format!("/c{}", row.c_leaf),
+        false => String::new(),
+    };
+    format!("{size}{width}")
 }
 
 /// For an Auto row without the term `/no-term`, and for a Batched or Auto row at a named
@@ -715,6 +804,14 @@ fn main() {
     let mut levels: Vec<String> = Vec::new();
     let mut left_out: Vec<String> = Vec::new();
     let mut near: Vec<String> = Vec::new();
+    let mut leaf_rows: Vec<String> = Vec::new();
+    let mut leaf_operators: Vec<String> = Vec::new();
+    // Whether `--leaf-size` and `--c-leaf` named a value (Helmholtz CH4.0d3): the column
+    // "M2L" then ends with it.
+    let named = (
+        arguments.leaf_sizes.iter().any(Option::is_some),
+        arguments.c_leaves.iter().any(Option::is_some),
+    );
     for &kd in &arguments.kds {
         let workload = workload(&arguments.workload, kd).expect("checked");
         for degrees in &arguments.degrees {
@@ -778,7 +875,12 @@ fn main() {
                 } else {
                     "–".into()
                 };
-                let m2l = format!("{}{}", m2l_string(row), empty_suffix(row));
+                let m2l = format!(
+                    "{}{}{}",
+                    m2l_string(row),
+                    empty_suffix(row),
+                    leaf_suffix(row, named)
+                );
                 println!(
                     "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} | {} | {} × {} \
                      | {} | {} | {} | {} | {} | {:.2} | {:.2} | {:.2e} | {gradient} \
@@ -810,7 +912,12 @@ fn main() {
             };
             // `--levels`: the rows of the second table, a row per level with V pairs and Σ.
             let per_level = |row: &Row| -> Vec<String> {
-                let setting = format!("{}{}", setting_name(row), empty_suffix(row));
+                let setting = format!(
+                    "{}{}{}",
+                    setting_name(row),
+                    empty_suffix(row),
+                    leaf_suffix(row, named)
+                );
                 let head = format!(
                     "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {}",
                     workload.name(),
@@ -900,11 +1007,12 @@ fn main() {
             // `--levels` one per level with P2P.
             let near_lines = |row: &Row| -> Vec<String> {
                 let head = format!(
-                    "| {} | {} | {kd_string} | {degrees_name} | {}{} | {} × {}",
+                    "| {} | {} | {kd_string} | {degrees_name} | {}{}{} | {} × {}",
                     workload.name(),
                     problem.len(),
                     setting_name(row),
                     empty_suffix(row),
+                    leaf_suffix(row, named),
                     row.ranks,
                     row.threads,
                 );
@@ -943,19 +1051,159 @@ fn main() {
                 }
                 lines
             };
+            // The row of the table "Leaves" (Helmholtz CH4.0d3).
+            let re_k = complex_k(&case).re;
+            let leaves_line = |row: &Row| -> String {
+                let all = row.errors.last().expect("an entry over all vectors");
+                let occupied: usize = row.leaves_by_level.iter().map(|c| c[1]).sum();
+                let by_level: Vec<String> = row
+                    .leaves_by_level
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c[0] > 0)
+                    .map(|(l, c)| format!("{l}:{}/{}", c[1], c[0]))
+                    .collect();
+                let p2p: f64 = row.p2p_seconds.iter().sum();
+                let m2l: f64 = row.m2l_seconds.iter().sum();
+                let kind = |j: usize| row.kind_seconds.iter().map(|k| k[j]).sum::<f64>();
+                let entries = |j: usize| row.far_leaf_entries.iter().map(|e| e[j]).sum::<usize>();
+                let phase = row.phase_bound(re_k);
+                format!(
+                    "| {} | {} | {kd_string} | {degrees_name} | {}{} | {} × {} | {} | {} | {} | {} \
+                     | {} | {} | {} | {:.1} | {} | {:.4} | {:.2} | {:.4} | {:.4} | {:.4} | {:.4} \
+                     | {} | {} | {:.1} | {:.1} | {:.3} | {:.3} | {:.2e} | {:.2e} |",
+                    workload.name(),
+                    problem.len(),
+                    setting_name(row),
+                    empty_suffix(row),
+                    row.ranks,
+                    row.threads,
+                    row.max_points_per_leaf,
+                    row.c_leaf,
+                    row.levels,
+                    row.min_leaf_level,
+                    row.leaves,
+                    occupied,
+                    by_level.join(" "),
+                    problem.len() as f64 / occupied.max(1) as f64,
+                    row.degrees.iter().max().copied().unwrap_or(0),
+                    p2p,
+                    p2p / row.evaluate,
+                    m2l,
+                    kind(4),
+                    kind(5),
+                    kind(0) + kind(1) + kind(2) + kind(3),
+                    entries(0),
+                    entries(1),
+                    phase,
+                    phase / row.c_leaf,
+                    row.build,
+                    row.evaluate,
+                    all[0],
+                    all[1],
+                )
+            };
+            // The rows of the table "Leaf operators" (Helmholtz CH4.0d3): the run's, and with
+            // `--levels` one per level with P2P, P2L or M2P work.
+            let operator_lines = |row: &Row| -> Vec<String> {
+                let head = format!(
+                    "| {} | {} | {kd_string} | {degrees_name} | {}{}{} | {} × {}",
+                    workload.name(),
+                    problem.len(),
+                    setting_name(row),
+                    empty_suffix(row),
+                    leaf_suffix(row, named),
+                    row.ranks,
+                    row.threads,
+                );
+                // Thread-nanoseconds per interaction, as in "Near pairs".
+                let per = |seconds: f64, interactions: u64| match interactions {
+                    0 => "–".to_string(),
+                    n => format!("{:.3}", seconds * row.threads as f64 * 1e9 / n as f64),
+                };
+                let line =
+                    |level: String, p: String, [p2p, p2l, m2p]: [f64; 3], [n, x, w]: [u64; 3]| {
+                        format!(
+                            "{head} | {level} | {p} | {p2p:.4} | {n} | {} | {p2l:.4} | {x} | {} \
+                         | {m2p:.4} | {w} | {} | {} | {} | {} | {} | {:.4} |",
+                            per(p2p, n),
+                            per(p2l, x),
+                            per(m2p, w),
+                            row.wx_near[0],
+                            row.wx_near[1],
+                            row.wx_near[2],
+                            row.wx_near[3],
+                            row.evaluate,
+                        )
+                    };
+                let sum = |f: &dyn Fn(usize) -> f64| (0..row.levels).map(f).sum::<f64>();
+                let total = |f: &dyn Fn(usize) -> u64| (0..row.levels).map(f).sum::<u64>();
+                let mut lines = vec![line(
+                    "Σ".into(),
+                    "–".into(),
+                    [
+                        sum(&|l| row.p2p_seconds[l]),
+                        sum(&|l| row.kind_seconds[l][4]),
+                        sum(&|l| row.kind_seconds[l][5]),
+                    ],
+                    [
+                        total(&|l| row.near_interactions[l]),
+                        total(&|l| row.far_interactions[l][0]),
+                        total(&|l| row.far_interactions[l][1]),
+                    ],
+                )];
+                if arguments.levels {
+                    for l in 0..row.levels {
+                        let [x, w] = row.far_interactions[l];
+                        if row.near_interactions[l] + x + w == 0 {
+                            continue;
+                        }
+                        lines.push(line(
+                            l.to_string(),
+                            row.degrees[l].to_string(),
+                            [
+                                row.p2p_seconds[l],
+                                row.kind_seconds[l][4],
+                                row.kind_seconds[l][5],
+                            ],
+                            [row.near_interactions[l], x, w],
+                        ));
+                    }
+                }
+                lines
+            };
             // The errors of the case's Rotation rows by P2P kernel and threads.
             let mut rotation: Vec<((P2pChoice, usize), [f64; 2])> = Vec::new();
             let k = complex_k(&case);
-            // `--empty-boxes`, the outermost of the run loops, then `--near-v`.
-            let rules = arguments.empty_boxes.iter().flat_map(|&empty_boxes| {
-                arguments
-                    .near_v
-                    .iter()
-                    .map(move |&near_v| (empty_boxes, near_v))
-            });
-            for (empty_boxes, near_v) in rules {
+            // `--empty-boxes`, the outermost of the run loops, then `--near-v`, then
+            // `--near-wx`.
+            let near_wx = &arguments.near_wx;
+            let rules: Vec<(bool, VNear, WxNear)> = arguments
+                .empty_boxes
+                .iter()
+                .flat_map(|&empty_boxes| {
+                    arguments.near_v.iter().flat_map(move |&near_v| {
+                        near_wx
+                            .iter()
+                            .map(move |&near_wx| (empty_boxes, near_v, near_wx))
+                    })
+                })
+                .collect();
+            // `--leaf-size` and `--c-leaf` outside them (Helmholtz CH4.0d3): each a new tree.
+            let trees: Vec<(Option<usize>, Option<f64>)> = arguments
+                .leaf_sizes
+                .iter()
+                .flat_map(|&n| arguments.c_leaves.iter().map(move |&c| (n, c)))
+                .collect();
+            let rules = trees
+                .iter()
+                .flat_map(|&tree| rules.iter().map(move |&rule| (tree, rule)));
+            for ((leaf_size, c_leaf), (empty_boxes, near_v, near_wx)) in rules {
+                case.max_points_per_leaf = leaf_size;
+                case.c_leaf = c_leaf;
                 case.empty_boxes = empty_boxes;
                 case.near_v = near_v;
+                case.near_wx = near_wx;
                 for &m2l_run in &arguments.m2l {
                     // `--term` for the Auto entries, `--block` for those and Batched's.
                     let (auto, batched) = match m2l_run {
@@ -1094,6 +1342,8 @@ fn main() {
                                                 }
                                                 left_out.push(left_out_line(&row));
                                                 near.extend(near_lines(&row));
+                                                leaf_rows.push(leaves_line(&row));
+                                                leaf_operators.extend(operator_lines(&row));
                                             }
                                             if is_rotation && reference.is_none() {
                                                 rotation.push(((p2p, threads), all));
@@ -1210,6 +1460,39 @@ fn main() {
              | ---: | ---: | ---: | ---: | ---: |"
         );
         for line in &near {
+            println!("{line}");
+        }
+        println!();
+        println!("## Leaves");
+        println!();
+        println!(
+            "| Workload | N | kD | degrees | M2L | ranks × threads | leaf size | c_leaf | levels \
+             | leaf level | leaves | occupied | occupied/leaves by level | N per occupied \
+             | largest p | P2P s | P2P share | M2L s | P2L s | M2P s | P2M, M2M, L2L, L2P s \
+             | X entries | W entries | Re(k) r bound | ÷ c_leaf | build s | evaluate s | φ | ∇φ |"
+        );
+        println!(
+            "| --- | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- \
+             | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: \
+             | ---: | ---: | ---: | ---: | ---: |"
+        );
+        for line in &leaf_rows {
+            println!("{line}");
+        }
+        println!();
+        println!("## Leaf operators");
+        println!();
+        println!(
+            "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | P2P s \
+             | near interactions | ns per interaction | P2L s | X interactions | ns per X \
+             | M2P s | W interactions | ns per W | W pairs offered | converted \
+             | X pairs offered | converted | evaluate s |"
+        );
+        println!(
+            "| --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: \
+             | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+        );
+        for line in &leaf_operators {
             println!("{line}");
         }
     }

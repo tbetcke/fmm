@@ -519,13 +519,16 @@ wavelengths and P2M and L2P at p ≈ 33.
 
 The builder therefore refines every box that contains points and is wider than c_leaf λ, in
 addition to the points-per-leaf rule, with c_leaf from spike S8 (initially between 0.5 and
-1, decision D11). Consequences:
+1, decision D11; the builder's default 2 since CH4.0d3, amended at CH4.0d3). Consequences:
 
 - every leaf is on a low-frequency level, and so are the W- and X-list operators: M2P reads
   boxes smaller than its target leaf, and P2L writes boxes smaller than its source leaf. The
-  high-frequency levels carry only M2M, L2L and V lists;
+  high-frequency levels carry only M2M, L2L and V lists (at c_leaf 2 the census's first pass
+  found leaves on high-frequency levels; CH4.3 re-decides c_leaf with its rule; amended at
+  CH4.0d3);
 - every P2P pair lies within about 2√3 c_leaf λ, so the phase k r stays below about
-  22 c_leaf radians (Section 5.7);
+  22 c_leaf radians (Section 5.7), and below 44 c_leaf with V pairs made near pairs (4√3
+  c_leaf λ; the default since CH4.0d3, amended at CH4.0d3);
 - under-resolved inputs get more, sparser leaves instead of high-frequency ones; S8 measures
   the cost on the reference workloads (Section 9.1).
 
@@ -1864,6 +1867,10 @@ these.
   the degree rule also checked at x = 216 and 108 (W1 at kD = 1000): within ε, and the levels
   beyond the measured x ≤ 65 move the error by under 1 % when raised. A check of accuracy, not
   of the smallest degrees: CH4.3's recalibration stays.
+- **Amended at CH4.0d3, 2026-11-14** (fmm-validate/results/helmholtz-ch4-0d3.md; PR #219, its
+  questions 1–4 as built, signed off by the user, "I agree with the recommendation"): Section 3.7, the
+  builder's c_leaf 2 (D11's 1 the leaf rule's constant; CH4.3 re-decides it with the
+  high-frequency rule) and the P2P's phase below 44 c_leaf with V pairs made near pairs.
 
 ## Appendix B. The stability check behind Section 3.6
 

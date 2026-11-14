@@ -7,14 +7,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
 `docs/helmholtz/gates/<milestone>.md`.
 
-Status (2026-11-13): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0c, CH4.0d1 and CH4.0d1b
-are merged; CH4.0d2 makes V pairs between leaves near pairs, opt-in (`near_v`), decided per
-(parent, source) on levels with waves; it gains under Rotation (median 0.52 at 10⁻⁸) and at
-10⁻⁸ under the default on Kathleen, and stays off by default (signed off: its default goes to
-CH4.0d3). HR, H0, H1 and H2
-are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0d3, the leaf
-size, with the V rule swept beside it.
+Status (2026-11-14): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0d2 are merged; CH4.0d3
+adds W and X pairs as near pairs and proposes the Helmholtz builder's leaf size by ε and
+machine class, the V, W and X rules by their cost models and c_leaf 2 (build plus one
+evaluation 0.41–0.64× the default before on Kathleen, 0.57–0.83× on locust), signed off as
+built on #219 (D11 amended). HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and
+CH0.6. Next: CH4.0e, the comparison with FMM3D under the defaults.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -99,7 +98,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended. Amended 2026-11-11 (CH6.1g, question 2; the user: "Lift for 10⁻⁸–10⁻⁷ only (Recommended)"): `Auto` also takes it at 10⁻⁸ ≤ ε < 10⁻⁷, where the rule runs iprec 3 at the raised degree max(p_l, 32), and not at 10⁻⁷ ≤ ε < 10⁻⁶ until CH6.1h; proposal §5.3 amended. Amended 2026-11-11 (CH6.1h, question 2; the user: "Lift it (Recommended)"): `Auto` also takes it at 10⁻⁷ ≤ ε < 10⁻⁶, with the raised degree on the M2L alone there (`PlaneWaveRaise::Rule`); proposal §5.3 amended |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
-| D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
+| D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p; amended at CH4.0d3 (the user on #219, 2026-11-14: "I agree with the recommendation"): the builder's default c_leaf = 2 (`DEFAULT_C_LEAF`), `C_LEAF` = 1 stays the leaf rule's constant, CH4.3 re-decides |
 | D12 | The reference workloads | the set of §9.1 | CH0.8a | CH2.1 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 2), the workloads of §9.1 unchanged, with W3 at 10⁶ points and kD = 500 named as the node-budget and leaf-rule-cost case |
 | D13 | RLST's `fftw_mkl` back end | – | – | – | withdrawn (RLST ≥ 0.11 has none) |
 | D14 | Ownership and schedule of Phase HR | – | – | – | closed (RLST 0.11.0 and 0.12.0) |
@@ -549,27 +548,15 @@ task's full line is in its record or report and its progress entry
   evaluation under Rotation 0.52–0.94 (median by ε), under the default 0.85–1.05. Left off by
   default, its default decided with CH4.0d3's leaf size (the user, 2026-11-13, on the PR's
   question 1: "I agree with your recommendation"). *Needs:* CH4.0d1.
-- [ ] **CH4.0d3 The leaf size and c_leaf.** The FMM's build plus evaluation against the points
-  per leaf (32 to 1,024), under the default M2L (D8) with CH4.0d1 (and CH4.0d2 if adopted) on,
-  c_leaf kept as the width cap. Cases: CH3.6's matrix at 10⁻³, 10⁻⁶ and 10⁻⁸ (W1, W3 and the four
-  W4 distributions), and W1 at kD = 500 and W3 at kD = 100. The leaf size's effect on the
-  degrees and the near field's share recorded, with the leaf rule's forced levels named where
-  c_leaf binds before the points do. c_leaf swept as well, from 1 to 2, on the cases where it
-  binds (review A2; question 2 of #209, the user, 2026-11-12, on #209: "I agree"); D11's
-  c_leaf = 1 stays the default until this task's sign-off says otherwise. On W1 at kD = 500
-  every leaf is forced to level 7 at about 27 points, so the sweep of the points alone cannot
-  change that tree. The errors still within ε and CH3.4b's contract range checked at each
-  c_leaf. *Done when:* a default leaf size by ε (or p), the machine class and the multipole
-  planes, proposed for sign-off with its gain per case, as T11 did for Laplace. Inputs that do
-  not depend on the data (constraint 9). The errors within ε, at most CH3.4b's contract range
-  (Re(k) r ≤ 22 c_leaf, unchanged). Deterministic and rank-invariant at each leaf size.
-  Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64 stays
-  best, and why `fastker`'s leaves do not carry over. Also (CH4.0d2's question 1, signed off
-  2026-11-13: "I agree with your recommendation"): the sweep with `HelmholtzFmmBuilder::near_v` off and `VNear::CostModel`, on
-  Kathleen and locust, and the V rule's default proposed with the leaf size (under Rotation
-  CH4.0d2 converted nearly every V pair between leaves of 64 points at ε ≤ 10⁻⁶; under the
-  default it paid only at 10⁻⁸ on Kathleen). *Needs:* CH4.0d2. *Machines:* Kathleen,
-  locust (the M6 with the user's go-ahead). *Sign-off:* the default.
+- [x] **CH4.0d3 The leaf size and c_leaf.** Report: `fmm-validate/results/helmholtz-ch4-0d3.md`;
+  record `docs/helmholtz/tasks/CH4.0d3.md`. W and X pairs as near pairs added (the user,
+  2026-11-14: "Add W/X rule here (Recommended)"; `near_wx`, `WxCosts` per class) and c_leaf 1
+  and 2 swept ("Yes, sweep 1 and 2 (Recommended)"). Proposed defaults, built in the PR: the
+  leaf size `default_max_points_per_leaf` (x86 256; NEON 128 at ε ≥ 10⁻⁷, 256 below), the V,
+  W and X rules by their cost models, c_leaf 2: build plus one evaluation 0.64, 0.53, 0.41
+  (Kathleen) and 0.83, 0.75, 0.57 (locust) of the default before at 10⁻³, 10⁻⁶, 10⁻⁸; errors
+  within ε; 4 × 10 = 1 × 40. *Sign-off:* the four defaults as built (the PR's questions 1–4;
+  the user on #219, 2026-11-14: "I agree with the recommendation"); D11 amended.
 - [ ] **CH4.0e The comparison under the default, and H4's expected gain.** Added on
   2026-11-12 by the review's triage (`docs/reviews/2026-11-12-H6.md`, A1, B2, B5; question 1
   of #209, the user, 2026-11-12, on #209: "I agree"). CH3.6 is
@@ -627,7 +614,9 @@ task's full line is in its record or report and its progress entry
   deterministic with the RCR pairs added after F → R. *Needs:* CH4.1, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
-  back to RCR when the scratch budget binds. Also from S6: the damped classes measured in
+  back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
+  rule (at c_leaf 2 the census's first pass put leaves on high-frequency levels on 9 trees at
+  10⁻⁶; proposal §3.7 keeps W and X lists off them; CH4.0d3's report §4). Also from S6: the damped classes measured in
   the FMM-weighted norm of CH1.3c, against the per-pair bound's factor
   e^{Im(k)(|t| + 2a)} (its question 7), and whether a shorter transfer function
   (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation
