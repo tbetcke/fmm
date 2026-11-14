@@ -688,6 +688,14 @@ fn check_leaves(world: &SimpleCommunicator) {
         let leaves: usize = row.leaves_by_level.iter().map(|c| c[0]).sum();
         assert_eq!(leaves, row.leaves);
         assert!(row.leaves_by_level.iter().all(|c| c[1] <= c[0]));
+        assert_eq!(row.kind_seconds.len(), row.levels);
+        assert_eq!(row.far_leaf_entries.len(), row.levels);
+        // Every level with leaves holding points ran L2P (its fourth kind).
+        assert!(
+            (0..row.levels).all(|l| row.leaves_by_level[l][1] == 0 || row.kind_seconds[l][3] > 0.0),
+            "{:?}",
+            row.kind_seconds
+        );
         assert!(row.leaves_by_level.iter().map(|c| c[1]).sum::<usize>() > 0);
         let phase = row.phase_bound(100.0);
         assert!(

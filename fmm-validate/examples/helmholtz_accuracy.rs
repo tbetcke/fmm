@@ -84,7 +84,9 @@
 //!   the column "M2L" of a row ends with `/n<size>` or `/c<c>`. A last table "Leaves" has a
 //!   row per run with the leaf size and c_leaf as built, the leaves and those holding a
 //!   point (also per level, `occupied/leaves`), the points per occupied leaf, the largest
-//!   degree, the P2P's seconds and share of the evaluation, the M2L's seconds, the bound
+//!   degree, the P2P's seconds and share of the evaluation, the M2L's seconds, the P2L's,
+//!   the M2P's and the other kinds' seconds (`Row::kind_seconds`), the X and W entries
+//!   (`Row::far_leaf_entries`), the bound
 //!   on the P2P's phase Re(k) r (`Row::phase_bound`, CH3.4b's contract range 22 c_leaf
 //!   without V pairs made near) and over c_leaf, the build, the evaluation and the errors.
 //! - `--term on|off,…` (Helmholtz CH4.0, `HelmholtzFmmBuilder::batched_term`): whether Auto
@@ -1026,11 +1028,13 @@ fn main() {
                     .collect();
                 let p2p: f64 = row.p2p_seconds.iter().sum();
                 let m2l: f64 = row.m2l_seconds.iter().sum();
+                let kind = |j: usize| row.kind_seconds.iter().map(|k| k[j]).sum::<f64>();
+                let entries = |j: usize| row.far_leaf_entries.iter().map(|e| e[j]).sum::<usize>();
                 let phase = row.phase_bound(re_k);
                 format!(
                     "| {} | {} | {kd_string} | {degrees_name} | {}{} | {} × {} | {} | {} | {} | {} \
-                     | {} | {} | {} | {:.1} | {} | {:.4} | {:.2} | {:.4} | {:.1} | {:.1} | {:.3} \
-                     | {:.3} | {:.2e} | {:.2e} |",
+                     | {} | {} | {} | {:.1} | {} | {:.4} | {:.2} | {:.4} | {:.4} | {:.4} | {:.4} \
+                     | {} | {} | {:.1} | {:.1} | {:.3} | {:.3} | {:.2e} | {:.2e} |",
                     workload.name(),
                     problem.len(),
                     setting_name(row),
@@ -1049,6 +1053,11 @@ fn main() {
                     p2p,
                     p2p / row.evaluate,
                     m2l,
+                    kind(4),
+                    kind(5),
+                    kind(0) + kind(1) + kind(2) + kind(3),
+                    entries(0),
+                    entries(1),
                     phase,
                     phase / row.c_leaf,
                     row.build,
@@ -1344,12 +1353,13 @@ fn main() {
         println!(
             "| Workload | N | kD | degrees | M2L | ranks × threads | leaf size | c_leaf | levels \
              | leaf level | leaves | occupied | occupied/leaves by level | N per occupied \
-             | largest p | P2P s | P2P share | M2L s | Re(k) r bound | ÷ c_leaf | build s \
-             | evaluate s | φ | ∇φ |"
+             | largest p | P2P s | P2P share | M2L s | P2L s | M2P s | P2M, M2M, L2L, L2P s \
+             | X entries | W entries | Re(k) r bound | ÷ c_leaf | build s | evaluate s | φ | ∇φ |"
         );
         println!(
             "| --- | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- \
-             | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+             | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: \
+             | ---: | ---: | ---: | ---: | ---: |"
         );
         for line in &leaf_rows {
             println!("{line}");

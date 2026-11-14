@@ -73,20 +73,31 @@ def parse(paths):
                 elif section == "Leaves" and len(c) >= 24:
                     case = (c[0], c[1], c[2], c[3])
                     key = (case, rule(c[4]), float(c[7]), int(c[6]))
-                    runs[key].append(
-                        {
-                            "split": c[5],
-                            "levels": int(c[8]),
-                            "leaf_level": int(c[9]),
-                            "per_leaf": float(c[13]),
-                            "p": int(c[14]),
-                            "share": float(c[16]),
-                            "phase": float(c[19]),
-                            "build": float(c[20]),
-                            "evaluate": float(c[21]),
-                            "errors": (float(c[22]), float(c[23])),
-                        }
-                    )
+                    # Round 1's table had no P2L, M2P, other kinds or X and W columns.
+                    t = 5 if len(c) >= 29 else 0
+                    run = {
+                        "split": c[5],
+                        "levels": int(c[8]),
+                        "leaf_level": int(c[9]),
+                        "per_leaf": float(c[13]),
+                        "p": int(c[14]),
+                        "p2p": float(c[15]),
+                        "share": float(c[16]),
+                        "m2l": float(c[17]),
+                        "phase": float(c[19 + t]),
+                        "build": float(c[20 + t]),
+                        "evaluate": float(c[21 + t]),
+                        "errors": (float(c[22 + t]), float(c[23 + t])),
+                    }
+                    if t:
+                        run.update(
+                            p2l=float(c[18]),
+                            m2p=float(c[19]),
+                            other=float(c[20]),
+                            x=int(c[21]),
+                            w=int(c[22]),
+                        )
+                    runs[key].append(run)
     return runs, sums
 
 

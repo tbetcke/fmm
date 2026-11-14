@@ -2317,7 +2317,8 @@ fn check_empty_boxes(scenario: &Scenario, comm: &SimpleCommunicator) -> [usize; 
 /// leaves be one level coarser), the errors against the direct sum within the scenario's
 /// bound, the settings reported as built, the leaves by level summing to the leaves, 2
 /// threads the one-thread output bit for bit and on P ranks the one-rank FMM's bit for bit:
-/// deterministic and rank-invariant at each leaf size.
+/// deterministic and rank-invariant at each leaf size; and the other kinds' level calls timed
+/// (`HelmholtzOperator::kind_times`).
 fn check_leaf_sizes(scenario: &Scenario, comm: &SimpleCommunicator) {
     let inputs = Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
@@ -2344,6 +2345,18 @@ fn check_leaf_sizes(scenario: &Scenario, comm: &SimpleCommunicator) {
             by_level.iter().all(|c| c[1] <= c[0]),
             "{name}: {by_level:?}"
         );
+        // The other kinds timed (CH4.0d3), on this rank: L2P on every level with a leaf
+        // holding a point, P2L on every level whose plan has X entries; agreed.
+        let times = fmm.operator().kind_times();
+        let timed = times.len() == fmm.nlevels()
+            && by_level.iter().enumerate().all(|(level, count)| {
+                (count[1] == 0 || !times[level][3].is_zero())
+                    && (fmm.plan().level(level).x().is_empty() || !times[level][4].is_zero())
+            });
+        if !timed {
+            eprintln!("rank {}: {name}: kind times {times:?}", comm.rank());
+        }
+        assert!(everywhere(timed, comm), "{name}: a level call not timed");
         let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
         if comm.rank() == 0 {
             println!(

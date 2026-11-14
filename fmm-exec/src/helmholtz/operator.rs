@@ -242,7 +242,9 @@
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
 //! clock reads per call, no value changed; so is every P2P level call
-//! ([`p2p_times`](HelmholtzOperator::p2p_times); Helmholtz CH4.0d2). The exponential M2L's level call also times its
+//! ([`p2p_times`](HelmholtzOperator::p2p_times); Helmholtz CH4.0d2), and every level call of
+//! the other kinds ([`kind_times`](HelmholtzOperator::kind_times), in the order of
+//! [`TIMED_KINDS`]; Helmholtz CH4.0d3). The exponential M2L's level call also times its
 //! two passes per chunk, vector and frame, the waves and merge and shift
 //! ([`plane_wave_times`](HelmholtzOperator::plane_wave_times); Helmholtz CH6.2d): four clock
 //! reads more, no value changed; and merge and shift's thread-seconds by part, on each
@@ -421,6 +423,9 @@ impl PlaneWaveRaise {
         }
     }
 }
+
+/// The kinds of [`HelmholtzOperator::kind_times`], in its order (Helmholtz CH4.0d3).
+pub const TIMED_KINDS: [&str; 6] = ["P2M", "M2M", "L2L", "L2P", "P2L", "M2P"];
 
 /// The crossover degree of [`HelmholtzM2l::Auto`] (Helmholtz CH3.2d; the operator module
 /// documentation, "M2L"): the largest p_l at which the rule runs the fused Batched M2L, for
@@ -617,6 +622,9 @@ pub struct HelmholtzOperator<T: SimdScalar> {
     /// The P2P level calls' wall time per level since the tables were last chosen
     /// ([`p2p_times`](HelmholtzOperator::p2p_times)).
     p2p_times: Vec<Duration>,
+    /// The other kinds' level calls' wall time per level since the tables were last chosen
+    /// ([`kind_times`](HelmholtzOperator::kind_times)).
+    kind_times: Vec<[Duration; 6]>,
     /// The exponential M2L's passes per level since the tables were last chosen
     /// ([`plane_wave_times`](HelmholtzOperator::plane_wave_times)).
     plane_wave_times: Vec<PlaneWaveTimes>,
@@ -802,6 +810,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         };
         let m2l_times = vec![Duration::ZERO; kernel.tables.nlevels()];
         let p2p_times = vec![Duration::ZERO; kernel.tables.nlevels()];
+        let kind_times = vec![[Duration::ZERO; 6]; kernel.tables.nlevels()];
         let plane_wave_times = vec![PlaneWaveTimes::default(); kernel.tables.nlevels()];
         Ok(Self {
             kernel,
@@ -809,6 +818,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             plane_buffer: PlaneBuffer::default(),
             m2l_times,
             p2p_times,
+            kind_times,
             plane_wave_times,
         })
     }
@@ -1153,6 +1163,14 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         &self.p2p_times
     }
 
+    /// The wall time of the level calls of the other kinds of each level since the tables
+    /// were last chosen (Helmholtz CH4.0d3, for the leaf size's cost): as
+    /// [`m2l_times`](Self::m2l_times), one entry per level (the level of each batch), the
+    /// kinds in the order of [`TIMED_KINDS`].
+    pub fn kind_times(&self) -> &[[Duration; 6]] {
+        &self.kind_times
+    }
+
     /// The wall time of the exponential M2L's two passes on each level since the tables were
     /// last chosen (Helmholtz CH6.2d): one entry per level, zero where no level call ran merge
     /// and shift; within the level's [`m2l_times`](Self::m2l_times) entry. This rank's, on
@@ -1293,6 +1311,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.plane_buffer.counts = PlaneWaveCounts::default();
         self.m2l_times.fill(Duration::ZERO);
         self.p2p_times.fill(Duration::ZERO);
+        self.kind_times.fill([Duration::ZERO; 6]);
         self.plane_wave_times.fill(PlaneWaveTimes::default());
         // The class scratch, the batched columns and the exponential M2L's buffers are sized
         // by their tables' largest level.
@@ -2083,11 +2102,15 @@ fn copy_first_degrees<T: SimdScalar>(from: &[T], q: usize, to: &mut [T], p: usiz
 /// tables (module documentation, "Execution" and "M2L").
 impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
+        let (level, start) = (batch.level, Instant::now());
         driver::p2m(&self.kernel, &mut self.execution, batch);
+        self.kind_times[level][0] += start.elapsed();
     }
 
     fn m2m(&mut self, batch: M2m<'_, T>) {
+        let (level, start) = (batch.level, Instant::now());
         driver::m2m(&self.kernel, &mut self.execution, batch);
+        self.kind_times[level][1] += start.elapsed();
     }
 
     /// Under [`HelmholtzM2l::Batched`] block by block on the levels with tables, under
@@ -2122,19 +2145,27 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T>
     }
 
     fn p2l(&mut self, batch: P2l<'_, T>) {
+        let (level, start) = (batch.level, Instant::now());
         driver::p2l(&self.kernel, &mut self.execution, batch);
+        self.kind_times[level][4] += start.elapsed();
     }
 
     fn l2l(&mut self, batch: L2l<'_, T>) {
+        let (level, start) = (batch.level, Instant::now());
         driver::l2l(&self.kernel, &mut self.execution, batch);
+        self.kind_times[level][2] += start.elapsed();
     }
 
     fn l2p(&mut self, batch: L2p<'_, T>) {
+        let (level, start) = (batch.level, Instant::now());
         driver::l2p(&self.kernel, &mut self.execution, batch);
+        self.kind_times[level][3] += start.elapsed();
     }
 
     fn m2p(&mut self, batch: M2p<'_, T>) {
+        let (level, start) = (batch.level, Instant::now());
         driver::m2p(&self.kernel, &mut self.execution, batch);
+        self.kind_times[level][5] += start.elapsed();
     }
 
     fn p2p(&mut self, batch: P2p<'_, T>) {

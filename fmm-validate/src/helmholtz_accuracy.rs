@@ -58,6 +58,9 @@
 //!   [`Row::source_points`] the points the source exchange moves, and per level
 //!   [`Row::p2p_seconds`] and [`Row::near_interactions`], for the P2P's cost per
 //!   interaction.
+//!   [`Case::max_points_per_leaf`] and [`Case::c_leaf`] (Helmholtz CH4.0d3) the tree;
+//!   [`Row::leaves_by_level`] its leaves, [`Row::kind_seconds`] the other kinds' level calls
+//!   per level and [`Row::far_leaf_entries`] the X and W entries, for the leaf size's cost.
 
 use std::ops::Range;
 use std::thread;
@@ -626,6 +629,14 @@ pub struct Row {
     /// Per level, its leaves and the leaves holding a source or a target, summed over the
     /// ranks (`HelmholtzFmm::leaves_by_level`; Helmholtz CH4.0d3).
     pub leaves_by_level: Vec<[usize; 2]>,
+    /// Per level, the level calls' seconds of the kinds of
+    /// `nd_fmm_exec::helmholtz::TIMED_KINDS` (P2M, M2M, L2L, L2P, P2L, M2P) in the last
+    /// evaluation, each the slowest rank's (`HelmholtzOperator::kind_times`; Helmholtz
+    /// CH4.0d3).
+    pub kind_seconds: Vec<[f64; 6]>,
+    /// Per level, the plan's X entries (P2L, leaves of the next coarser level) and W entries
+    /// (M2P, boxes of the next finer level), summed over the ranks (Helmholtz CH4.0d3).
+    pub far_leaf_entries: Vec<[usize; 2]>,
     /// The build, seconds (slowest rank).
     pub build: f64,
     /// The evaluation, seconds (slowest rank); the last of [`Case::evaluations`].
@@ -843,10 +854,12 @@ pub fn run_output<C: CommunicatorCollectives>(
     let (mut output, mut evaluate, mut first_evaluate) = (None, 0.0, 0.0);
     let mut before: Vec<Duration> = Vec::new();
     let mut p2p_before: Vec<Duration> = Vec::new();
+    let mut kinds_before: Vec<[Duration; 6]> = Vec::new();
     let mut passes_before: Vec<PlaneWaveTimes> = Vec::new();
     for evaluation in 0..case.evaluations.max(1) {
         before = fmm.operator().m2l_times().to_vec();
         p2p_before = fmm.operator().p2p_times().to_vec();
+        kinds_before = fmm.operator().kind_times().to_vec();
         passes_before = fmm.operator().plane_wave_times().to_vec();
         comm.barrier();
         let start = Instant::now();
@@ -884,6 +897,25 @@ pub fn run_output<C: CommunicatorCollectives>(
         .collect();
     let mut p2p_seconds = vec![0.0f64; nlevels];
     comm.all_reduce_into(&seconds[..], &mut p2p_seconds[..], SystemOperation::max());
+    let seconds: Vec<f64> = fmm
+        .operator()
+        .kind_times()
+        .iter()
+        .zip(&kinds_before)
+        .flat_map(|(after, before)| (0..6).map(|j| (after[j] - before[j]).as_secs_f64()))
+        .collect();
+    let mut slowest_kinds = vec![0.0f64; 6 * nlevels];
+    comm.all_reduce_into(&seconds[..], &mut slowest_kinds[..], SystemOperation::max());
+    let kind_seconds: Vec<[f64; 6]> = slowest_kinds.as_chunks::<6>().0.to_vec();
+    let local: Vec<usize> = (0..nlevels)
+        .flat_map(|l| {
+            let lists = fmm.plan().level(l);
+            [lists.x().len(), lists.w().len()]
+        })
+        .collect();
+    let mut summed = vec![0usize; local.len()];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let far_leaf_entries: Vec<[usize; 2]> = summed.chunks(2).map(|c| [c[0], c[1]]).collect();
     let mut near_interactions = vec![0u64; nlevels];
     comm.all_reduce_into(
         &fmm.near_interactions()[..],
@@ -1034,6 +1066,8 @@ pub fn run_output<C: CommunicatorCollectives>(
         max_points_per_leaf: fmm.max_points_per_leaf(),
         c_leaf: fmm.c_leaf(),
         leaves_by_level,
+        kind_seconds,
+        far_leaf_entries,
         build,
         evaluate,
         first_evaluate,
