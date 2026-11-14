@@ -3102,3 +3102,59 @@ request, using this template:
   evaluation runs (no Laplace evaluation code changed).
 - Follow-ups: CH4.0d3 (roadmap: the leaf size swept with the V rule off and with its cost
   model, the two proposed together).
+
+## 2026-11-14: CH4.0d3 The leaf size and c_leaf
+- Done:
+  - Round 1 (Kathleen 633910, 633911; locust): the leaf size alone, 32–1024 points with the V
+    rule off and by its cost model; 256 faster on build plus one evaluation (Kathleen 0.72,
+    0.67, 0.61× at 10⁻³, 10⁻⁶, 10⁻⁸), but P2L and M2P, the W and X pairs, 40–67 % of the
+    evaluation on adaptive trees and trees with leaves on two levels slow (W3 at kD = 100 with
+    128 points: 3× the evaluation). The user, 2026-11-14: "Add W/X rule here (Recommended)",
+    "Yes, sweep 1 and 2 (Recommended)" (the plan's open questions 1 and 2).
+  - `nd-fmm-exec`: `HelmholtzFmmBuilder::near_wx` (`WxNear::{Off, Crossovers, CostModel}`)
+    through `NearRule::new`'s `LeafPair` predicate in the one plan build (no plan change);
+    `WxCosts` per class (`WX_COSTS_X86` from Kathleen 634049, `WX_COSTS_NEON` from locust),
+    `wx_costs`, `wx_crossovers`, agreed over the ranks; `HelmholtzOperator::kind_times` (P2M,
+    M2M, L2L, L2P, P2L, M2P per level); `HelmholtzFmm::{max_points_per_leaf, c_leaf,
+    leaves_by_level, far_interactions, near_wx}`. The proposed defaults:
+    `helmholtz::default_max_points_per_leaf(tolerance, isa)` (x86 256; NEON 128 at ε ≥ 10⁻⁷,
+    256 below; agreed in step 2's all-reduce), `DEFAULT_C_LEAF` = 2, `VNear::CostModel`,
+    `WxNear::CostModel`.
+  - `nd-fmm-validate`: `Case::{c_leaf, near_wx}`, the `Row` fields of the tree and the leaf
+    operators, `--leaf-size`, `--c-leaf`, `--near-wx`, the tables "Leaves" and "Leaf
+    operators"; `tools/helmholtz/ch4-0d3-runs.sh`, `ch4-0d3-tables.py` (`cases`, `summary`,
+    `checksums`, `wx`).
+  - Round 2 (Kathleen 634080, 634081; locust): sizes × V rule × W and X rule × c_leaf 1, 2;
+    round 3 (Kathleen 634114, 634115; locust): the defaults as built against the default
+    before, ABBA: build plus one evaluation 0.64, 0.53, 0.41× on Kathleen and 0.83, 0.75, 0.57×
+    on locust (evaluation 0.72, 0.40, 0.26 and 0.87, 0.56, 0.43); the losers listed (Kathleen's
+    evaluation alone at 10⁻³ on three cases up to 1.43×; locust's small cube and W3 4–9 % at
+    10⁻³ and 10⁻⁶); no φ or ∇φ above ε in any run (at most 0.16 and 0.45 ε); 4 × 10 = 1 × 40 bit
+    for bit at the defaults. Report `fmm-validate/results/helmholtz-ch4-0d3.md`; raw outputs in
+    `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0d3/`.
+- Tests: `check_near_wx` (clusters and sphere: crossover 0 the rule off's bits, named, every
+  pair, the cost model alone and with the V rule; errors within 1.1×, far interactions no more,
+  2 threads and the one-rank FMM bit for bit), `check_leaf_sizes` (8 and 512 points, c_leaf 2:
+  settings, leaves, kind times, errors, 2 threads, one rank) and `check_defaults` (the sphere
+  with a tolerance, the clusters with named degrees: the defaults as built, the named settings'
+  bits, errors, 2 threads, one rank) in `tests/helmholtz_fmm.rs`, whose `default_builder` now
+  names the settings before; `tests/helmholtz/leaf_rule.rs` (the rule's table, monotone,
+  `DEFAULT_C_LEAF` one level coarser); `tests/helmholtz/v_crossover.rs` (the W and X
+  crossovers' closed form and p = 15 values); `check_leaves`, `check_near_wx` in
+  nd-fmm-validate's `tests/helmholtz_accuracy.rs` (whose `case` names the tree before).
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and
+  workspace tests at opt-level 1 (1,260 and 1,374 passed), the MPI list at 2 and 4 ranks (24 of
+  24; `helmholtz_fmm` 29.5 and 28.8 s); `helmholtz_fmm`'s one-rank opt-level 0 run 666 s at load
+  15–19 (CH4.0d2 766 s at 16–20); after the self-review's edits fmt, workspace Clippy, docs, the
+  `helmholtz` unit tests, the doctests, the harness test and `helmholtz_fmm` again. Nothing
+  pending.
+- Decisions: questions for sign-off: (1) the leaf size rule (alternatives: by the evaluation
+  alone; x86 1024 below 10⁻⁷; NEON with one plane 256 from 10⁻⁶), (2) `WxNear::CostModel`,
+  (3) `VNear::CostModel` (the P2P's phase range 44 c_leaf against the acceptance's 22),
+  (4) c_leaf 2 (against D11's reason: the census's high-frequency leaves at 2; CH4.3 re-decides),
+  each reverted if not signed off.
+- Laplace: not touched (`FmmBuilder`, `fmm::default_max_points_per_leaf`, the drivers, the
+  pipeline, `nd-fmm-plan`, `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI
+  list pass).
+- Follow-ups: CH4.3 (roadmap: c_leaf re-decided with the per-level high-frequency rule, if
+  c_leaf 2 is signed off); CH4.0e next (the comparison under the defaults).

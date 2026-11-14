@@ -7,14 +7,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
 `docs/helmholtz/gates/<milestone>.md`.
 
-Status (2026-11-13): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0c, CH4.0d1 and CH4.0d1b
-are merged; CH4.0d2 makes V pairs between leaves near pairs, opt-in (`near_v`), decided per
-(parent, source) on levels with waves; it gains under Rotation (median 0.52 at 10⁻⁸) and at
-10⁻⁸ under the default on Kathleen, and stays off by default (signed off: its default goes to
-CH4.0d3). HR, H0, H1 and H2
-are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0d3, the leaf
-size, with the V rule swept beside it.
+Status (2026-11-14): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0d2 are merged; CH4.0d3
+adds W and X pairs as near pairs and proposes the Helmholtz builder's leaf size by ε and
+machine class, the V, W and X rules by their cost models and c_leaf 2 (build plus one
+evaluation 0.41–0.64× the default before on Kathleen, 0.57–0.83× on locust), waiting for
+sign-off. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and
+CH0.6. Next: CH4.0e, the comparison with FMM3D under the defaults.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -549,27 +548,14 @@ task's full line is in its record or report and its progress entry
   evaluation under Rotation 0.52–0.94 (median by ε), under the default 0.85–1.05. Left off by
   default, its default decided with CH4.0d3's leaf size (the user, 2026-11-13, on the PR's
   question 1: "I agree with your recommendation"). *Needs:* CH4.0d1.
-- [ ] **CH4.0d3 The leaf size and c_leaf.** The FMM's build plus evaluation against the points
-  per leaf (32 to 1,024), under the default M2L (D8) with CH4.0d1 (and CH4.0d2 if adopted) on,
-  c_leaf kept as the width cap. Cases: CH3.6's matrix at 10⁻³, 10⁻⁶ and 10⁻⁸ (W1, W3 and the four
-  W4 distributions), and W1 at kD = 500 and W3 at kD = 100. The leaf size's effect on the
-  degrees and the near field's share recorded, with the leaf rule's forced levels named where
-  c_leaf binds before the points do. c_leaf swept as well, from 1 to 2, on the cases where it
-  binds (review A2; question 2 of #209, the user, 2026-11-12, on #209: "I agree"); D11's
-  c_leaf = 1 stays the default until this task's sign-off says otherwise. On W1 at kD = 500
-  every leaf is forced to level 7 at about 27 points, so the sweep of the points alone cannot
-  change that tree. The errors still within ε and CH3.4b's contract range checked at each
-  c_leaf. *Done when:* a default leaf size by ε (or p), the machine class and the multipole
-  planes, proposed for sign-off with its gain per case, as T11 did for Laplace. Inputs that do
-  not depend on the data (constraint 9). The errors within ε, at most CH3.4b's contract range
-  (Re(k) r ≤ 22 c_leaf, unchanged). Deterministic and rank-invariant at each leaf size.
-  Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64 stays
-  best, and why `fastker`'s leaves do not carry over. Also (CH4.0d2's question 1, signed off
-  2026-11-13: "I agree with your recommendation"): the sweep with `HelmholtzFmmBuilder::near_v` off and `VNear::CostModel`, on
-  Kathleen and locust, and the V rule's default proposed with the leaf size (under Rotation
-  CH4.0d2 converted nearly every V pair between leaves of 64 points at ε ≤ 10⁻⁶; under the
-  default it paid only at 10⁻⁸ on Kathleen). *Needs:* CH4.0d2. *Machines:* Kathleen,
-  locust (the M6 with the user's go-ahead). *Sign-off:* the default.
+- [x] **CH4.0d3 The leaf size and c_leaf.** Report: `fmm-validate/results/helmholtz-ch4-0d3.md`;
+  record `docs/helmholtz/tasks/CH4.0d3.md`. W and X pairs as near pairs added (the user,
+  2026-11-14: "Add W/X rule here (Recommended)"; `near_wx`, `WxCosts` per class) and c_leaf 1
+  and 2 swept ("Yes, sweep 1 and 2 (Recommended)"). Proposed defaults, built in the PR: the
+  leaf size `default_max_points_per_leaf` (x86 256; NEON 128 at ε ≥ 10⁻⁷, 256 below), the V,
+  W and X rules by their cost models, c_leaf 2: build plus one evaluation 0.64, 0.53, 0.41
+  (Kathleen) and 0.83, 0.75, 0.57 (locust) of the default before at 10⁻³, 10⁻⁶, 10⁻⁸; errors
+  within ε; 4 × 10 = 1 × 40. *Sign-off:* the four defaults (the PR's questions 1–4), pending.
 - [ ] **CH4.0e The comparison under the default, and H4's expected gain.** Added on
   2026-11-12 by the review's triage (`docs/reviews/2026-11-12-H6.md`, A1, B2, B5; question 1
   of #209, the user, 2026-11-12, on #209: "I agree"). CH3.6 is
@@ -627,7 +613,9 @@ task's full line is in its record or report and its progress entry
   deterministic with the RCR pairs added after F → R. *Needs:* CH4.1, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
-  back to RCR when the scratch budget binds. Also from S6: the damped classes measured in
+  back to RCR when the scratch budget binds. If CH4.0d3's c_leaf 2 is signed off: c_leaf re-decided with this
+  rule (at c_leaf 2 the census's first pass put leaves on high-frequency levels on 9 trees at
+  10⁻⁶; proposal §3.7 keeps W and X lists off them; CH4.0d3's report §4). Also from S6: the damped classes measured in
   the FMM-weighted norm of CH1.3c, against the per-pair bound's factor
   e^{Im(k)(|t| + 2a)} (its question 7), and whether a shorter transfer function
   (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation

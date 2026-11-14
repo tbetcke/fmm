@@ -145,7 +145,9 @@ default), `--near-v off,cost`, `--levels`, two evaluations, ABBA order of the le
 
 ## Pending runs
 
-Filled in step 6.
+None. Every round ran (report §1, §5): calibration Kathleen 634049 and locust; round 1 Kathleen
+633910, 633911 and locust; round 2 Kathleen 634080, 634081 and locust; round 3 Kathleen 634114
+(with `traffic`), 634115 and locust.
 
 ## Open questions
 

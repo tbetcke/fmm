@@ -56,8 +56,11 @@ Proposal §2 (constraints 1, 2, 9), §3.7 (the leaf rule, D11), §5.7, §9.1. Bu
      matrix, where it rarely binds, 0.95–1.01×. Against D11's reason: at c_leaf 2 the census
      found leaves on high-frequency levels (9 trees at 10⁻⁶); no high-frequency M2L runs yet
      (CH4.2, CH4.3).
-- **Round 3 (§5)**: the defaults as built (`--leaf-size auto --c-leaf auto`) against the default
-  before, ABBA, and rank-count invariance at 4 × 10 against 1 × 40. *(Pending.)*
+- **Round 3 (§5)**: the defaults as built against the default before, build plus one evaluation
+  (evaluation alone): Kathleen 0.64 (0.72), 0.53 (0.40), 0.41 (0.26) at 10⁻³, 10⁻⁶, 10⁻⁸; locust
+  0.83 (0.87), 0.75 (0.56), 0.57 (0.43); no case of Kathleen's loses on build plus one evaluation
+  (its evaluation alone at 10⁻³ on three cases, up to 1.43×), locust's cube and W3 at kD = 30
+  lose 4–9 % at 10⁻³ and 10⁻⁶ (small cases, 0.08–0.34 s). 4 × 10 equals 1 × 40 bit for bit.
 
 ## 1. Method
 
@@ -261,8 +264,42 @@ to re-decide c_leaf there (sign-off question 4).
 
 ## 5. Round 3: the defaults as built
 
-*(Pending: Kathleen jobs r3a, r3b and locust; `--leaf-size auto,64 --c-leaf auto,1 --near-v
-off,cost --near-wx off,cost`, ABBA; traffic 4 × 10 against 1 × 40 at the defaults.)*
+Kathleen jobs 634114 (matrix, traffic) and 634115 (large), locust at 6542ec9 (the defaults as
+built; the later commits change docs and tests only): `--leaf-size auto,64 --c-leaf auto,1
+--near-v off,cost --near-wx off,cost`, the matrix in ABBA order. The defaults (`auto`: the
+rule's size, c_leaf 2, both rules by the cost model) against the default before (64, c_leaf 1,
+the rules off), build plus one evaluation (evaluation alone), geometric means over the cases
+whose reference runs at least 0.3 s, with their range:
+
+| | Kathleen (256 points) | locust (128; 256 at 10⁻⁸) |
+| --- | --- | --- |
+| 10⁻³ | 0.638 (0.718), 0.42–0.77 (0.47–1.43) | 0.825 (0.873), 0.77–1.04 (0.78–1.04) |
+| 10⁻⁶ | 0.525 (0.403), 0.45–0.64 (0.28–0.57) | 0.745 (0.555), 0.65–1.04 (0.44–0.98) |
+| 10⁻⁸ | 0.414 (0.260), 0.34–0.54 (0.11–0.38) | 0.571 (0.432), 0.47–0.80 (0.26–0.87) |
+
+Round 2's named settings gave the same within 2 % (Kathleen 0.641, 0.514, 0.404; locust 0.827,
+0.742, 0.563). The large cases: W1 at kD = 500 0.62, 0.69, 0.63 on Kathleen (evaluation 1.00,
+0.80, 0.59) and 0.83, 0.85, 0.71 on locust (1.07, 1.00, 0.72); W3 at kD = 100 (Kathleen) 0.36,
+0.31, 0.26 (0.87, 0.40, 0.27).
+
+The losers, every case of the matrix and the large ones (all, also those under 0.3 s):
+- Kathleen: no case loses on build plus one evaluation (the worst 0.77×, W4's Plummer sphere at
+  kD = 100, 10⁻³). The evaluation alone loses at 10⁻³ only: W3 at kD = 30 1.43×, W4's cube at
+  kD = 1 and 10 1.20 and 1.18×, W1 at kD = 500 1.00×; from 10⁻⁶ on every case wins (at most
+  0.80×).
+- locust: on build plus one evaluation W4's cube at 10⁻³ and 10⁻⁶ (1.04–1.09×, every kD), W3 at
+  kD = 30 (1.04, 1.06×) and W1 at kD = 30 at 10⁻⁶ (1.03×), small cases (0.08–0.34 s at the
+  reference; only the cube at kD = 100 is in the means); the evaluation alone at 10⁻³ on W1 at
+  kD = 10 (1.50×, 0.04 s), 30 and 100 (1.10, 1.04×), W1 at kD = 500 (1.07×), the sphere
+  (1.03–1.06×) and the cube and W3 (1.01–1.03×), and at 10⁻⁶ the cube and W3 (1.02, 1.01×). From 10⁻⁸ every case wins on both measures (at most 0.80 and 0.87×).
+
+The errors: every run within ε (φ ÷ ε at most 0.16, the defaults' worst W1 at kD = 500 at
+10⁻⁸).
+
+Rank-count invariance at the defaults (`traffic`, Kathleen, 4 ranks × 10 threads against one
+rank × 40, W1 at kD = 500 and W4's Plummer sphere at kD = 10, 10⁻⁶, at the rule's 256 and at
+64): every checksum of the 4-rank run equals the one-rank run's (`ch4-0d3-tables.py
+checksums`: `892a1ee0805286d4`, `9e7a87efc1bbf055`, `6f542b0a00c3283a`, `3b5754d3bf64dbf4`).
 
 ## 6. Questions for sign-off
 
