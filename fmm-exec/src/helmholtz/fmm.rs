@@ -1130,17 +1130,17 @@ pub struct WxCosts {
 }
 
 /// [`WxCosts`] of x86 (AVX-512 and AVX2; measured on Kathleen, Xeon Gold 6248, one rank ×
-/// 40 threads).
+/// 40 threads, at p = 7, 11, 15 and 32: fmm-validate/results/helmholtz-ch4-0d3.md).
 pub const WX_COSTS_X86: WxCosts = WxCosts {
-    m2p: [0.0, 5.0],
-    p2l: [0.0, 5.0],
+    m2p: [274.0, 26.4],
+    p2l: [339.0, 7.85],
 };
 
-/// [`WxCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads; the M6 takes
-/// them unmeasured).
+/// [`WxCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads, at p = 7,
+/// 15 and 32: fmm-validate/results/helmholtz-ch4-0d3.md; the M6 takes them unmeasured).
 pub const WX_COSTS_NEON: WxCosts = WxCosts {
-    m2p: [0.0, 5.0],
-    p2l: [0.0, 5.0],
+    m2p: [0.0, 20.2],
+    p2l: [129.0, 5.67],
 };
 
 /// The [`WxCosts`] of the machine class of `isa` (NEON's for NEON, x86's otherwise).

@@ -29,7 +29,10 @@
 #   sizes 64 and 256, one evaluation;
 # - `custom`: CASES (`name|arguments` entries separated by `;`) at SIZES and their
 #   reverse, for round 2 (the proposed rule, `auto`, against 64).
-# NEAR (a `--near-v` list, default off,cost) replaces every stage's. One rank × THREADS
+# NEAR (a `--near-v` list, default off,cost) replaces every stage's; NEAR_WX (a `--near-wx`
+# list, default off: round 1 ran without the W and X rule) and C_LEAF (a `--c-leaf` list,
+# default the library's; not with `cleaf`, which names its own) add to every stage but
+# `calibrate` (round 2: NEAR_WX=off,cost C_LEAF=1,2). One rank × THREADS
 # threads (default 40, a Kathleen node) unless named. Each launch's output in
 # <out-dir>/<stage>-<case>-<order>.md, a line per launch in <out-dir>/runs.log. Times are
 # read on Kathleen's exclusive nodes and a quiet locust only, never asserted. TIMEOUT
@@ -45,6 +48,7 @@ T=${THREADS:-40}
 TIMEOUT=${TIMEOUT:-18000}
 SIZES=${SIZES:-32,64,128,256,512,1024}
 NEAR=${NEAR:-off,cost}
+NEAR_WX=${NEAR_WX:-off}
 EPS=1e-3,1e-6,1e-8
 
 # `launch <name> <launcher and command…>`: one launch under the timeout.
@@ -57,7 +61,8 @@ launch() {
     echo "$name: exit $?, $((SECONDS - start)) s, $(date +%T)" | tee -a "$out/runs.log"
 }
 
-RUN=(--m2l auto-pw --levels --near-v "$NEAR")
+RUN=(--m2l auto-pw --levels --near-v "$NEAR" --near-wx "$NEAR_WX")
+[[ -n "${C_LEAF:-}" ]] && RUN+=(--c-leaf "$C_LEAF")
 # `reversed <list>`: the comma-separated list in reverse order.
 reversed() { echo "$1" | tr ',' '\n' | awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) printf "%s%s", a[i], (i > 1 ? "," : "\n") }'; }
 # `abba <stage> <entries…>`: each `name|arguments` entry at SIZES and their reverse.
