@@ -10,7 +10,6 @@ use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, OCTANT_COUNT};
 use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::ClassM2l;
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use nd_fmm_tables::helmholtz::plane_wave::merge::{
@@ -427,41 +426,6 @@ fn every_level_in_parts_is_the_level_by_its_steps() {
     }
 }
 
-/// A map on `n` threads that hand out the parts in order, one at a time (for the timings;
-/// the results in part order).
-struct Pool(usize);
-
-impl Parts for Pool {
-    fn map<R: Send>(&self, n: usize, f: &(dyn Fn(usize) -> R + Sync)) -> Vec<R> {
-        let next = AtomicUsize::new(0);
-        let mut out: Vec<Option<R>> = (0..n).map(|_| None).collect();
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..self.0)
-                .map(|_| {
-                    scope.spawn(|| {
-                        let mut done = Vec::new();
-                        loop {
-                            let i = next.fetch_add(1, Ordering::Relaxed);
-                            if i >= n {
-                                break done;
-                            }
-                            done.push((i, f(i)));
-                        }
-                    })
-                })
-                .collect();
-            for handle in handles {
-                for (i, r) in handle.join().expect("a part panicked") {
-                    out[i] = Some(r);
-                }
-            }
-        });
-        out.into_iter()
-            .map(|r| r.expect("every part computed"))
-            .collect()
-    }
-}
-
 /// The least of five runs of `f`, in milliseconds.
 fn best_ms(mut f: impl FnMut()) -> f64 {
     (0..5)
@@ -473,27 +437,23 @@ fn best_ms(mut f: impl FnMut()) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
-/// Times one level's parts of the exponential M2L's tables (Helmholtz CH4.0j) over the range
-/// of κ = 2k̂ and p the levels with waves take, at iprec 1–3: the quadrature
+/// Times one level's parts of the exponential M2L's tables (Helmholtz CH4.0j) on one thread,
+/// over the range of κ = 2k̂ and p the levels with waves take, at iprec 1–3: the quadrature
 /// (`Quadrature::with_reach`, its counts most of it), the `PlaneWaveLevel`, the 152 shift
-/// tables (the level less the two), and the level in parts on one thread and on every thread
-/// of the machine (`THREADS` names another count). Prints a table; asserts no time
-/// (`--ignored --nocapture`, release).
+/// tables (the level less the two) and the level (`MergeLevel::with_reach`), with the parts
+/// of each map (nodes; nodes and frames; shifts). The time on many threads is the FMM's, on
+/// its pool: `nd-fmm-validate`'s `helmholtz_accuracy`, the build's part "plane-wave tables"
+/// (this crate has no thread pool, and a map that starts threads per call times their start).
+/// Prints a table; asserts no time (`--ignored --nocapture`, release).
 #[test]
 #[ignore = "prints a level's build by part (release, by hand on the machines)"]
 fn time_a_levels_parts() {
-    let threads = std::env::var("THREADS")
-        .ok()
-        .and_then(|t| t.parse().ok())
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
     let geometry = MergeGeometry::new();
     println!(
-        "| iprec | κ | p | nodes | waves | quadrature ms | level ms | shifts ms | serial ms \
-         | in parts, 1 thread ms | in parts, {threads} threads ms | ÷ serial |"
+        "| iprec | κ | p | nodes | waves | quadrature ms | level ms | shifts ms | in all ms \
+         | parts (nodes; nodes + frames; shifts) |"
     );
-    println!(
-        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-    );
+    println!("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
     for precision in [Precision::Iprec1, Precision::Iprec2, Precision::Iprec3] {
         for kappa in [0.5, 2.0, 6.0, 12.0, 25.0, 45.0] {
             for p in [8, 16, 32] {
@@ -506,40 +466,22 @@ fn time_a_levels_parts() {
                 let level = best_ms(|| {
                     std::hint::black_box(PlaneWaveLevel::<f64>::new(k_hat, p, &quadrature));
                 });
-                let serial = best_ms(|| {
+                let all = best_ms(|| {
                     std::hint::black_box(MergeLevel::<f64>::with_reach(
                         k_hat, p, precision, &geometry, RHO_MAX,
                     ));
                 });
-                // A tree whose level 2 is the level: k̂₀ = 4 k̂.
-                let k_root = k_hat * 4.0;
-                let (degrees, precisions) = ([0, 0, p], [None, None, Some(precision)]);
-                let one = best_ms(|| {
-                    std::hint::black_box(PlaneWaveM2l::<f64>::build_with_reach_on(
-                        k_root,
-                        &degrees,
-                        &precisions,
-                        RHO_MAX,
-                        &Pool(1),
-                    ));
-                });
-                let many = best_ms(|| {
-                    std::hint::black_box(PlaneWaveM2l::<f64>::build_with_reach_on(
-                        k_root,
-                        &degrees,
-                        &precisions,
-                        RHO_MAX,
-                        &Pool(threads),
-                    ));
-                });
+                let merge = MergeLevel::<f64>::with_reach(k_hat, p, precision, &geometry, RHO_MAX)
+                    .expect("κ in the tables");
+                let s = quadrature.nodes();
                 println!(
-                    "| {} | {kappa} | {p} | {} | {} | {quad:.3} | {level:.3} | {:.3} | {serial:.3} \
-                     | {one:.3} | {many:.3} | {:.2} |",
+                    "| {} | {kappa} | {p} | {s} | {} | {quad:.3} | {level:.3} | {:.3} | {all:.3} \
+                     | {s}; {}; {} |",
                     precision.iprec(),
-                    quadrature.nodes(),
                     quadrature.wave_count(),
-                    serial - quad - level,
-                    many / serial
+                    all - quad - level,
+                    s + 2,
+                    merge.source_shift_count() + 6 * CHILDREN,
                 );
             }
         }
