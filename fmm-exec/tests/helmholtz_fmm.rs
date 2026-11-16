@@ -2431,7 +2431,7 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_eq!(fmm.c_leaf(), DEFAULT_C_LEAF, "{name}");
     assert_eq!(fmm.near_v(), VNear::CostModel, "{name}");
     assert_eq!(fmm.near_wx(), WxNear::CostModel, "{name}");
-    check_build_timings(name, &fmm, comm);
+    check_build_timings(name, &defaults, &inputs, comm);
     let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
     if comm.rank() == 0 {
         println!(
@@ -2459,11 +2459,22 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
     check_one_rank(name, &defaults, &inputs, kind, &output, comm);
 }
 
-/// The build by part (Helmholtz CH4.0h; `HelmholtzFmm::build_timings`): the octree, the
-/// routes, the plan, the operator and its RCR tables timed, the tables within the operator,
-/// the steps' sum their total; and the operator's RCR tables store M2L blocks only on the
-/// levels whose M2L is RCR's. On every rank or none.
-fn check_build_timings(name: &str, fmm: &HelmholtzFmm<'_, f64>, comm: &SimpleCommunicator) {
+/// The build by part (Helmholtz CH4.0h; `HelmholtzFmm::build_timings`) of `builder`, built
+/// once more under a wall clock: the octree, the routes, the plan, the operator and its RCR
+/// tables timed, the tables within the operator, the steps' sum within the wall time of
+/// `build`; and the operator's RCR tables store M2L blocks only on the levels whose M2L is
+/// RCR's. On every rank or none.
+fn check_build_timings(
+    name: &str,
+    builder: &HelmholtzFmmBuilder,
+    inputs: &Inputs,
+    comm: &SimpleCommunicator,
+) {
+    let start = Instant::now();
+    let fmm: HelmholtzFmm<'_, f64> = builder
+        .build(&inputs.sources, &inputs.targets, comm)
+        .unwrap_or_else(|error| panic!("rank {}: the build: {error}", comm.rank()));
+    let wall = start.elapsed();
     let timings = fmm.build_timings();
     let timed = [
         timings.octree,
@@ -2475,18 +2486,7 @@ fn check_build_timings(name: &str, fmm: &HelmholtzFmm<'_, f64>, comm: &SimpleCom
     ]
     .iter()
     .all(|&t| t > Duration::ZERO);
-    let within = timings.tables.total() <= timings.operator
-        && timings.total()
-            == timings.settings
-                + timings.domain
-                + timings.octree
-                + timings.routes
-                + timings.counts
-                + timings.plan
-                + timings.shapes
-                + timings.operator
-                + timings.evaluator
-                + timings.load;
+    let within = timings.tables.total() <= timings.operator && timings.total() <= wall;
     let op = fmm.operator();
     let blocks = (0..fmm.nlevels())
         .all(|l| !op.tables().m2l_blocks_stored(l) || op.m2l_on(l) == HelmholtzM2l::Rotation);

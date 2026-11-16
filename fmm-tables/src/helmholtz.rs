@@ -576,7 +576,13 @@ impl<T: RealScalar> HelmholtzTables<T> {
                 }
             }
         };
-        let mut results = parts.map(tasks.len(), &part).into_iter();
+        let results = parts.map(tasks.len(), &part);
+        assert_eq!(
+            results.len(),
+            tasks.len(),
+            "the map gives one result per part"
+        );
+        let mut results = results.into_iter();
 
         // Put together in the parts' order.
         let levels: Vec<LevelTables<T>> = (0..nlevels)
@@ -667,6 +673,11 @@ impl<T: RealScalar> HelmholtzTables<T> {
             let (c, s) = angles[a];
             blocks(degrees[l], c, s)
         });
+        assert_eq!(
+            new.len(),
+            missing.len(),
+            "the map gives one result per part"
+        );
         let mut new = new.into_iter();
         for (l, level) in self.levels.iter_mut().enumerate() {
             if !stored[l] {

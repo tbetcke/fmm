@@ -695,8 +695,8 @@ fn check_block_budget(world: &SimpleCommunicator) {
     assert_eq!(row_per_pair.checksum, row_stored.checksum);
     assert_eq!(row_per_pair.errors, row_stored.errors);
     // The build by part (Helmholtz CH4.0h): the octree, the routes, the plan, the operator
-    // and its RCR tables timed; the tables within the operator; on one rank the steps within
-    // the build (on several, each part and the build are the slowest rank's, maybe not one).
+    // and its RCR tables timed; on one rank the tables within the operator and the steps
+    // within the build (on several, each part is the slowest rank's, maybe not one rank's).
     let parts = |name: &str| {
         let i = BUILD_PARTS.iter().position(|&p| p == name).expect("a part");
         row_stored.build_parts[i]
@@ -712,13 +712,14 @@ fn check_block_budget(world: &SimpleCommunicator) {
         assert!(parts(name) > 0.0, "{name}: {:?}", row_stored.build_parts);
     }
     let tables = ["RCR tables", "matrices", "plane-wave tables", "scratch"];
-    assert!(tables.iter().map(|&n| parts(n)).sum::<f64>() <= parts("operator") * (1.0 + 1e-9));
-    let steps: f64 = BUILD_PARTS
-        .iter()
-        .filter(|n| !tables.contains(n))
-        .map(|&n| parts(n))
-        .sum();
     if world.size() == 1 {
+        let in_tables: f64 = tables.iter().map(|&n| parts(n)).sum();
+        assert!(in_tables <= parts("operator") * (1.0 + 1e-9));
+        let steps: f64 = BUILD_PARTS
+            .iter()
+            .filter(|n| !tables.contains(n))
+            .map(|&n| parts(n))
+            .sum();
         assert!(
             steps <= row_stored.build * 1.000_001,
             "{steps} > {}",

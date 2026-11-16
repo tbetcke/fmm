@@ -106,12 +106,11 @@ for stage in "$@"; do
             [ "$order" = b ] && splits=$(reversed 1x1 $SPLITS)
             for s in $splits; do
                 r=${s%x*} t=${s#*x}
-                # The oracle on every core in the one-core launch (it is not timed).
-                oracle=()
-                [ "$s" = 1x1 ] && oracle=(--oracle-threads "$cores")
+                # Every launch's oracle runs on its own bound cores (one in the one-core
+                # launch; untimed).
                 # shellcheck disable=SC2046
                 launch "build-$s-$order" $(mpi "$r" "$t") "$A" --workload w1 --kd 500 \
-                    --eps "$EPS" "${DEFAULTS[@]}" --threads "$t" ${oracle[@]+"${oracle[@]}"}
+                    --eps "$EPS" "${DEFAULTS[@]}" --threads "$t"
             done
         done
         ;;
