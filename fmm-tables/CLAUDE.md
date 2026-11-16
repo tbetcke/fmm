@@ -14,7 +14,8 @@ CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential 
 CH6.1c (`helmholtz::plane_wave::pair`, the exponential M2L's conversions, shifts and pair
 translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1d
 (`helmholtz::plane_wave::merge`, the merge's shifts and each level's quadrature), the
-rule of which Helmholtz CH6.1e measured.
+rule of which Helmholtz CH6.1e measured; Helmholtz CH4.0h (`parts`, the parts of a build on
+a caller's threads).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -162,8 +163,22 @@ rule of which Helmholtz CH6.1e measured.
   (about 50 ms a level in debug builds).
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
-- Builds are serial and deterministic: the same inputs give bit-identical tables and
-  cache files.
+- Builds are deterministic: the same inputs give bit-identical tables and cache files.
+  This crate runs no thread. Since Helmholtz CH4.0h (`parts`; amended from "serial") a
+  builder may cut its work into independent parts and hand them to a caller's
+  `parts::Parts` (`Serial`, the calling thread, or `nd-fmm-exec`'s pool): each part a
+  function of the build's inputs and its number alone, the results put together in part
+  order, so the tables are the serial build's bit for bit on any map. So far
+  `HelmholtzTables::build_by` (with a `TableChoice`: the M2L degrees, the block budget,
+  translations or none, the levels with M2L tables and with stored blocks; and
+  `set_m2l_blocks`), `DenseM2l`, `BatchedM2l` and `ClassM2l::build_on` (their f64 tables
+  now hold the M2L of their own levels alone, no translations) and
+  `PlaneWaveM2l::build_with_reach_on`. `tests/helmholtz/parts.rs` checks every build on a
+  map that runs the parts in reverse on three threads against the serial build, bit for bit
+  through every application (and the matrices, and the plane-wave tables' `Debug` text),
+  the restricted builds' M2L against the full build's, the refusals, and the blocks of
+  named levels; its ignored `print_the_hashes` prints the applications' hashes, which were
+  the same before and after the change on the M6 (docs/helmholtz/tasks/CH4.0h.md).
 - Generic over T: RealScalar. Allocate only in builders and constructors, never in
   apply functions: their temporaries come from caller-owned scratch.
 - The octant and offset order are restated here from §3.12, not imported from

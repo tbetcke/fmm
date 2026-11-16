@@ -94,6 +94,22 @@
 //! blocks formed per call cannot be built in f64 without a second scratch, and the stored
 //! ones must match them.
 //!
+//! Since Helmholtz CH4.0h a build may name the levels whose M2L blocks it stores
+//! ([`TableChoice::block_levels`]: `nd-fmm-exec` names the levels whose M2L is RCR's), and
+//! [`HelmholtzTables::set_m2l_blocks`] stores another levels' set on built tables; the
+//! others neither store blocks nor spend the budget.
+//!
+//! # Parts
+//!
+//! [`HelmholtzTables::build_by`] (Helmholtz CH4.0h) cuts a build into independent parts and
+//! hands them to a caller's [`Parts`]: per level pair the M2M table, the L2L table and the two
+//! octant block sets; per level its 15 M2L tables, one per distance key; per level whose
+//! blocks it stores, one set per polar-angle key. Each part is computed from the build's
+//! inputs alone by the functions of the serial build, so the tables are the same bits on
+//! any map. A build may also leave out the translations and the M2L tables of some levels
+//! ([`TableChoice`]): `dense`, `classes` and `batched` build f64 tables with the M2L of their
+//! own levels alone. [`Serial`] is `build`'s map.
+//!
 //! # Application
 //!
 //! [`HelmholtzTables::m2m`], [`l2l`](HelmholtzTables::l2l) and
@@ -363,8 +379,9 @@ impl<T: RealScalar> HelmholtzTables<T> {
     /// level from the finest wherever they fit in what is left of `block_budget` bytes. M2L tables are
     /// built on levels ≥ 2 only: no V list lies above level 2.
     ///
-    /// Building is serial and deterministic. Its cost is that of the coaxial tables, O(p³)
-    /// per table (a projection where Re(k̂) a > 40, CONVENTIONS §3.15), and of the blocks.
+    /// Building is serial and deterministic ([`build_by`](Self::build_by) runs its parts on a
+    /// caller's threads, the same bits). Its cost is that of the coaxial tables, O(p³) per
+    /// table (a projection where Re(k̂) a > 40, CONVENTIONS §3.15), and of the blocks.
     ///
     /// # Panics
     ///

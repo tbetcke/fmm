@@ -546,6 +546,14 @@ oracle), `ch4-0e-tables.py` makes the report's tables (best split, matched accur
 estimate). Its report is `results/helmholtz-ch4-0e.md`. The one-rank debug run of
 `tests/helmholtz_accuracy.rs` took 246 s on the M6 at load 2–3 (241 s without the new check).
 
+Helmholtz CH4.0h (the build by part, and parallel; docs/helmholtz/tasks/CH4.0h.md) added
+`helmholtz_accuracy::Row::build_parts` (the build by part, each the slowest rank's, in the
+order of `BUILD_PARTS`: `HelmholtzFmm::build_timings`' steps and the operator's tables by
+part) and a last table "Build" in the example's output (a row per run: the build, its parts,
+the evaluation and the checksum). `tools/helmholtz/ch4-0h-runs.sh` runs W1 at kD = 500 on one
+core and every split (`build`) and CH3.6's matrix on two splits (`matrix`) at the defaults.
+Its report is `results/helmholtz-ch4-0h.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

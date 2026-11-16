@@ -252,6 +252,22 @@
 //! children's sums and shifts, and the conversions, a few clock reads per parent or child
 //! and frame, drained from the scratch sets after the level call.
 //!
+//! # The tables' build
+//!
+//! Every setting that changes the tables chooses them again (`select_tables`), each level's
+//! M2L first, then the RCR tables: built again only where their degrees change, and with
+//! the M2L y-blocks stored for the levels whose M2L is RCR's alone (Helmholtz CH4.0h; a
+//! level with waves, Batched, Dense or Classes never reads them). The builds run their parts
+//! (`nd_fmm_tables::parts`) on the operator's pool, each part a function of its inputs alone,
+//! so the tables, and the output, are the serial build's bit for bit at every thread count;
+//! the scratch sets, one per thread, are made on the pool too. An operator from
+//! [`HelmholtzOperator::unbuilt`] builds nothing until
+//! [`build_tables`](HelmholtzOperator::build_tables), so that `HelmholtzFmmBuilder` names
+//! every setting and the pool first and builds the tables once (before CH4.0h the builder's
+//! operator built the RCR tables at the degrees given, and again where the exponential
+//! M2L's rule raised a level, and Batched built a second set of every level's tables in
+//! f64). [`HelmholtzOperator::table_timings`] reports the build by part.
+//!
 //! # Execution
 //!
 //! The level calls run on the shared drivers of `nd-fmm-exec` (Helmholtz CH2.0, CH3.5),
@@ -956,7 +972,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// [`auto_m2l_mul_add`]'s mode unless [`with_m2l_mul_add`](Self::with_m2l_mul_add) named
     /// one (before or after; the other settings' default is [`MulAdd::Separate`]);
     /// under [`HelmholtzM2l::Rotation`] ignores the budget. The tables are built in f64,
-    /// serially, O(p⁵) per offset and level (16 offsets a level for Classes, 316 for Dense).
+    /// O(p⁵) per offset and level (16 offsets a level for Classes, 316 for Dense), on the
+    /// pool's threads if [`with_pool`](Self::with_pool) came first (module documentation,
+    /// "The tables' build").
     pub fn with_m2l(mut self, choice: HelmholtzM2l, dense_budget: usize) -> Self {
         self.kernel.m2l = choice;
         self.kernel.dense_budget = dense_budget;

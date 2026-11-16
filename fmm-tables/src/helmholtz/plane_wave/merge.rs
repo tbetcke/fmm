@@ -325,7 +325,8 @@ pub struct PlaneWaveM2l<T: RealScalar> {
 impl<T: RealScalar> PlaneWaveM2l<T> {
     /// The levels of a tree with k̂₀ = k r₀ and degrees p_l, level l with the quadrature of
     /// `precisions[l]` where it is `Some` and κ_l lies in the tables, none elsewhere
-    /// ([`select`] gives the rule's precisions). Builds in f64, serially; allocates.
+    /// ([`select`] gives the rule's precisions). Builds in f64, serially
+    /// ([`build_with_reach_on`](Self::build_with_reach_on) on a caller's threads); allocates.
     ///
     /// # Panics
     ///
