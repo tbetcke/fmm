@@ -69,7 +69,7 @@ def matrix(after, before):
         "| rest s (branch) | checksum |"
     )
     print("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |")
-    summary = {}
+    summary, rest, floors, pw_ratios = {}, [], {}, {}
     for (case, split), by in sorted(runs.items()):
         old_file = before / f"matrix-{case}-{split}.md"
         old = build_rows(old_file) if old_file.exists() else {}
@@ -90,8 +90,14 @@ def matrix(after, before):
             total = old_build + 2 * float(o["evaluate s"]) if o else float("nan")
             under = total < 1.0
             ratio = b / old_build if old_build > 0 else float("nan")
+            old_pw = float(o["plane-wave tables s"]) if o else float("nan")
+            if old_pw >= 0.01:
+                pw_ratios.setdefault(split, []).append(pw(branch) / old_pw)
             if under:
                 summary.setdefault((split, e), []).append((ratio, case))
+                floors.setdefault((split, e), []).append((old_build - old_pw) / old_build)
+                if ratio > 0.5:
+                    rest.append((case, e, split, old_build, b, branch))
             print(
                 f"| {case} | {e} | {split} | {old_build:.3f} | {total:.3f}{' *' if under else ''} "
                 f"| {b:.3f} | {a:.3f} | {ratio:.2f} | {b / a:.2f} "
@@ -102,16 +108,53 @@ def matrix(after, before):
     print()
     print("\\* under 1 s (CH4.0h's build plus twice its evaluation).")
     print()
-    print("| split | ε | cases under 1 s | ≤ 0.5 | branch ÷ CH4.0h: geometric mean | min | max | above 0.5 |")
-    print("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |")
+    print(
+        "| split | ε | cases under 1 s | ≤ 0.5 | branch ÷ CH4.0h: geometric mean | min | max "
+        "| floor (CH4.0h without its plane-wave tables): geometric mean | min | max |"
+    )
+    print("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for (split, e), rs in sorted(summary.items()):
         ratios = [r for r, _ in rs if r == r]
-        above = ", ".join(f"{c} {r:.2f}" for r, c in rs if r > 0.5)
+        fl = [f for f in floors[(split, e)] if f == f]
         print(
             f"| {split} | {e} | {len(rs)} | {sum(r <= 0.5 for r in ratios)} | "
             f"{statistics.geometric_mean(ratios):.2f} | {min(ratios):.2f} | {max(ratios):.2f} "
-            f"| {above or '–'} |"
+            f"| {statistics.geometric_mean(fl):.2f} | {min(fl):.2f} | {max(fl):.2f} |"
         )
+    print()
+    print("| split | cases with CH4.0h's plane-wave tables ≥ 0.01 s | plane-wave tables ÷ CH4.0h's: geometric mean | min | max |")
+    print("| --- | ---: | ---: | ---: | ---: |")
+    for split, rs in sorted(pw_ratios.items()):
+        print(
+            f"| {split} | {len(rs)} | {statistics.geometric_mean(rs):.3f} | {min(rs):.3f} "
+            f"| {max(rs):.3f} |"
+        )
+
+
+    print()
+    print("Cases under 1 s above one half: the branch's build by part (means), the largest first.")
+    print()
+    print("| case | ε | split | CH4.0h build s | branch build s | half of CH4.0h's s | parts s |")
+    print("| --- | --- | --- | ---: | ---: | ---: | --- |")
+    for case, e, split, old_build, b, branch in rest:
+        parts = {
+            p: mean([float(r[p + " s"]) for r in branch])
+            for p in PARTS
+        }
+        top = sorted(parts.items(), key=lambda kv: -kv[1])[:4]
+        print(
+            f"| {case} | {e} | {split} | {old_build:.3f} | {b:.3f} | {old_build / 2:.3f} | "
+            + ", ".join(f"{p} {v:.3f}" for p, v in top)
+            + " |"
+        )
+
+
+# The build's parts of `helmholtz_accuracy`'s table "Build" but the operator (which holds the
+# tables' parts).
+PARTS = [
+    "settings", "domain", "octree", "routes", "counts", "plan", "shapes", "RCR tables",
+    "matrices", "plane-wave tables", "scratch", "evaluator", "load",
+]
 
 
 if __name__ == "__main__":
