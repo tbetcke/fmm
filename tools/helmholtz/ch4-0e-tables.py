@@ -8,6 +8,7 @@
     python3 tools/helmholtz/ch4-0e-tables.py estimate <dir> [<dir> ...]
     python3 tools/helmholtz/ch4-0e-tables.py t1 <dir> [<dir> ...]
     python3 tools/helmholtz/ch4-0e-tables.py machines <dir A> <dir B> <case> <eps>
+    python3 tools/helmholtz/ch4-0e-tables.py blocks <dir> [<dir> ...]
 
 Several directories of one machine are read as one (the jobs of one machine). `compare`: per
 case and ε ours at its best split (build plus one evaluation, the smaller of launches a and
@@ -18,7 +19,8 @@ eps is, the most accurate one then). `splits`: build plus one evaluation per spl
 checksums' agreement over splits and launches. `levels`: one case's M2L per level at its best
 split. `estimate`: H4's bounded gain (the task's plan, "The estimate"). `t1`: the one-core
 runs. `machines`: one case's per-level times on two machines at their best splits and at one
-core. Python 3.9 standard library only.
+core. `blocks`: W1 at kD = 500 with every level's rotation blocks stored against the
+defaults, per split (the `blocks` stage). Python 3.9 standard library only.
 """
 
 import glob
@@ -109,7 +111,7 @@ def num(s):
 
 def case_of(name):
     """`ours-w4-cube-10-1x40-a` -> (`w4-cube-10`, `1x40`, `a`)."""
-    m = re.match(r"(?:t1-)?ours-(.+)-(\d+x\d+)-([ab])$", name)
+    m = re.match(r"(?:t1-)?(?:ours|blocks)-(.+)-(\d+x\d+)-([ab])$", name)
     if m:
         return m.group(1), m.group(2), m.group(3)
     return None
@@ -119,11 +121,11 @@ def kd_of(case):
     return float(case.rsplit("-", 1)[1])
 
 
-def ours(dirs):
+def ours(dirs, prefix="ours"):
     """{(case, eps): {split: [run dicts of launches a and b]}}."""
     runs = defaultdict(lambda: defaultdict(list))
     for d in dirs:
-        for path in sorted(glob.glob(os.path.join(d, "ours-*.md"))):
+        for path in sorted(glob.glob(os.path.join(d, prefix + "-*.md"))):
             key = case_of(os.path.basename(path)[:-3])
             if key is None:
                 continue
@@ -413,6 +415,29 @@ def machines(dir_a, dir_b, case, e):
         print(f"| {key} | – | – | {ta:.4f} | {tb:.4f} | {ta / tb if tb else float('nan'):.2f} |")
 
 
+def blocks(dirs):
+    base, stored = ours(dirs), ours(dirs, "blocks")
+    print("| ε | split | build s: default, stored | evaluate s: default, stored | level 2 M2L s: default, stored | level 3 M2L s: default, stored | total ÷ | checksums |")
+    print("| --- | --- | --- | --- | --- | --- | ---: | --- |")
+    for e in EPS:
+        a, b = base.get(("w1-500", e), {}), stored.get(("w1-500", e), {})
+        for split in sorted(b, key=lambda s: int(s.split("x")[0])):
+            if split not in a:
+                continue
+            x = min(a[split], key=lambda r: r["total"])
+            y = min(b[split], key=lambda r: r["total"])
+            def lv(r, level):
+                hit = [num(v["M2L s"]) for v in r["levels"] if v["level"] == str(level)]
+                tag = [v.get("blocks", "?") for v in r["levels"] if v["level"] == str(level)]
+                return (hit[0] if hit else float("nan")), (tag[0] if tag else "?")
+            sums = {r["checksum"] for r in a[split] + b[split]}
+            (x2, _), (y2, t2) = lv(x, 2), lv(y, 2)
+            (x3, _), (y3, _) = lv(x, 3), lv(y, 3)
+            print(f"| {e} | {split} | {x['build']:.3f}, {y['build']:.3f} | {x['evaluate']:.3f}, "
+                  f"{y['evaluate']:.3f} | {x2:.3f}, {y2:.3f} ({t2}) | {x3:.3f}, {y3:.3f} | "
+                  f"{y['total'] / x['total']:.2f} | {'equal' if len(sums) == 1 else 'DIFFERENT'} |")
+
+
 def main(argv):
     if len(argv) < 3:
         sys.exit(__doc__)
@@ -427,6 +452,8 @@ def main(argv):
         estimate(rest)
     elif step == "t1":
         t1(rest)
+    elif step == "blocks":
+        blocks(rest)
     elif step == "machines":
         machines(rest[0], rest[1], rest[2], rest[3])
     else:

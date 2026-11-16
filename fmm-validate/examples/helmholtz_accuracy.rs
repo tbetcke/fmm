@@ -125,8 +125,13 @@
 //!   CH4.0) the level's boxes (`Row::v_targets`), m̂, the estimate of Batched's columns per
 //!   table read that Auto's term reads (`Row::batched_columns`), Batched's (block, offset)
 //!   visits at blocks of 64 summed over the ranks (`Row::block_visits`) and the V pairs over
-//!   them, the exact columns per read on one rank; then a row `Σ` with the levels'
-//!   seconds summed and the evaluation's (with several evaluations also the first's).
+//!   them, the exact columns per read on one rank, and (Helmholtz CH4.0e) whether the
+//!   level's rotation blocks are stored or formed per V pair (`Row::m2l_blocks_stored`);
+//!   then a row `Σ` with the levels' seconds summed and the evaluation's (with several
+//!   evaluations also the first's).
+//! - `--block-budget MB` (Helmholtz CH4.0e): the bytes of the M2L's stored rotation blocks
+//!   per rank (default the library's, 512 MiB); the levels that do not fit, coarsest first,
+//!   form their blocks per V pair. No bit depends on it.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
 //!   touches the buffers, which on a large exponential M2L's waves costs seconds).
@@ -184,6 +189,7 @@ struct Arguments {
     m2l: Vec<M2lRun>,
     dense_budget: usize,
     plane_wave_budget: Option<usize>,
+    block_budget: Option<usize>,
     reaches: Vec<Option<f64>>,
     splits: Vec<Option<PlaneWaveSplit>>,
     raises: Vec<Option<PlaneWaveRaise>>,
@@ -262,7 +268,8 @@ fn arguments() -> Arguments {
              [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|auto-pw|\
              auto-pw:<d>|sweep|\
              planewave|planewave:<1|2|3>|planewave-scan|planewave-scan:<1|2|3>,…] \
-             [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] \
+             [--dense-budget MB] [--plane-wave-budget MB|whole] [--block-budget MB] \
+             [--reach corner|r,…] \
              [--split auto|parents|children,…] [--raise rule|level|leaves|m2l,…] \
              [--term on|off,…] [--block auto|w,…] [--empty-boxes on|off,…] [--near-v off|cost|n|inf,…] [--near-wx off|cost|n|inf,…] \
              [--leaf-size auto|n,…] [--c-leaf auto|c,…] [--levels] \
@@ -285,6 +292,7 @@ fn arguments() -> Arguments {
         m2l: vec![M2lRun::Fixed(HelmholtzM2l::Rotation, None, None)],
         dense_budget: DEFAULT_DENSE_BUDGET,
         plane_wave_budget: None,
+        block_budget: None,
         reaches: vec![None],
         splits: vec![None],
         raises: vec![None],
@@ -399,6 +407,12 @@ fn arguments() -> Arguments {
                     }
                     .map(|bytes| parsed.plane_wave_budget = Some(bytes))
                     .is_some(),
+                    "--block-budget" => value
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|mb| mb.checked_mul(1 << 20))
+                        .map(|bytes| parsed.block_budget = Some(bytes))
+                        .is_some(),
                     "--reach" => value
                         .split(',')
                         .map(|v| match v {
@@ -822,6 +836,7 @@ fn main() {
             case.gradients = arguments.gradients;
             case.dense_budget = arguments.dense_budget;
             case.plane_wave_budget = arguments.plane_wave_budget;
+            case.block_budget = arguments.block_budget;
             case.evaluations = arguments.evaluations;
             let problem = Problem::new(&case);
             let start = Instant::now();
@@ -951,7 +966,7 @@ fn main() {
                         };
                         format!(
                             "{head} | {l} | {} | {} | {} | {:.6} | {:.0} | {passes} | {waves} \
-                             | {parts} | {} | {:.2} | {} | {:.2} |",
+                             | {parts} | {} | {:.2} | {} | {:.2} | {} |",
                             row.degrees[l],
                             level_m2l(row, l),
                             row.v_pairs[l],
@@ -961,6 +976,11 @@ fn main() {
                             row.batched_columns[l],
                             row.block_visits[l],
                             row.v_pairs[l] as f64 / row.block_visits[l].max(1) as f64,
+                            if row.m2l_blocks_stored[l] {
+                                "stored"
+                            } else {
+                                "per pair"
+                            },
                         )
                     })
                     .collect();
@@ -974,7 +994,7 @@ fn main() {
                 };
                 lines.push(format!(
                     "{head} | Σ | – | {evaluate} | {} | {:.6} | – | {:.6} | {:.6} | {} | {:.6} \
-                     | {:.6} | {:.6} | {:.6} | – | – | – | – | – |",
+                     | {:.6} | {:.6} | {:.6} | – | – | – | – | – | – |",
                     row.v_pairs.iter().sum::<usize>(),
                     row.m2l_seconds.iter().sum::<f64>(),
                     row.plane_wave_seconds.iter().map(|p| p[0]).sum::<f64>(),
@@ -1422,11 +1442,12 @@ fn main() {
         println!(
             "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | ran | V pairs \
              | M2L s | ns per pair | waves s | merge and shift s | waves | busy s | shifts s \
-             | children s | conversions s | threads busy | boxes | m̂ | visits | columns per read |"
+             | children s | conversions s | threads busy | boxes | m̂ | visits | columns per read \
+             | blocks |"
         );
         println!(
             "| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: \
-             | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+             | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
         );
         for line in &levels {
             println!("{line}");

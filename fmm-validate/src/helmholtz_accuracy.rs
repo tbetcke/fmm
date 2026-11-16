@@ -179,6 +179,11 @@ pub struct Case {
     /// Helmholtz CH4.0d3; [`WxNear::Off`] in [`Case::new`]; the library's default is
     /// `WxNear::CostModel`; named always, as `near_v`).
     pub near_wx: WxNear,
+    /// The bytes of the M2L's stored rotation blocks per rank
+    /// (`HelmholtzFmmBuilder::block_budget`, Helmholtz CH4.0e; `None` the library's,
+    /// `DEFAULT_BLOCK_BUDGET`). A level whose blocks do not fit forms them per V pair; no bit
+    /// depends on it.
+    pub block_budget: Option<usize>,
 }
 
 impl Case {
@@ -218,6 +223,7 @@ impl Case {
             empty_boxes: true,
             near_v: VNear::Off,
             near_wx: WxNear::Off,
+            block_budget: None,
         }
     }
 }
@@ -665,6 +671,10 @@ pub struct Row {
     /// Per level, the M2L level calls' seconds in the last evaluation, the slowest rank's
     /// (`HelmholtzOperator::m2l_times`; Helmholtz CH6.2b).
     pub m2l_seconds: Vec<f64>,
+    /// Per level, whether the M2L's rotation blocks are stored (`HelmholtzTables::
+    /// m2l_blocks_stored`, Helmholtz CH4.0e); else they are formed per V pair. The same on
+    /// every rank (the tables follow the global degrees and the budget).
+    pub m2l_blocks_stored: Vec<bool>,
     /// Per level, the exponential M2L's passes in the last evaluation, [waves, merge and
     /// shift] seconds, each the slowest rank's (`HelmholtzOperator::plane_wave_times`;
     /// Helmholtz CH6.2d); zero where no level call ran merge and shift.
@@ -843,6 +853,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(budget) = case.plane_wave_budget {
         builder = builder.plane_wave_budget(budget);
     }
+    if let Some(budget) = case.block_budget {
+        builder = builder.block_budget(budget);
+    }
     if let Some(reach) = case.plane_wave_reach {
         builder = builder.plane_wave_reach(reach);
     }
@@ -910,6 +923,9 @@ pub fn run_output<C: CommunicatorCollectives>(
         .collect();
     let mut m2l_seconds = vec![0.0f64; nlevels];
     comm.all_reduce_into(&seconds[..], &mut m2l_seconds[..], SystemOperation::max());
+    let m2l_blocks_stored: Vec<bool> = (0..nlevels)
+        .map(|l| fmm.operator().tables().m2l_blocks_stored(l))
+        .collect();
     let seconds: Vec<f64> = fmm
         .operator()
         .p2p_times()
@@ -1107,6 +1123,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         evaluate,
         first_evaluate,
         m2l_seconds,
+        m2l_blocks_stored,
         plane_wave_seconds,
         plane_wave_parts,
         batched_columns: v_pairs

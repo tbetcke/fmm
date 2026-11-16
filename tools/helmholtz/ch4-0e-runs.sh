@@ -21,6 +21,10 @@
 #          2 (the best of two calls, FMM3D's setup included), launches a and b (the
 #          variants in order, then reversed);
 #          then `helmholtz_fmm3d errors` on launch a's outputs into fmm3d-<case>.md
+#   blocks W1 at kD = 500 at EPS with the M2L's rotation blocks stored on every level
+#          (`--block-budget BLOCK_MB`, default 2048 MiB per rank; the library's 512 MiB leaves
+#          level 2's, p = 123–135, to be formed per V pair), at every split, ABBA, and on one
+#          core at 10⁻⁶ (launch names blocks-...); the same bits as `ours`
 #   t1     one core: ours (1 x 1) on T1_CASES at EPS, both FMM3D variants on T1_CASES over
 #          GRID (REPEAT 1), and ours on W1 at kD = 500 at 10⁻⁶ (the per-core part of the
 #          Kathleen-against-locust comparison)
@@ -221,6 +225,22 @@ for stage in "$@"; do
     fmm3d)
         for c in $CASES; do fmm3d_case "$c" "$T" 2 fmm3d a b; done
         ;;
+    blocks)
+        # Word splitting of SPLITS is intended.
+        # shellcheck disable=SC2086
+        for order in a b; do
+            splits=$SPLITS
+            [ "$order" = b ] && splits=$(reversed $SPLITS)
+            for s in $splits; do
+                r=${s%x*} t=${s#*x}
+                # shellcheck disable=SC2046
+                launch "blocks-w1-500-$s-$order" $(mpi "$r" "$t") "$A" --workload w1 --kd 500 \
+                    --eps "$EPS" "${DEFAULTS[@]}" --block-budget "${BLOCK_MB:-2048}" --threads "$t"
+            done
+        done
+        launch "blocks-t1-w1-500" "$A" --workload w1 --kd 500 --eps 1e-6 "${DEFAULTS[@]}" \
+            --block-budget "${BLOCK_MB:-2048}" --threads 1 --oracle-threads "$T"
+        ;;
     t1)
         for c in $T1_CASES; do
             launch "t1-ours-$(name "$c")" "$A" --workload "${c%@*}" --kd "${c#*@}" \
@@ -231,7 +251,7 @@ for stage in "$@"; do
             --threads 1 --oracle-threads "$T"
         ;;
     *)
-        echo "ch4-0e-runs.sh: unknown stage $stage (ours, fmm3d or t1)" >&2
+        echo "ch4-0e-runs.sh: unknown stage $stage (ours, fmm3d, blocks or t1)" >&2
         exit 2
         ;;
     esac
