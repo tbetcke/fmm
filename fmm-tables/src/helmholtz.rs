@@ -1015,6 +1015,8 @@ impl<T: RealScalar> HelmholtzTables<T> {
                 let out = &mut block_buffer[..compact_blocks_len(p)];
                 // Formed again unless the scratch holds this degree's and angle's.
                 if *held != Some((p, c, s)) {
+                    // No key while the buffer is being written (a panic leaves none).
+                    *held = None;
                     y_blocks(p, c, s, out, block_scratch);
                     *held = Some((p, c, s));
                 }

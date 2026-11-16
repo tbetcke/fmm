@@ -8,7 +8,8 @@ of tools/helmholtz/ch4-0i-runs.sh, beside CH4.0h's launches of the same machine
     ch4-0i-tables.py matrix <ch4-0i-dir> <ch4-0h-dir>   CH3.6's matrix: boxes against auto
     ch4-0i-tables.py pairs  <ch4-0i-dir> <ch4-0h-dir>   CH3.6's matrix: boxes against pairs
     ch4-0i-tables.py degrees <ch4-0i-dir> -             every Rotation level of the stages
-                                                         rotation, pairs and levels (order a)
+                                                         rotation, pairs, levels (order a)
+                                                         and kd1000
                                                          by degree: boxes against pairs
 
 Every row's checksum is compared with CH4.0h's launches of the same case and ε (all equal
@@ -130,14 +131,16 @@ def levels(here, before, prefix="levels"):
                       f"| {one_boxes / (n * b):.2f} | {one_boxes / (n * p):.2f} "
                       f"| {one_pairs / (n * p):.2f} |")
     print("\nThe evaluation (s):\n")
-    print("| ε | ranks × threads | boxes | auto | pairs | auto ÷ boxes |")
-    print("| --- | --- | ---: | ---: | ---: | ---: |")
+    print("| ε | ranks × threads | boxes | auto (first rule) | pairs (the rule) | auto ÷ boxes "
+          "| pairs ÷ boxes |")
+    print("| --- | --- | ---: | ---: | ---: | ---: | ---: |")
     for e in eps:
         for rt in [(1, 1)] + splits:
             b = mean(evaluate.get((e, "boxes", rt), []))
             a = mean(evaluate.get((e, "auto", rt), []))
             p = mean(evaluate.get((e, "pairs", rt), []))
-            print(f"| {e} | {rt[0]} × {rt[1]} | {b:.3f} | {a:.3f} | {p:.3f} | {a / b:.2f} |")
+            print(f"| {e} | {rt[0]} × {rt[1]} | {b:.3f} | {a:.3f} | {p:.3f} | {a / b:.2f} "
+                  f"| {p / b:.2f} |")
 
 
 def stored(here, before):
@@ -208,7 +211,7 @@ def matrix(here, before, prefix="matrix", other="auto"):
 def degrees(here, _before):
     """Every Rotation level with both splits in a launch, by degree."""
     rows = {}
-    paths = [p for prefix in ("rotation", "pairs", "levels") for p in
+    paths = [p for prefix in ("rotation", "pairs", "levels", "kd1000") for p in
              sorted(Path(here).glob(f"{prefix}-*.md")) if not p.name.endswith("-b.md")]
     for path in paths:
         for r in tables(path).get("M2L per level", []):

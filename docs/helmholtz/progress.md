@@ -3275,9 +3275,9 @@ request, using this template:
     `ch4-0i-tables.py`.
   - Runs (Kathleen jobs 634393, 634402, 634421; locust 2026-11-16): level 2 of W1 at kD = 500
     by pairs 0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at 4 and 8, 0.56–0.60× on
-    one core (the class order and the kept blocks); at the best split 0.89–0.91 of linear
-    against CH4.0e's one core on Kathleen (locust 0.75–0.78 at 1 × 72), 0.44–0.54 against the
-    one core by pairs; the evaluation 0.50–0.91× by boxes. Why not 70 % of the new one core:
+    one core (the class order and the kept blocks); against CH4.0e's one core 0.75–0.78 of
+    linear at locust 1 × 72, 0.68–0.80 at Kathleen 1 × 40 and 0.89–0.91 at 2 × 20, 0.40–0.54
+    against the one core by pairs; the evaluation 0.50–0.91× by boxes. Why not 70 % of the new one core:
     each pair at p = 131 reads a 12 MB coaxial table and 12 MB of y-blocks, from memory on every
     thread (fewer formations per task: no gain; level 2's blocks stored: locust 0.58–0.69,
     Kathleen +0.01–0.10, 601 MB per rank and 1.08–1.13× at 8 × 5, so the block budget stays).
@@ -3288,6 +3288,12 @@ request, using this template:
     boxes on locust (57 rows, 0.67–1.04). Every checksum equal to CH4.0h's. Report
     `fmm-validate/results/helmholtz-ch4-0i.md`; raw outputs in
     `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0i/`.
+- Self-review (subagent): no bit-identity defect in the pair path. Taken: the acceptance read
+  at the plan's splits (locust 1 × 72 meets 0.70 against CH4.0e's one core; the report had
+  it the other way) and its serial gain stated; ranges in the report; the rule's thresholds
+  stated as between measured degrees, and W1 at kD = 1000 run for a many-box level at p ≥ 48;
+  the pooled pair path with the default buffer in CI; Auto's check not vacuous; the counts
+  presized; the kept blocks' key cleared before forming; `fmm-exec/CLAUDE.md`'s rule text.
 - Tests: `nd-fmm-tables` `tests/helmholtz/contribution.rs` (the split, a row in order, kept
   blocks, bit for bit); `nd-fmm-exec` `tests/helmholtz/rcr_split.rs` (the rule) and
   `check_rcr_split` in `tests/helmholtz_fmm.rs` (every split, 1, 2, 3 and 20 threads, the

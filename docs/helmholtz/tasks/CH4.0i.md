@@ -167,16 +167,15 @@ same case, ABBA (by boxes against by pairs):
 ## Results
 
 Report `fmm-validate/results/helmholtz-ch4-0i.md`. Level 2 of W1 at kD = 500 by pairs:
-0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at more; at the best split 0.89–0.91 of
-linear against CH4.0e's one core (Kathleen 2 × 20; locust 0.75–0.78 at 1 × 72), 0.44–0.54
-against the one core by pairs. The pair 1.80–2.41× S6's on the same core. Every checksum
+0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at more; against CH4.0e's one
+core 0.75–0.78 of linear at locust 1 × 72, 0.68–0.80 at Kathleen 1 × 40, 0.89–0.91 at 2 × 20;
+0.40–0.54 against the one core by pairs. The pair 1.80–2.41× S6's on the same core. Every checksum
 CH4.0h's.
 
 ## Pending runs
 
-- Kathleen job 634421 (`ch4-0i-runs.sh … kathleen-rule matrix rotation crossover`): the
-  matrix under the degree rule, the rule's degrees and the one-core crossover on Kathleen; the
-  report's §4 and §5 Kathleen parts.
+None. Kathleen job 634421 (the matrix under the degree rule, `rotation`, `crossover`) finished
+and is in the report §4 and §5; W1 at kD = 1000 on locust (after the self-review) in §5.
 
 ## Open questions
 

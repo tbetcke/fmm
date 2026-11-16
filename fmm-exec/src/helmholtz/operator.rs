@@ -1565,7 +1565,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// [`DEFAULT_RCR_BUFFER`]; `None`: every pair of a level): a level call by pairs then
     /// runs by chunks of pairs whose contributions fit, at least one pair per thread. The
     /// output is the same at every bound. `HelmholtzFmmBuilder` sets it from its node budget
-    /// ([`rcr_budget`](super::HelmholtzFmmBuilder::rcr_budget)).
+    /// ([`rcr_budget`](super::HelmholtzFmmBuilder::rcr_budget)) and sizes it from the plan
+    /// ([`with_rcr_levels`](Self::with_rcr_levels)); without the plan's levels the first level
+    /// call by pairs of a level grows it, up to the bound.
     pub fn with_rcr_buffer(mut self, bytes: Option<usize>) -> Self {
         self.rcr_buffer.bound = bytes;
         self.size_rcr_buffer();

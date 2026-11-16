@@ -163,6 +163,8 @@ impl<T: SimdScalar> RcrBuffer<T> {
         self.values = vec![T::zero(); values];
         self.order = vec![0; slots];
         self.slot_of = vec![0; slots];
+        let nlevels = self.levels.len().max(self.counts.level_calls.len());
+        self.counts.level_calls.resize(nlevels, 0);
         self.peak = self.peak.max(self.bytes());
     }
 

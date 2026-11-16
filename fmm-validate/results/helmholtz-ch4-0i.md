@@ -20,15 +20,18 @@ rank-invariant.
   - one and two ranks per node: 0.55–0.69× on both machines;
   - 4 and 8 ranks per node: 0.23–0.40×;
   - one core: 0.56–0.60×, from the class order and the kept blocks.
-- **The acceptance** (§2, §3), at the node's best split:
-  - Against CH4.0e's measure (one core target by target): met on Kathleen, 0.89–0.91 at
-    2 × 20, and not on locust, 0.75–0.78 at 1 × 72.
-  - Against this task's own one core (by pairs, 0.56–0.60× faster): not met, 0.50–0.54 on
-    Kathleen and 0.44–0.45 on locust.
+- **The acceptance** (§2, §3), level 2's one-core time over (threads × its time on the node):
+  - Against CH4.0e's measure (the one core target by target), at the plan's splits: locust
+    1 × 72 0.75–0.78, Kathleen 1 × 40 0.68–0.80 (0.80 at 10⁻³, 0.68 and 0.69 at 10⁻⁶ and
+    10⁻⁸); at Kathleen's best split, 2 × 20, 0.89–0.91. This measure credits the pair split's
+    serial gain (its one core is 0.56–0.60× the old one) as parallel efficiency.
+  - Against this task's own one core (by pairs): 0.44–0.45 on locust at 1 × 72, 0.40–0.45 on
+    Kathleen at 1 × 40 and 0.50–0.54 at 2 × 20; not met anywhere.
   - The remaining loss is per-pair memory traffic at p = 131 (§3). Storing level 2's blocks
     lifts locust to 0.58–0.69 and Kathleen hardly at all, and costs 601 MB per rank; CH4.0e's
     budget stands.
-- **The evaluation of W1 at kD = 500** (§2): 0.82–0.88× of by boxes on Kathleen at 1 × 40
+- **The evaluation of W1 at kD = 500** (§2), under the rule (the column "pairs"): 0.82–0.88×
+  of by boxes on Kathleen at 1 × 40
   and 2 × 20, 0.67–0.75× at 4 × 10, 0.50–0.59× at 8 × 5. On locust 0.87–0.91×, 0.86–0.89×,
   0.69–0.76× and 0.53–0.61× at 1 × 72 … 8 × 9.
 - **The pair against S6** (§4), on the same Grace core: ours 1.95× S6's prototype at p = 72
@@ -39,8 +42,9 @@ rank-invariant.
   p ≥ 30 where the level's targets with a V row are fewer than 4 × the threads; by boxes
   below. By pairs loses 1.1–3.8× on levels of p = 7–15 (the overhead of two passes over
   cheap pairs) and is about even at p = 18–24. Under the rule, CH3.6's matrix at one rank per
-  node runs 0.974× by boxes on locust (geometric mean over 57 rows, range 0.67–1.04),
-  {K_RULE_SUMMARY}. Every checksum of every run equals CH4.0h's.
+  node runs 0.974× by boxes on locust (geometric mean over 57 rows, range 0.67–1.04) and 0.976×
+  on Kathleen (0.50–1.17, every row above 1.05 one that ran no level by pairs). The thresholds
+  lie between measured degrees (§5). Every checksum of every run equals CH4.0h's.
 
 ## 1. What changed
 
@@ -97,7 +101,7 @@ locust's level 3. Under §5's rule `Auto` runs both levels by pairs at every spl
 the one core by boxes (CH4.0e's measure, the only one before this task) and by pairs (this
 task's one core, the best).
 
-Kathleen (jobs 634393, node-c11a-065, 2 × 20 Cascade Lake cores):
+Kathleen (job 634393, node-c11a-065, 2 × 20 Cascade Lake cores):
 
 Level 2:
 
@@ -141,23 +145,23 @@ Level 3:
 
 The evaluation (s):
 
-| ε | ranks × threads | boxes | auto | pairs | auto ÷ boxes |
-| --- | --- | ---: | ---: | ---: | ---: |
-| 1e-3 | 1 × 1 | 128.007 | nan | 106.147 | nan |
-| 1e-3 | 1 × 40 | 5.936 | 5.355 | 4.843 | 0.90 |
-| 1e-3 | 2 × 20 | 5.575 | 4.657 | 4.585 | 0.84 |
-| 1e-3 | 4 × 10 | 6.851 | 4.712 | 4.679 | 0.69 |
-| 1e-3 | 8 × 5 | 10.385 | 5.978 | 5.222 | 0.58 |
-| 1e-6 | 1 × 1 | 156.011 | nan | 130.454 | nan |
-| 1e-6 | 1 × 40 | 7.374 | 6.374 | 6.113 | 0.86 |
-| 1e-6 | 2 × 20 | 6.707 | 5.653 | 5.529 | 0.84 |
-| 1e-6 | 4 × 10 | 8.392 | 5.755 | 5.595 | 0.69 |
-| 1e-6 | 8 × 5 | 12.778 | 7.237 | 6.427 | 0.57 |
-| 1e-8 | 1 × 1 | 256.675 | nan | 227.591 | nan |
-| 1e-8 | 1 × 40 | 11.248 | 10.204 | 9.906 | 0.91 |
-| 1e-8 | 2 × 20 | 10.546 | 9.434 | 9.194 | 0.89 |
-| 1e-8 | 4 × 10 | 12.555 | 9.572 | 9.456 | 0.76 |
-| 1e-8 | 8 × 5 | 17.652 | 11.642 | 10.415 | 0.66 |
+| ε | ranks × threads | boxes | auto (first rule) | pairs (the rule) | auto ÷ boxes | pairs ÷ boxes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1e-3 | 1 × 1 | 128.007 | nan | 106.147 | nan | 0.83 |
+| 1e-3 | 1 × 40 | 5.936 | 5.355 | 4.843 | 0.90 | 0.82 |
+| 1e-3 | 2 × 20 | 5.575 | 4.657 | 4.585 | 0.84 | 0.82 |
+| 1e-3 | 4 × 10 | 6.851 | 4.712 | 4.679 | 0.69 | 0.68 |
+| 1e-3 | 8 × 5 | 10.385 | 5.978 | 5.222 | 0.58 | 0.50 |
+| 1e-6 | 1 × 1 | 156.011 | nan | 130.454 | nan | 0.84 |
+| 1e-6 | 1 × 40 | 7.374 | 6.374 | 6.113 | 0.86 | 0.83 |
+| 1e-6 | 2 × 20 | 6.707 | 5.653 | 5.529 | 0.84 | 0.82 |
+| 1e-6 | 4 × 10 | 8.392 | 5.755 | 5.595 | 0.69 | 0.67 |
+| 1e-6 | 8 × 5 | 12.778 | 7.237 | 6.427 | 0.57 | 0.50 |
+| 1e-8 | 1 × 1 | 256.675 | nan | 227.591 | nan | 0.89 |
+| 1e-8 | 1 × 40 | 11.248 | 10.204 | 9.906 | 0.91 | 0.88 |
+| 1e-8 | 2 × 20 | 10.546 | 9.434 | 9.194 | 0.89 | 0.87 |
+| 1e-8 | 4 × 10 | 12.555 | 9.572 | 9.456 | 0.76 | 0.75 |
+| 1e-8 | 8 × 5 | 17.652 | 11.642 | 10.415 | 0.66 | 0.59 |
 
 locust (GH200, 72 Neoverse V2 cores):
 
@@ -203,38 +207,42 @@ Level 3:
 
 The evaluation (s):
 
-| ε | ranks × threads | boxes | auto | pairs | auto ÷ boxes |
-| --- | --- | ---: | ---: | ---: | ---: |
-| 1e-3 | 1 × 1 | 82.722 | nan | 72.951 | nan |
-| 1e-3 | 1 × 72 | 1.761 | 1.514 | 1.609 | 0.86 |
-| 1e-3 | 2 × 36 | 1.782 | 1.534 | 1.579 | 0.86 |
-| 1e-3 | 4 × 18 | 2.240 | 1.538 | 1.550 | 0.69 |
-| 1e-3 | 8 × 9 | 3.094 | 1.640 | 1.639 | 0.53 |
-| 1e-6 | 1 × 1 | 112.805 | nan | 100.034 | nan |
-| 1e-6 | 1 × 72 | 2.312 | 2.018 | 2.016 | 0.87 |
-| 1e-6 | 2 × 36 | 2.371 | 2.021 | 2.038 | 0.85 |
-| 1e-6 | 4 × 18 | 2.921 | 2.058 | 2.045 | 0.70 |
-| 1e-6 | 8 × 9 | 3.966 | 2.189 | 2.192 | 0.55 |
-| 1e-8 | 1 × 1 | 164.973 | nan | 150.361 | nan |
-| 1e-8 | 1 × 72 | 3.152 | 2.823 | 2.822 | 0.90 |
-| 1e-8 | 2 × 36 | 3.236 | 2.854 | 2.873 | 0.88 |
-| 1e-8 | 4 × 18 | 3.857 | 2.907 | 2.922 | 0.75 |
-| 1e-8 | 8 × 9 | 5.004 | 3.058 | 3.073 | 0.61 |
+| ε | ranks × threads | boxes | auto (first rule) | pairs (the rule) | auto ÷ boxes | pairs ÷ boxes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1e-3 | 1 × 1 | 82.722 | nan | 72.951 | nan | 0.88 |
+| 1e-3 | 1 × 72 | 1.761 | 1.514 | 1.609 | 0.86 | 0.91 |
+| 1e-3 | 2 × 36 | 1.782 | 1.534 | 1.579 | 0.86 | 0.89 |
+| 1e-3 | 4 × 18 | 2.240 | 1.538 | 1.550 | 0.69 | 0.69 |
+| 1e-3 | 8 × 9 | 3.094 | 1.640 | 1.639 | 0.53 | 0.53 |
+| 1e-6 | 1 × 1 | 112.805 | nan | 100.034 | nan | 0.89 |
+| 1e-6 | 1 × 72 | 2.312 | 2.018 | 2.016 | 0.87 | 0.87 |
+| 1e-6 | 2 × 36 | 2.371 | 2.021 | 2.038 | 0.85 | 0.86 |
+| 1e-6 | 4 × 18 | 2.921 | 2.058 | 2.045 | 0.70 | 0.70 |
+| 1e-6 | 8 × 9 | 3.966 | 2.189 | 2.192 | 0.55 | 0.55 |
+| 1e-8 | 1 × 1 | 164.973 | nan | 150.361 | nan | 0.91 |
+| 1e-8 | 1 × 72 | 3.152 | 2.823 | 2.822 | 0.90 | 0.90 |
+| 1e-8 | 2 × 36 | 3.236 | 2.854 | 2.873 | 0.88 | 0.89 |
+| 1e-8 | 4 × 18 | 3.857 | 2.907 | 2.922 | 0.75 | 0.76 |
+| 1e-8 | 8 × 9 | 5.004 | 3.058 | 3.073 | 0.61 | 0.61 |
 
 Level 2 has 64 boxes at p = 123, 131 and 135 (10⁻³, 10⁻⁶, 10⁻⁸) and 2,504 V pairs; level 3
 has 512 boxes at p = 66–76 and 12,216 pairs.
 
 By pairs, level 2 at one and two ranks per node takes 0.55–0.69× its time by boxes, and at 4 and 8
 ranks per node 0.23–0.40×, where by boxes a rank's 8–16 targets left most of its threads
-idle. Level 3 takes 0.69–0.94× by pairs (0.44–0.50× at 8 × 5 on Kathleen). On one core both levels run faster by pairs
+idle. Level 3 takes 0.69–0.94× by pairs at one to four ranks per node, 0.44–0.50× at 8 × 5 on
+Kathleen and 0.57–0.72× at 8 × 9 on locust. On one core both levels run faster by pairs
 (0.56–0.60× and 0.79–0.94×): in class order a thread's consecutive pairs share their y-blocks,
 which the scratch keeps where they are formed per call (level 2's, 601 MB, exceed the block
 budget), and their coaxial table (§4).
 
-Read against CH4.0e's measure, the acceptance is met on Kathleen: at the best split (2 × 20)
-level 2 runs at 0.89–0.91 of linear. On locust it reaches 0.75–0.78 at 1 × 72. Read against
-this task's one core, which is itself 0.56–0.60× the old one, it is not met anywhere:
-0.50–0.54 at Kathleen's best split, 0.44–0.45 on locust. §3 says why.
+The plan reads the acceptance at Kathleen 1 × 40 and locust 1 × 72, against CH4.0e's one
+core (target by target). On that reading it is met on locust (0.75–0.78) and on Kathleen at
+10⁻³ (0.80), and missed narrowly on Kathleen at 10⁻⁶ and 10⁻⁸ (0.68, 0.69); at Kathleen's
+best split (2 × 20), 0.89–0.91. That reading mixes two gains, though: the pair path's one core
+is 0.56–0.60× the box path's, and the measure counts that serial gain as parallel efficiency.
+Against the pair path's own one core level 2 reaches 0.40–0.54 of linear, nowhere 0.70. §3
+says why.
 
 ## 3. Why level 2 stays below 70 % of its own one core
 
@@ -391,10 +399,37 @@ Machine: Neoverse-V2 (implementer 0x41, part 0xd4f), 72 physical, 1 logical; tar
 | 131 | 62.5 | 1 | 6.153 | 8.907 | 5.333 | 1.45 | 0.87 | 3.643 | 0.41 | 8.841 | 5.341 | 0.60 |
 | 131 | 62.5 | 2 | 8.344 | 10.260 | 6.757 | 1.23 | 0.81 | 3.643 | 0.36 | 10.261 | 6.781 | 0.66 |
 
-{K_CROSSOVER}
+Kathleen (job 634421):
 
-On one core the pair path is never slower (0.99–1.02× at p = 8–16, 0.92–0.98× at p = 20–72).
-Its losses in the FMM at low degrees (§5) are the parallel pass's.
+Machine: Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz, 40 physical, 1 logical; target x86_64-linux, release build; one thread; median of 5 passes over the 316 offsets.
+| p | k̂ | planes | stored ms | per call ms | by class ms | per call ÷ stored | by class ÷ stored | y-blocks ms | y-blocks ÷ per call | boxes ms | pairs ms | pairs ÷ boxes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 1 | 1 | 0.004 | 0.007 | 0.005 | 1.73 | 1.12 | 0.003 | 0.43 | 0.004 | 0.004 | 1.01 |
+| 8 | 1 | 2 | 0.005 | 0.008 | 0.005 | 1.66 | 1.11 | 0.003 | 0.39 | 0.005 | 0.005 | 1.01 |
+| 12 | 2 | 1 | 0.012 | 0.020 | 0.013 | 1.73 | 1.11 | 0.008 | 0.40 | 0.012 | 0.012 | 1.01 |
+| 12 | 2 | 2 | 0.014 | 0.022 | 0.014 | 1.58 | 1.06 | 0.008 | 0.37 | 0.013 | 0.013 | 1.01 |
+| 16 | 4 | 1 | 0.024 | 0.043 | 0.027 | 1.78 | 1.12 | 0.018 | 0.42 | 0.024 | 0.025 | 1.01 |
+| 16 | 4 | 2 | 0.028 | 0.047 | 0.031 | 1.69 | 1.11 | 0.018 | 0.39 | 0.028 | 0.028 | 1.01 |
+| 20 | 6 | 1 | 0.044 | 0.081 | 0.049 | 1.84 | 1.13 | 0.034 | 0.42 | 0.044 | 0.044 | 1.01 |
+| 20 | 6 | 2 | 0.051 | 0.088 | 0.056 | 1.74 | 1.12 | 0.034 | 0.39 | 0.051 | 0.051 | 1.01 |
+| 24 | 8 | 1 | 0.074 | 0.135 | 0.084 | 1.82 | 1.13 | 0.057 | 0.43 | 0.075 | 0.075 | 1.01 |
+| 24 | 8 | 2 | 0.086 | 0.146 | 0.094 | 1.69 | 1.09 | 0.057 | 0.39 | 0.085 | 0.085 | 1.00 |
+| 32 | 12 | 1 | 0.167 | 0.295 | 0.186 | 1.76 | 1.11 | 0.125 | 0.42 | 0.168 | 0.167 | 1.00 |
+| 32 | 12 | 2 | 0.192 | 0.316 | 0.208 | 1.65 | 1.08 | 0.125 | 0.40 | 0.191 | 0.190 | 1.00 |
+| 40 | 16 | 1 | 0.323 | 0.546 | 0.348 | 1.69 | 1.08 | 0.230 | 0.42 | 0.323 | 0.320 | 0.99 |
+| 40 | 16 | 2 | 0.369 | 0.593 | 0.394 | 1.61 | 1.07 | 0.230 | 0.39 | 0.366 | 0.365 | 1.00 |
+| 48 | 20 | 1 | 0.573 | 0.913 | 0.591 | 1.59 | 1.03 | 0.380 | 0.42 | 0.571 | 0.555 | 0.97 |
+| 48 | 20 | 2 | 0.659 | 0.998 | 0.669 | 1.51 | 1.02 | 0.380 | 0.38 | 0.650 | 0.632 | 0.97 |
+| 56 | 24 | 1 | 0.926 | 1.413 | 0.913 | 1.53 | 0.99 | 0.584 | 0.41 | 0.927 | 0.868 | 0.94 |
+| 56 | 24 | 2 | 1.074 | 1.512 | 1.034 | 1.41 | 0.96 | 0.584 | 0.39 | 1.078 | 1.003 | 0.93 |
+| 72 | 31.25 | 1 | 2.085 | 2.918 | 1.912 | 1.40 | 0.92 | 1.187 | 0.41 | 2.066 | 1.801 | 0.87 |
+| 72 | 31.25 | 2 | 2.469 | 3.185 | 2.170 | 1.29 | 0.88 | 1.187 | 0.37 | 2.434 | 2.073 | 0.85 |
+| 131 | 62.5 | 1 | 14.097 | 18.092 | 12.044 | 1.28 | 0.85 | 6.630 | 0.37 | 18.158 | 12.109 | 0.67 |
+| 131 | 62.5 | 2 | 17.807 | 20.168 | 13.971 | 1.13 | 0.78 | 6.630 | 0.33 | 20.274 | 14.092 | 0.70 |
+
+On one core the pair path is at most 1.02× the box path (0.99–1.02× at p = 8–40 on both
+machines; 0.97–0.98× at p = 48, 0.85–0.98× at p = 56–72, 0.60–0.70× at p = 131). Its losses in
+the FMM at low degrees (§5) are the parallel pass's.
 
 ## 5. Auto's rule
 
@@ -429,13 +464,33 @@ locust:
 | 22 | 512 | 4 | 0.88–1.02 |
 | 24 | 512 | 4 | 0.92–1.00 |
 | 24 | 1,408–32,768 | 6 | 0.98–1.12 |
+| 8 | 282,632 (kD = 1000) | 2 | 1.18–3.03 |
 | 30–38 | 64 | 12 | 0.39–0.90 |
 | 66–76 | 512 | 21 | 0.69–0.94 |
+| 66–72 | 3,840 (kD = 1000) | 4 | 0.91–1.02 |
+| 123–131 | 512 (kD = 1000) | 4 | 0.71–0.85 |
 | 123–135 | 64 | 21 | 0.26–0.73 |
+| 234–245 | 64 (kD = 1000) | 4 | 0.41–0.73 |
 
 Kathleen:
 
-{K_DEGREES}
+| p | boxes | levels × splits | pairs ÷ boxes |
+| ---: | --- | ---: | --- |
+| 7 | 32,768 | 2 | 1.26–2.13 |
+| 11 | 1,408–4,096 | 8 | 1.04–1.40 |
+| 15 | 1,408–32,768 | 6 | 1.04–1.29 |
+| 18 | 512 | 4 | 0.90–1.08 |
+| 22 | 512 | 4 | 0.90–1.15 |
+| 24 | 512 | 4 | 0.99–1.03 |
+| 24 | 1,408–32,768 | 6 | 0.85–1.08 |
+| 30–38 | 64 | 12 | 0.41–0.90 |
+| 66–76 | 512 | 21 | 0.45–0.98 |
+| 123–135 | 64 | 21 | 0.24–0.72 |
+
+W1 at kD = 1000 (locust only, `kd1000-*`: the defaults, `--rcr-split boxes,auto,pairs` at
+1 × 72 and 4 × 18, 10⁻³ and 10⁻⁶) gives the one many-box level at p ≥ 48 measured: level 4,
+3,840 boxes at p = 66–72, 0.91–1.02×. Its evaluation under the rule is 0.83–0.84× by boxes at
+1 × 72 and 0.66–0.68× at 4 × 18, the checksums equal.
 
 Hence the rule as built, a function of the level's degree, its targets with a V row and the
 pool's threads:
@@ -444,16 +499,24 @@ pool's threads:
   `RCR_PAIR_SHARE` = 4 × the threads;
 - by boxes elsewhere.
 
-48 lies between the many-box levels of p = 24 (1.03–1.12×) and level 3 at p = 66 (0.69–0.94×);
-30 is the lowest degree measured with few boxes (64 boxes, 0.39–0.90×). It reads the threads,
-which no other Helmholtz rule may (constraint 9), only because no bit depends on it.
+The thresholds lie between measured points, not on them; no level of p = 39–65 was measured
+in the FMM.
+- 48 lies between the many-box levels of p = 24 (0.85–1.12× over both machines) and those of
+  p = 66–76 (512 boxes 0.45–0.98×, 3,840 boxes 0.91–1.02×). On one core the pair path starts
+  to gain at 48 (0.97×; §4).
+- 30 is the lowest degree measured with few boxes (64 boxes, 0.39–0.90×).
+- The rule reads the threads, which no other Helmholtz rule may (constraint 9), only because
+  no bit depends on it.
 
 CH3.6's matrix under the rule (`matrix`, `--rcr-split boxes,auto`, one rank per node), auto
 over boxes:
 - locust: geometric mean 0.974 over 57 rows, range 0.67–1.04. Only W1 at kD = 500 ran by
   pairs (levels 2 and 3, 0.87–0.89×); the 1.04 row (W4's cube at kD = 1, 10⁻⁸) ran no level by
   pairs, and the 0.67 rows are 2–3 ms evaluations.
-- Kathleen: {K_RULE}
+- Kathleen: geometric mean 0.976 over 57 rows, range 0.50–1.17. Only W1 at kD = 500 ran by
+  pairs (0.81–0.86×). Every row above 1.05 (W1 at kD = 100, W3 at kD = 10 and 100, W4's
+  cases, 1.07–1.17×) ran no level by pairs, the same code path both ways: Kathleen's noise on
+  these cases (§5 above).
 
 ## 6. Runs
 
@@ -462,7 +525,7 @@ over boxes:
   - job 634393 (`levels pair matrix`, from 37ddcda);
   - job 634402 (`pairs stored`, from 37ddcda with the script's later stages);
   - job 634421 (`matrix rotation crossover` under §5's rule, from 935dbab with the script's
-    later stages).
+    later stages; `rule/`).
 - locust (GH200, 72 Neoverse V2 cores, Open MPI 5.0.10), 2026-11-16, quiet (load below 1
   before each stage):
   - `levels pair matrix` from 37ddcda;
@@ -471,7 +534,8 @@ over boxes:
   - `rotation` and `crossover` by hand with the stages' commands, from the rule's tree before
     its commit;
   - S6's `times`;
-  - `matrix` under §5's rule from 935dbab (`rule/`).
+  - `matrix` under §5's rule from 935dbab (`rule/`);
+  - W1 at kD = 1000 by hand (`kd1000-*`), after the self-review, from 935dbab with its fixes.
 - The M6: the tests and checks only, no timing.
 - Raw outputs: `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0i/`. The tables come from
   `tools/helmholtz/ch4-0i-tables.py levels|stored|matrix|pairs|degrees <these launches>
@@ -481,15 +545,18 @@ over boxes:
 ## 7. Questions for sign-off
 
 1. **The acceptance as read.**
-   - *Recommended*: met on Kathleen, read against CH4.0e's measure (the one-core level target
-     by target, the only baseline when the task was set): level 2 at 0.89–0.91 of linear at
-     the node's best split. On locust it reaches 0.75–0.78 at 1 × 72.
-   - Against the one core by pairs, which this task made 0.56–0.60× faster, it is 0.44–0.54,
-     for the reason of §3. The lever is CH4.0l, recorded off the priority list (question 3).
-   - *Alternative*: not met; CH4.0l on the list before H4.
+   - *Recommended*: met as the plan reads it, against CH4.0e's one core (target by target, the
+     only baseline when the task was set): locust 1 × 72 0.75–0.78; Kathleen 1 × 40 0.80 at
+     10⁻³ and 0.68–0.69 at 10⁻⁶ and 10⁻⁸, just under; Kathleen's best split 2 × 20 0.89–0.91.
+     This credits the pair path's serial gain (0.56–0.60×) as parallel efficiency.
+   - Against the pair path's own one core it is 0.40–0.54 everywhere, for the reason of §3;
+     the lever is CH4.0l (question 3).
+   - *Alternative*: not met; CH4.0l on the priority list before H4.
 2. **Auto's rule as the default.**
    - *Recommended*: `RcrSplit::Auto` as built (§5): by pairs at p_l ≥ 48, and at p_l ≥ 30 with
-     fewer targets than 4 × the threads, within 1 GiB per node. No bit changes.
+     fewer targets than 4 × the threads, within 1 GiB per node. No bit changes. The
+     thresholds lie between measured degrees (none of p = 39–65 in the FMM). CH3.6's matrix
+     under the rule is 0.974–0.976× by boxes, with only W1 at kD = 500 reaching the thresholds.
    - *Alternative*: by boxes by default, by pairs opt-in.
 3. **The follow-up CH4.0l (the RCR pair: one coaxial row over a class's pairs, and vectorised
    chains).**

@@ -10,9 +10,9 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0h are merged, and CH4.0i
 runs the coarse RCR levels by pairs, bit for bit: level 2 of W1 at kD = 500 0.55–0.69× by boxes
-at one and two ranks per node and 0.23–0.40× at more, 0.89–0.91 of linear at Kathleen's best split
-against CH4.0e's one core, 0.44–0.54 against its own (memory per pair; CH4.0l, recommended
-off the list); its PR waits for sign-off. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c
+at one and two ranks per node and 0.23–0.40× at more; against CH4.0e's one core 0.75–0.78 of
+linear (locust 1 × 72), 0.68–0.80 (Kathleen 1 × 40), 0.89–0.91 (2 × 20), against its own
+0.40–0.54 (memory per pair; CH4.0l, recommended off the list); its PR waits for sign-off. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c
 are done, and of H0, CH0.4 and CH0.6. Next: CH4.0j, then CHA.1–CHA.3.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
@@ -618,12 +618,12 @@ task's full line is in its record or report and its progress entry
   record `docs/helmholtz/tasks/CH4.0i.md`. The Rotation M2L by pairs (`RcrSplit`: each pair's
   contribution in class order, then each row's adds in order, `main`'s bits at every split and
   rank count), `Auto` by degree (p ≥ 48; p ≥ 30 with few targets): level 2 of W1 at kD = 500
-  0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at more; at the best split 0.89–0.91 of
-  linear against CH4.0e's one core (Kathleen), 0.44–0.54 against this task's own one core
-  (§3: memory per pair at p = 131); the pair 1.8–2.4× S6's. *Sign-off:* the PR's questions
+  0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at more; against CH4.0e's one
+  core 0.75–0.78 of linear (locust 1 × 72), 0.68–0.80 (Kathleen 1 × 40), 0.89–0.91 (2 × 20),
+  against this task's own one core 0.40–0.54 (§3: memory per pair at p = 131); the pair 1.8–2.4× S6's. *Sign-off:* the PR's questions
   1–3 (pending).
 - [ ] **CH4.0l The RCR pair: a class's pairs at once, and vectorised chains.** Added on
-  2026-11-16 at CH4.0i (report §3, §4): by pairs, level 2 of W1 at kD = 500 runs at 0.44–0.54
+  2026-11-16 at CH4.0i (report §3, §4): by pairs, level 2 of W1 at kD = 500 runs at 0.40–0.54
   of its own one core, each pair at p = 131 reading a 12 MB coaxial table and 12 MB of y-blocks
   from memory on every thread; and the pair itself is 1.8–2.4× S6's prototype on the same
   core, in latency-bound sum chains. Apply each coaxial row and each angle's blocks to all

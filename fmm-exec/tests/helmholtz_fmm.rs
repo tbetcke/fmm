@@ -74,7 +74,7 @@
 //!
 //! The Rotation M2L by pairs (Helmholtz CH4.0i, `check_rcr_split`): on two scenarios
 //! (complex k with complex charges and rank 0 empty; real k with real charges and separate
-//! targets) `RcrSplit::Pairs` at 1, 2 and 3 threads, at the default buffer and at the
+//! targets) `RcrSplit::Pairs` serially, on 2 threads with the default buffer and on 3 at the
 //! budget's floor (one pair per thread, so rows span chunks), and `RcrSplit::Auto` at 20
 //! threads (no level by pairs below the rule's degree), each bit for bit `RcrSplit::Boxes` at
 //! one thread, with the counts of the level calls by pairs; two vectors; the library's M2L (Auto: waves and
@@ -2002,14 +2002,14 @@ fn check_rcr_split(scenario: &Scenario, comm: &SimpleCommunicator) {
             "{name}: by boxes, a level call by pairs"
         );
         drop(fmm);
-        let mut runs = vec![
+        // The pool with the default buffer (a whole level a chunk) and at the floor (one
+        // pair per thread, so rows span chunks), serially, and Auto.
+        let runs = [
             (RcrSplit::Pairs, 1, None),
+            (RcrSplit::Pairs, 2, None),
             (RcrSplit::Pairs, 3, Some(0)),
             (RcrSplit::Auto, 20, None),
         ];
-        if !cfg!(debug_assertions) {
-            runs.extend([(RcrSplit::Pairs, 2, None), (RcrSplit::Auto, 2, Some(0))]);
-        }
         for (split, threads, budget) in runs {
             let mut named = base.clone().rcr_split(split).threads(threads);
             if let Some(bytes) = budget {
@@ -2079,6 +2079,11 @@ fn check_rcr_split(scenario: &Scenario, comm: &SimpleCommunicator) {
         .filter(|&l| fmm.operator().m2l_on(l) == HelmholtzM2l::Rotation)
         .count();
     let by_level = calls(&fmm);
+    let pairs_calls: usize = by_level.iter().sum();
+    assert!(
+        rotation == 0 || pairs_calls > 0,
+        "{name}: Auto's M2L with Rotation levels, none by pairs"
+    );
     let ok = (2..fmm.nlevels()).all(|l| {
         fmm.operator().m2l_on(l) == HelmholtzM2l::Rotation
             || fmm
