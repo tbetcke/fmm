@@ -25,7 +25,8 @@ Task plan: `docs/helmholtz/tasks/CH4.0j.md`. Roadmap: H4, priority list item 6 (
 - **The acceptance** (the build of CH3.6's cases under 1 s at most half CH4.0h's, or why not):
   met on 8 of 51 case-ε pairs on locust and 12 of 43 on Kathleen. On the others the rest of
   the build is above half of CH4.0h's: on 39 (locust) and 28 (Kathleen) even without any
-  plane-wave tables (the "floor" of §3), on 4 and 3 within 0.06 of the floor. The rest is the
+  plane-wave tables (the "floor" of §3), on 4 and 3 within 0.05–0.07 (locust) and 0.08–0.11
+  (Kathleen) of the floor. The rest is the
   shared steps, serial in each rank (the plan 5–66 ms, the routes 13–24 ms, the octree
   5–19 ms: CH4.0k, off the list), and at 10⁻³ Batched's matrices (10–104 ms on W4's trees; at
   kD = 1 and 10 they have no level with waves). §3, §4.
@@ -50,10 +51,12 @@ Task plan: `docs/helmholtz/tasks/CH4.0j.md`. Roadmap: H4, priority list item 6 (
   `build_with_reach_on` (CH4.0h).
 
 Tests (`tests/helmholtz/parts.rs`): `the_plane_wave_tables_on_threads_are_the_serial_tables`
-widened to five cases (real and complex k̂₀, 10⁻³, 10⁻⁶ and 10⁻⁸ with the raised degrees, the
-corner's reach and reach 4); `every_level_in_parts_is_the_level_by_its_steps` (each level
-against `Quadrature::with_reach`, `PlaneWaveLevel::new` and `shift_factors` of every slot's and
-child's offset, bit for bit); the ignored `time_a_levels_parts` (§2). The hashes on the M6
+widened to seven cases (real and complex k̂₀; the rule at 10⁻³ and 10⁻⁶, iprec 2, and at 10⁻⁸,
+iprec 3 at the raised degrees; iprec 1 named; the corner's reach and reach 4);
+`every_level_in_parts_is_the_level_by_its_steps` (each level against `Quadrature::with_reach`,
+`PlaneWaveLevel::new` and `shift_factors` of every slot's and child's offset, bit for bit: the
+merge's staging; the steps themselves now run the node and level parts, so that they are
+`main`'s bits rests on the hashes); the ignored `time_a_levels_parts` (§2). The hashes on the M6
 (release, `print_the_hashes`), before and after: RCR d99e3221b99a61e3, 71223dfc2b0eba4f,
 1520f647ee9b88bd; matrices e8f14c144df269a6, 9218603869fc1abd; plane waves bc43acd5206e0682,
 2b62dea0a7d6d982, 38d11660252af3c9, b9419e1bdc4071ca (CH4.0h's).
@@ -78,8 +81,8 @@ the three maps: the nodes; the nodes and the two frames; 152 shift tables.
 | Kathleen | 2 | 45 | 32 | 79 | 16624 | 139.8 | 23.5 | 94.9 | 258.2 |
 | Kathleen | 3 | 45 | 32 | 87 | 20012 | 159.3 | 25.2 | 114.1 | 298.6 |
 
-The quadrature's counts are 53–76 % of a level, the shift tables 24–44 %, the
-`PlaneWaveLevel` 1–9 % (its per-node values about 90 % of it, the frames' blocks 10 %; the M6).
+The quadrature's counts are 51–76 % of a level, the shift tables 20–45 %, the
+`PlaneWaveLevel` 1–11 % (its per-node values about 90 % of it, the frames' blocks 10 %; the M6).
 The nodes' counts are even (the largest 1.4× the median at κ = 6–45 on the M6), so the first
 map scales with the nodes over the threads. The full grid (κ = 0.5–45, p = 8, 16, 32,
 iprec 1–3) is in the raw outputs (`parts.md`).
@@ -132,7 +135,7 @@ CH4.0h):
 | Kathleen | W4 cube kD = 100 | 1e-3 | 0.178 | 0.080 | 0.179 | 0.45 | 0.019, 0.119, 0.119 | 0.33 |
 
 `main`'s builds in the same sessions are CH4.0h's to within the launch spread (branch ÷ `main`
-and branch ÷ CH4.0h agree within 0.03 on the cases with waves), so CH4.0h's launches are a fair
+and branch ÷ CH4.0h agree within 0.04 on the cases with waves), so CH4.0h's launches are a fair
 baseline. The large cases change little: W1 at kD = 500 0.94–0.97 and W3 at kD = 100 0.96–1.00
 of CH4.0h's (their plane-wave tables 0.06–0.19 s of 1.6–4.3 s).
 
@@ -142,19 +145,25 @@ Of the case-ε pairs under 1 s above ½, the floor is above ½ on 39 of 43 (locu
 (Kathleen): no build of the plane-wave tables can halve them. Their builds by part (this
 branch; the largest first):
 - **No level with waves** (W1 and W3 at kD = 10 at 10⁻³ and W1 at kD = 10 throughout, W4's
-  four trees at kD = 1 and 10 at 10⁻³): the build is the shared steps and, at 10⁻³, Batched's
-  matrices (W4 at 10⁻³: 10–29 ms on locust, 26–76 ms on Kathleen at kD = 1 and 10 and 104 ms on
-  the Plummer sphere at kD = 100; built eight offsets per part since CH4.0h).
+  four trees at kD = 1 and 10 at 10⁻³): the build is the shared steps and Batched's matrices
+  (10–29 ms on locust, 26–76 ms on Kathleen; built eight offsets per part since CH4.0h).
 - **The shared steps** everywhere else: the plan with its rules (locust 5–64 ms, Kathleen
   9–66 ms), the routes (13–19, 17–24 ms) and the octree (5–13, 11–19 ms), serial in each rank
-  (CH4.0k, off the priority list since #221: Laplace's paths, constraint 1 and D9 runs).
+  (CH4.0k, off the priority list since #221: Laplace's paths, constraint 1 and D9 runs); at
+  10⁻³ also Batched's matrices on the levels without waves (on Kathleen 104 ms of W4's Plummer
+  sphere at kD = 100).
+
+`tools/helmholtz/ch4-0j-tables.py` prints each such case's build by part (its last table).
 
 The other 4 (locust: W1 at kD = 100 at 10⁻³ and 10⁻⁶, 0.52 against floors 0.46; W3 at kD = 30
 at 10⁻⁸, 0.55 against 0.49; W4's Plummer sphere at kD = 100 at 10⁻⁸, 0.54 against 0.47) and 3
 (Kathleen: W3 at kD = 30 at 10⁻⁸, 0.55 against 0.44; W4's cube at kD = 10 at 10⁻⁸, 0.60 against
 0.50; W4's Plummer sphere at kD = 100 at 10⁻⁶, 0.55 against 0.47) miss ½ by the 3–18 ms the
 plane-wave tables still take (on locust's W1 at kD = 100 a third of it the first read of
-FMM3D's file, §2). The rest of those builds is again the shared steps.
+FMM3D's file, §2) and the launch spread of the rest: Kathleen's W4 cube at kD = 10 at 10⁻⁸ stays
+above ½ without its tables (its rest 0.058 s is 0.53 of CH4.0h's build; CH4.0h's own rest
+0.054 s), and locust's W3 at kD = 30 at 10⁻⁸ reaches exactly ½ without them. The rest of those
+builds is again the shared steps.
 
 ## 5. Runs
 
@@ -178,8 +187,9 @@ FMM3D's file, §2). The rest of those builds is again the shared steps.
 1. **The acceptance as read.** *Recommended*: met. The tables are bit for bit; the plane-wave
    tables' part of the build fell to 0.05–0.42 of CH4.0h's; the build of CH3.6's cases under
    1 s is at most half CH4.0h's on 8 of 51 case-ε pairs (locust) and 12 of 43 (Kathleen), and
-   §4 says why not on the others (above ½ even with no plane-wave tables on 39 and 28, within
-   0.06 of that floor on the rest). *Alternative*: not met; then a follow-up for what remains
+   §4 says why not on the others (above ½ even with no plane-wave tables on 39 and 28; on the
+   rest within 0.05–0.07 of that floor on locust and 0.08–0.11 on Kathleen, the plane-wave
+   tables' remaining 3–18 ms and the launch spread). *Alternative*: not met; then a follow-up for what remains
    is CH4.0k's (Laplace's paths).
 2. **CH4.0k's place.** *Recommended*: unchanged, off the priority list; on CH3.6's small cases
    the build is now mostly its shared steps (§4), which several ranks per node already split,

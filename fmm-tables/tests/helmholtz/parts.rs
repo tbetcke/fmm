@@ -313,9 +313,10 @@ fn the_matrices_on_threads_are_the_serial_matrices() {
 /// k̂₀ as (Re, Im), the degrees given, the tolerance and the reach.
 type PlaneWaveCase = ((f64, f64), [usize; 6], f64, f64);
 
-/// The exponential M2L's cases: k̂₀ (real and complex), the degrees given, the tolerance
-/// and the reach. 10⁻³ takes iprec 1 at the level's degree, 10⁻⁶ iprec 2, 10⁻⁸ iprec 3 at
-/// the raised degree max(p_l, 32) (`plane_wave_degree`), as the operator builds them.
+/// The exponential M2L's cases by the rule: k̂₀ (real and complex), the degrees given, the
+/// tolerance and the reach. At 10⁻³ and 10⁻⁶ the rule takes iprec 2 at the level's degree, at
+/// 10⁻⁸ iprec 3 at the raised degree max(p_l, 32) (`plane_wave_degree`), as the operator
+/// builds them; [`plane_wave_cases`] adds iprec 1, named.
 const PLANE_WAVE_CASES: [PlaneWaveCase; 5] = [
     ((20.0, 2.0), [0, 0, 20, 12, 9, 7], 1e-6, RHO_MAX),
     ((40.0, 0.0), [0, 0, 30, 20, 12, 9], 1e-3, RHO_MAX),
@@ -323,6 +324,49 @@ const PLANE_WAVE_CASES: [PlaneWaveCase; 5] = [
     ((6.0, 0.5), [0, 0, 9, 8, 7, 6], 1e-6, 4.0),
     ((60.0, 0.0), [0, 0, 40, 25, 15, 10], 1e-3, 4.0),
 ];
+
+/// One case's inputs: its name, k̂₀, the degrees and the precisions the tables are built
+/// with, and the reach.
+type PlaneWaveInputs = (
+    String,
+    Complex<f64>,
+    Vec<usize>,
+    Vec<Option<Precision>>,
+    f64,
+);
+
+/// Every case: [`PLANE_WAVE_CASES`] with the precisions and degrees the operator builds them
+/// with, and iprec 1 named on every level from 2 (no tolerance's rule gives it), at the
+/// corner's reach and at reach 4.
+fn plane_wave_cases() -> Vec<PlaneWaveInputs> {
+    let mut cases: Vec<PlaneWaveInputs> = PLANE_WAVE_CASES
+        .iter()
+        .map(|&((re, im), degrees, epsilon, reach)| {
+            let k = Complex::new(re, im);
+            let (precisions, degrees) = plane_wave_inputs(k, &degrees, epsilon);
+            (
+                format!("k̂₀ = {k}, ε = {epsilon:e}, reach {reach}"),
+                k,
+                degrees,
+                precisions,
+                reach,
+            )
+        })
+        .collect();
+    for reach in [RHO_MAX, 4.0] {
+        let k = Complex::new(20.0, 2.0);
+        let mut precisions = vec![Some(Precision::Iprec1); 6];
+        precisions[..2].fill(None);
+        cases.push((
+            format!("k̂₀ = {k}, iprec 1, reach {reach}"),
+            k,
+            vec![0, 0, 20, 12, 9, 7],
+            precisions,
+            reach,
+        ));
+    }
+    cases
+}
 
 /// The precisions and the degrees the operator builds a case's tables with.
 fn plane_wave_inputs(
@@ -341,21 +385,18 @@ fn plane_wave_inputs(
 
 #[test]
 fn the_plane_wave_tables_on_threads_are_the_serial_tables() {
-    for ((re, im), degrees, epsilon, reach) in PLANE_WAVE_CASES {
-        let k = Complex::new(re, im);
-        let (precisions, degrees) = plane_wave_inputs(k, &degrees, epsilon);
-        assert!(
-            precisions.iter().filter(|p| p.is_some()).count() >= 2,
-            "k̂₀ = {k}, ε = {epsilon:e}: two levels with waves"
-        );
+    for (name, k, degrees, precisions, reach) in plane_wave_cases() {
         let serial = PlaneWaveM2l::<f64>::build_with_reach(k, &degrees, &precisions, reach);
+        assert!(
+            (0..serial.nlevels())
+                .filter(|&l| serial.level(l).is_some())
+                .count()
+                >= 2,
+            "{name}: two levels with waves"
+        );
         let threads =
             PlaneWaveM2l::<f64>::build_with_reach_on(k, &degrees, &precisions, reach, &Threads);
-        assert_eq!(
-            format!("{serial:?}"),
-            format!("{threads:?}"),
-            "k̂₀ = {k}, ε = {epsilon:e}, reach {reach}"
-        );
+        assert_eq!(format!("{serial:?}"), format!("{threads:?}"), "{name}");
     }
 }
 
@@ -365,19 +406,18 @@ fn level_k_hat(k: Complex<f64>, level: usize) -> Complex<f64> {
 }
 
 /// Every level of a build in parts (Helmholtz CH4.0j) against the level formed from the
-/// public steps one by one, independently of the parts: the quadrature, the
+/// public steps one by one (the merge's staging checked against them; that the steps
+/// themselves are `main`'s bits is `print_the_hashes`'): the quadrature, the
 /// `PlaneWaveLevel` (its `Debug` text) and every slot's source shift and every child shift,
 /// each `shift_factors` of its offset, bit for bit.
 #[test]
 fn every_level_in_parts_is_the_level_by_its_steps() {
     let geometry = MergeGeometry::new();
-    for ((re, im), degrees, epsilon, reach) in PLANE_WAVE_CASES {
-        let k = Complex::new(re, im);
-        let (precisions, degrees) = plane_wave_inputs(k, &degrees, epsilon);
+    for (name, k, degrees, precisions, reach) in plane_wave_cases() {
         let m2l =
             PlaneWaveM2l::<f64>::build_with_reach_on(k, &degrees, &precisions, reach, &Threads);
         for (l, &precision) in precisions.iter().enumerate() {
-            let name = format!("k̂₀ = {k}, ε = {epsilon:e}, reach {reach}, level {l}");
+            let name = format!("{name}, level {l}");
             let Some(precision) = precision else {
                 assert!(m2l.level(l).is_none(), "{name}: no tables");
                 continue;

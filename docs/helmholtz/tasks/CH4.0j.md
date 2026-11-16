@@ -79,12 +79,14 @@ No convention changes; no dependency changes; `nd-fmm-plan` untouched.
 
 - `nd-fmm-tables` `tests/helmholtz/parts.rs`:
   - `the_plane_wave_tables_on_threads_are_the_serial_tables` widened: real and complex k̂₀,
-    10⁻³, 10⁻⁶ and 10⁻⁸ (iprec 1–3 and the raised degrees), the corner's reach and reach 4,
+    10⁻³, 10⁻⁶ and 10⁻⁸ (the rule's iprec 2 and 3, the raised degrees) and iprec 1 named, the
+    corner's reach and reach 4,
     on the reverse-order three-thread map against `Serial`, the `Debug` text equal.
   - new: every `MergeLevel` of a staged build against the level built from the public steps
     one by one (`Quadrature::with_reach`, `PlaneWaveLevel::new`, `shift_factors` of each
     slot's and child's shift), every source and child shift and the `PlaneWaveLevel`'s text
-    bit for bit: an oracle independent of the staging.
+    bit for bit: an oracle for the merge's staging (the steps themselves run the new node
+    and level parts, so that they are `main`'s bits rests on `print_the_hashes`).
   - `print_the_hashes` (ignored): the plane-wave hashes `main`'s (on the M6 before the change,
     2026-11-16: bc43acd5206e0682, 2b62dea0a7d6d982, 38d11660252af3c9, b9419e1bdc4071ca, the
     same as CH4.0h's), the RCR and matrix hashes unchanged.
@@ -140,8 +142,8 @@ outputs `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0j/`.
 Report `fmm-validate/results/helmholtz-ch4-0j.md`. Tables bit for bit (hashes `main`'s, every
 checksum CH4.0h's); the plane-wave tables part 0.05–0.29 of CH4.0h's on locust, 0.08–0.42 on
 Kathleen; the build at most half CH4.0h's on 8 of 51 case-ε pairs under 1 s (locust) and 12 of
-43 (Kathleen), the others above half even without plane-wave tables (39, 28) or within 0.06 of
-that floor (4, 3): the shared steps (CH4.0k) and Batched's matrices.
+43 (Kathleen), the others above half even without plane-wave tables (39, 28) or within
+0.05–0.07 (locust) and 0.08–0.11 (Kathleen) of that floor (4, 3): the shared steps (CH4.0k) and Batched's matrices.
 
 `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and workspace
 tests at opt-level 1 (1,275 and 1,389 passed), the MPI list at 2 and 4 ranks (24 of 24);

@@ -195,8 +195,9 @@ level).
   the same before and after the change on the M6 (docs/helmholtz/tasks/CH4.0h.md; again at
   CH4.0j, docs/helmholtz/tasks/CH4.0j.md). Since CH4.0j it also checks every level of the
   exponential M2L built in parts against the level formed from the public steps one by one
-  (`every_level_in_parts_is_the_level_by_its_steps`), and its ignored `time_a_levels_parts`
-  prints a level's build by part on one thread (no time asserted; the time on many threads
+  (`every_level_in_parts_is_the_level_by_its_steps`; the steps run the same node and level
+  parts, so the hashes are what hold them to the build before), and its ignored
+  `time_a_levels_parts` prints a level's build by part on one thread (no time asserted; the time on many threads
   is the FMM's, `helmholtz_accuracy`'s build part "plane-wave tables").
 - Generic over T: RealScalar. Allocate only in builders and constructors, never in
   apply functions: their temporaries come from caller-owned scratch.
