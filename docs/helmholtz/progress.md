@@ -3200,4 +3200,7 @@ request, using this template:
   CH4.0i recommended before H4; (2) the block budget's default kept.
 - Laplace: not touched (no library crate changed).
 - Follow-ups: CH4.0h (the build by part, and parallel) and CH4.0i (the coarse RCR levels),
-  roadmap lines added, pending question 1.
+  roadmap lines added and on the priority list.
+- Sign-off (the user on #220, 2026-11-16: "Both questions as recommended."): (1) H4 goes ahead
+  after CH4.0h and CH4.0i, then CHA.1–CHA.3, CH1.3d, CH4.1–CH4.5; (2) `DEFAULT_BLOCK_BUDGET`
+  stays 512 MiB. Next: CH4.0h.

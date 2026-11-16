@@ -814,6 +814,9 @@ in `fmm3d-<case>.md` of each machine's archive.
 
 ## 7. Questions for sign-off
 
+Signed off on 2026-11-16 (the user on #220: "Both questions as recommended."): both as
+recommended below.
+
 1. **H4's go-ahead and order.** *Recommended*: H4 goes ahead, for kD beyond D1 (CH4.4's
    kD = 1000, §3.3) and the high-frequency classes CH4.3 calibrates, but after two new tasks
    that the measurements point to inside D1, each small and each Helmholtz-only:

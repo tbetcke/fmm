@@ -184,4 +184,6 @@ outputs kept apart and unused.
 ## Open questions
 
 The report's §7: (1) H4's go-ahead and order (CH4.0h and CH4.0i proposed before H4); (2) the
-block budget's default.
+block budget's default. Signed off on 2026-11-16 (the user on #220: "Both questions as
+recommended."): H4 goes ahead after CH4.0h and CH4.0i, then CHA.1–CHA.3, CH1.3d and
+CH4.1–CH4.5; `DEFAULT_BLOCK_BUDGET` stays 512 MiB.

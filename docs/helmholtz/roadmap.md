@@ -11,9 +11,10 @@ Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0d3 are merged; CH4.0e
 compares the defaults with FMM3D on Kathleen and locust (ours 0.27–0.93× `fastker` at matched
 accuracy; FMM3D faster only where our build dominates) and bounds H4's gain inside D1 at
-14–31 % of build plus one evaluation on W1 at kD = 500 alone; it proposes CH4.0h (the build) and CH4.0i (the coarse RCR
-levels) before H4, pending its sign-off. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are
-done, and of H0, CH0.4 and CH0.6. Next: CH4.0e's sign-off, then the list as it decides.
+14–31 % of build plus one evaluation on W1 at kD = 500 alone; signed off on 2026-11-16: H4 goes
+ahead after CH4.0h (the build) and CH4.0i (the coarse RCR levels), the block budget kept at
+512 MiB. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6.
+Next: CH4.0h.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -55,7 +56,11 @@ the far field at kD = 500 is mostly the high-frequency levels' RCR. It replaces 
 the signatures' convention and trusted path, then H4's tasks, then the FFTW track that H4.G
 also needs. Amended on 2026-11-12 by the triage of the review after the H6 gate
 (`docs/reviews/2026-11-12-H6.md` §3; questions 1 and 3 of #209, the user, 2026-11-12, on #209: "I agree", to the
-recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
+recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d. Amended on 2026-11-16 by CH4.0e's
+sign-off (#220's question 1, the user: "Both questions as recommended."): H4 goes ahead, for kD
+beyond D1 and the high-frequency classes CH4.3 calibrates, after CH4.0h and CH4.0i; the reason
+for H4 above is replaced by CH4.0e's report §3 (inside D1 the high-frequency RCR levels are
+14–31 % of build plus one evaluation, on W1 at kD = 500 alone).
 
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
@@ -67,12 +72,14 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
    points, the sweep
 5. CH4.0e The comparison under the default, and H4's expected gain (review A1 and B2; its
    sign-off is H4's go-ahead and order)
-6. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
+6. CH4.0h The Helmholtz build by part, and parallel; CH4.0i The coarse RCR levels (added on
+   2026-11-16 by CH4.0e's sign-off)
+7. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
    configuration removed
-7. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
+8. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
    trusted path)
-8. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
-9. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
+9. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
+10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
 CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
@@ -564,7 +571,9 @@ task's full line is in its record or report and its progress entry
   slower only on sub-second cases where our build is 46–96 %; H4 inside D1 touches W1 at
   kD = 500 alone (bound 14–31 % of build plus one evaluation, S6's pairs alone 13–30 %;
   kD = 1000 27–42 %); B5 measured (1.9–2.4× per core × 1.8 cores). *Sign-off:* H4's go-ahead and order and the block budget (the PR's
-  questions 1–2), pending.
+  questions 1–2; the user on #220, 2026-11-16: "Both questions as recommended."): H4 goes
+  ahead after CH4.0h and CH4.0i, then CHA.1–CHA.3, CH1.3d, CH4.1–CH4.5;
+  `DEFAULT_BLOCK_BUDGET` stays 512 MiB.
 - [ ] **CH4.0f Batched's split across the matrix's rows.** Added on 2026-11-12 at CH4.0
   (report §4, §8): with CH4.0's split by blocks, Batched on levels of 64–5,000 boxes at 40–72
   threads is still 1.1–5× Rotation's level time (0.2–2 ms per level, up to 1.28× of the
@@ -593,15 +602,17 @@ task's full line is in its record or report and its progress entry
   pair buckets and Batched's columns per read checked), or the report shows it does not pay.
   *Needs:* CH4.0d1 (the rule). *Machines:* Kathleen, locust (the M6 with the user's go-ahead
   for timings). *Sign-off:* Laplace's default.
-- [ ] **CH4.0h The Helmholtz build by part, and parallel.** Proposed at CH4.0e (report §3.2,
-  §7 question 1; pending its sign-off): the build barely uses the threads (W1 at kD = 500: 5.5 s
+- [ ] **CH4.0h The Helmholtz build by part, and parallel.** Added on 2026-11-16 at CH4.0e
+  (report §3.2, §7 question 1; signed off as recommended): the build barely uses the threads (W1 at kD = 500: 5.5 s
   on one core, 4.6 s on 40) and grows with the degrees, and it is 46–96 % of our time where
   FMM3D is faster. Time the build by part in the harness, then parallelise its serial parts
-  (most likely the per-level tables) over the threads. *Done when:* W1 at kD = 500's build on
+  (most likely the per-level tables) over the threads, and stop forming rotation blocks for
+  levels whose M2L does not read them (the column "blocks" of `--levels` says "stored" on the
+  exponential M2L's levels too). *Done when:* W1 at kD = 500's build on
   the node is at most half its one-core time, the output bit for bit; Laplace unchanged.
   *Needs:* CH4.0e. *Machines:* Kathleen, locust.
-- [ ] **CH4.0i The coarse RCR levels.** Proposed at CH4.0e (report §3.2, §7 question 1; pending
-  its sign-off): Rotation splits a level by target box only, so level 2 (64 boxes, p = 131)
+- [ ] **CH4.0i The coarse RCR levels.** Added on 2026-11-16 at CH4.0e (report §3.2, §7
+  question 1; signed off as recommended): Rotation splits a level by target box only, so level 2 (64 boxes, p = 131)
   runs at 28–48 % of linear, and per pair our RCR is 1.9–3.3× S6's scalar prototype on the
   same core. Split a level's Rotation work below one box where its boxes are fewer than the
   threads (V-row segments summed in a fixed order, or by output degree), in the Helmholtz
