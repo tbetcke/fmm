@@ -72,6 +72,14 @@
 //! translations to and from the parent, and under `M2l` their leaves' operators, at the
 //! degrees given), each with its own errors within `PLANE_WAVE_RATIO` of Rotation's.
 //!
+//! The Rotation M2L by pairs (Helmholtz CH4.0i, `check_rcr_split`): on two scenarios
+//! (complex k with complex charges and rank 0 empty; real k with real charges and separate
+//! targets) `RcrSplit::Pairs` at 1, 2 and 3 threads, at the default buffer and at the
+//! budget's floor (one pair per thread, so rows span chunks), and `RcrSplit::Auto` at 20
+//! threads (level 2 by pairs), each bit for bit `RcrSplit::Boxes` at one thread, with the
+//! counts of the level calls by pairs; two vectors; the library's M2L (Auto: waves and
+//! Batched on some levels, Rotation on the rest); on P ranks the one-rank FMM.
+//!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
 //! ISA this machine lacks among them), each on every rank or on none. One scenario leaves
@@ -96,8 +104,8 @@ use nd_fmm_exec::helmholtz::{
     C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
     DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber, WxNear,
-    auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RcrSplit, VNear,
+    Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
     auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
@@ -1971,6 +1979,125 @@ fn check_plane_wave_buffer(
     floor_chunked
 }
 
+/// The Rotation M2L by pairs (Helmholtz CH4.0i): every split, thread count and buffer the
+/// output of target by target at one thread, bit for bit, with the level calls by pairs
+/// counted; two vectors; the library's M2L; on P ranks the one-rank FMM at the floor.
+fn check_rcr_split(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let name = scenario.name;
+    let kind = scenario.charges;
+    // The sum over the ranks of the level calls by pairs, per level.
+    let calls = |fmm: &HelmholtzFmm<'_, f64>| -> Vec<usize> {
+        let mut local = fmm.operator().rcr_counts().level_calls.clone();
+        local.resize(fmm.nlevels(), 0);
+        let mut summed = vec![0usize; local.len()];
+        comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+        summed
+    };
+    for (m, base) in [(1, builder(scenario)), (2, builder(scenario).vectors(2))] {
+        let inputs = Inputs::new(scenario, m, comm);
+        let boxes = base.clone().rcr_split(RcrSplit::Boxes);
+        let (fmm, want) = run(&boxes, &inputs, kind, comm);
+        assert!(
+            calls(&fmm).iter().all(|&c| c == 0),
+            "{name}: by boxes, a level call by pairs"
+        );
+        drop(fmm);
+        let mut runs = vec![
+            (RcrSplit::Pairs, 1, None),
+            (RcrSplit::Pairs, 3, Some(0)),
+            (RcrSplit::Auto, 20, None),
+        ];
+        if !cfg!(debug_assertions) {
+            runs.extend([(RcrSplit::Pairs, 2, None), (RcrSplit::Auto, 2, Some(0))]);
+        }
+        for (split, threads, budget) in runs {
+            let mut named = base.clone().rcr_split(split).threads(threads);
+            if let Some(bytes) = budget {
+                named = named.rcr_budget(bytes);
+            }
+            let what =
+                format!("{name}, m = {m}: {split:?} at {threads} threads, budget {budget:?}");
+            let (fmm, got) = run(&named, &inputs, kind, comm);
+            let by_level = calls(&fmm);
+            let counts = fmm.operator().rcr_counts().clone();
+            let calls_here: usize = counts.level_calls.iter().sum();
+            assert!(
+                everywhere(fmm.operator().rcr_split() == split, comm),
+                "{what}: the split as built"
+            );
+            match split {
+                // Every Rotation level with pairs: level 2 on some rank at least.
+                RcrSplit::Pairs => assert!(by_level[2] > 0, "{what}: level 2 not by pairs"),
+                // Level 2 (at most 64 targets, below 4 × 20) by pairs on some rank; the
+                // floor's 2 threads would need fewer than 8 targets on a level.
+                _ if threads == 20 => assert!(by_level[2] > 0, "{what}: level 2 not by pairs"),
+                _ => {}
+            }
+            // At the floor (one pair per thread) a level call takes a chunk per `threads`
+            // pairs, so more chunks than calls wherever a call has more pairs.
+            if budget == Some(0) && split == RcrSplit::Pairs {
+                assert!(
+                    everywhere(calls_here == 0 || counts.chunks > calls_here, comm),
+                    "{what}: the floor did not chunk ({counts:?})"
+                );
+            }
+            drop(fmm);
+            assert_same(&what, &got, &want, comm);
+        }
+        let floor = base.clone().rcr_split(RcrSplit::Pairs).rcr_budget(0);
+        check_one_rank(
+            &format!("{name}, m = {m}: by pairs at the floor"),
+            &floor,
+            &inputs,
+            kind,
+            &want,
+            comm,
+        );
+    }
+    // The library's M2L (Auto: waves or Batched on some levels, Rotation on the others).
+    let inputs = Inputs::new(scenario, 1, comm);
+    let auto = default_builder(scenario);
+    let (_, want) = run(
+        &auto.clone().rcr_split(RcrSplit::Boxes),
+        &inputs,
+        kind,
+        comm,
+    );
+    let (fmm, got) = run(
+        &auto.rcr_split(RcrSplit::Pairs).rcr_budget(0).threads(3),
+        &inputs,
+        kind,
+        comm,
+    );
+    let rotation = (2..fmm.nlevels())
+        .filter(|&l| fmm.operator().m2l_on(l) == HelmholtzM2l::Rotation)
+        .count();
+    let by_level = calls(&fmm);
+    let ok = (2..fmm.nlevels()).all(|l| {
+        fmm.operator().m2l_on(l) == HelmholtzM2l::Rotation
+            || fmm
+                .operator()
+                .rcr_counts()
+                .level_calls
+                .get(l)
+                .copied()
+                .unwrap_or(0)
+                == 0
+    });
+    assert!(
+        everywhere(ok, comm),
+        "{name}: by pairs on a level without Rotation"
+    );
+    if comm.rank() == 0 {
+        println!(
+            "{name}: by pairs bit for bit by boxes; under Auto {rotation} Rotation levels, \
+             level calls by pairs per level {by_level:?}"
+        );
+    }
+    drop(fmm);
+    assert_same(&format!("{name}: Auto's M2L by pairs"), &got, &want, comm);
+}
+
 /// Two vectors: each bit for bit its one-vector FMM, the second against its direct sum;
 /// and a reused output.
 fn check_vectors(scenario: &Scenario, comm: &SimpleCommunicator) {
@@ -3024,6 +3151,10 @@ fn helmholtz_fmm() {
         wx[3],
         wx[2]
     );
+    // The Rotation M2L by pairs (CH4.0i): complex k and charges with rank 0 empty, real k
+    // and charges with separate targets.
+    check_rcr_split(&scenarios()[0], &comm);
+    check_rcr_split(&scenarios()[2], &comm);
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);
     check_vectors(&scenarios()[2], &comm);

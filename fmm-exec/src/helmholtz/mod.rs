@@ -68,16 +68,18 @@ pub use degree::{DegreeError, DegreeRule, Degrees, degree, s7_degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 pub use fmm::{
     DEFAULT_C_LEAF, DEFAULT_DENSE_NODE_BUDGET, DEFAULT_PLANE_WAVE_NODE_BUDGET,
-    HelmholtzBuildTimings, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, V_COSTS_NEON,
-    V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VCosts, VNear, WX_COSTS_NEON, WX_COSTS_X86, WxCosts,
-    WxNear, default_max_points_per_leaf, v_costs, v_crossover, wx_costs, wx_crossovers,
+    DEFAULT_RCR_NODE_BUDGET, HelmholtzBuildTimings, HelmholtzFmm, HelmholtzFmmBuilder,
+    HelmholtzFmmError, V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VCosts, VNear,
+    WX_COSTS_NEON, WX_COSTS_X86, WxCosts, WxNear, default_max_points_per_leaf, v_costs,
+    v_crossover, wx_costs, wx_crossovers,
 };
 pub use operator::{
-    AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator,
-    LevelShape, M2L_MIN_BLOCK_TARGETS, MIN_BUFFER_BOXES, OperatorError, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, TIMED_KINDS, TableTimings,
-    auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
-    auto_plane_wave_min_degree, batched_block_targets,
+    AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, DEFAULT_RCR_BUFFER, HelmholtzM2l,
+    HelmholtzOperator, LevelShape, M2L_MIN_BLOCK_TARGETS, MIN_BUFFER_BOXES, OperatorError,
+    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes,
+    RCR_PAIR_SHARE, RcrCounts, RcrSplit, TIMED_KINDS, TableTimings, auto_batched_max_degree,
+    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree, batched_block_targets,
+    rcr_by_pairs,
 };
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).

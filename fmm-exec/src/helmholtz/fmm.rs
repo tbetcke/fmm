@@ -123,7 +123,7 @@ use thiserror::Error;
 use super::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities, DensityError,
     HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, TableTimings, Wavenumber, WavenumberKind,
+    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TableTimings, Wavenumber, WavenumberKind,
     auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{FmmError, PointSet, SettingsError};
@@ -185,6 +185,11 @@ pub fn default_max_points_per_leaf(tolerance: Option<f64>, isa: Isa) -> usize {
 /// The default bytes per node of the exponential M2L's waves buffer, 8 GiB
 /// ([`HelmholtzFmmBuilder::plane_wave_budget`]; Helmholtz CH6.2a, signed off 2026-11-04).
 pub const DEFAULT_PLANE_WAVE_NODE_BUDGET: usize = 8 << 30;
+
+/// The default bytes per node of the Rotation M2L's contributions by pairs, 1 GiB
+/// ([`HelmholtzFmmBuilder::rcr_budget`]; Helmholtz CH4.0i): on one rank per node level 2 of
+/// W1 at kD = 500 (about 3,000 pairs of 279 KB at p = 131) in one chunk.
+pub const DEFAULT_RCR_NODE_BUDGET: usize = 1 << 30;
 
 /// The default bytes per node of the dense, class and batched M2L tables, 8 GiB
 /// ([`HelmholtzFmmBuilder::dense_node_budget`]; Helmholtz CH4.0, proposal §2, constraint 7):
@@ -334,6 +339,8 @@ pub struct HelmholtzFmmBuilder {
     plane_wave_budget: usize,
     plane_wave_split: PlaneWaveSplit,
     plane_wave_raise: PlaneWaveRaise,
+    rcr_split: RcrSplit,
+    rcr_budget: usize,
     c_leaf: f64,
     p2p: P2pChoice,
     empty_boxes: bool,
@@ -349,7 +356,9 @@ impl HelmholtzFmmBuilder {
     /// default block budget of the M2L y-blocks, M2L by the rule per level
     /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`] per rank and
     /// [`DEFAULT_DENSE_NODE_BUDGET`] per node, the exponential M2L's waves
-    /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the leaf width [`DEFAULT_C_LEAF`],
+    /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the Rotation M2L by pairs on levels
+    /// of few boxes ([`RcrSplit::Auto`]) within [`DEFAULT_RCR_NODE_BUDGET`] per node, the leaf
+    /// width [`DEFAULT_C_LEAF`],
     /// the P2P kernel of [`P2pChoice::Auto`], the empty-box rule and the V, W and X pairs
     /// near pairs by the cost model.
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
@@ -378,6 +387,8 @@ impl HelmholtzFmmBuilder {
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
             plane_wave_split: PlaneWaveSplit::Auto,
             plane_wave_raise: PlaneWaveRaise::Rule,
+            rcr_split: RcrSplit::Auto,
+            rcr_budget: DEFAULT_RCR_NODE_BUDGET,
             c_leaf: DEFAULT_C_LEAF,
             p2p: P2pChoice::Auto,
             empty_boxes: true,
@@ -652,6 +663,27 @@ impl HelmholtzFmmBuilder {
     /// `plane_wave_buffer` report it.
     pub fn plane_wave_budget(mut self, bytes: usize) -> Self {
         self.plane_wave_budget = bytes;
+        self
+    }
+
+    /// How the Rotation (RCR) M2L's level calls split over the threads (default
+    /// [`RcrSplit::Auto`]: by pairs on a level whose targets with a V row are fewer than
+    /// [`RCR_PAIR_SHARE`](super::RCR_PAIR_SHARE) times the threads;
+    /// `HelmholtzOperator::with_rcr_split`; Helmholtz CH4.0i). Every setting gives the same
+    /// output bit for bit.
+    pub fn rcr_split(mut self, split: RcrSplit) -> Self {
+        self.rcr_split = split;
+        self
+    }
+
+    /// The bytes per node of the Rotation M2L's contributions by pairs (default
+    /// [`DEFAULT_RCR_NODE_BUDGET`]; proposal §2, constraint 7; Helmholtz CH4.0i): each rank's
+    /// bound is the budget over the ranks per node, agreed in [`build`](Self::build), at
+    /// least one pair per thread (`HelmholtzOperator::with_rcr_buffer`); `usize::MAX` holds
+    /// every pair of a level. A level call by pairs then runs by chunks of pairs, and the
+    /// output is the same at every budget.
+    pub fn rcr_budget(mut self, bytes: usize) -> Self {
+        self.rcr_budget = bytes;
         self
     }
 
@@ -1055,6 +1087,15 @@ impl HelmholtzFmmBuilder {
         let level_boxes: Vec<usize> = (0..plan.index().nlevels())
             .map(|level| plan.index().len(level))
             .collect();
+        // The Rotation M2L's buffer by pairs, for each level's V pairs and targets with a V
+        // row on this rank (Helmholtz CH4.0i).
+        let rcr_levels: Vec<(usize, usize)> = (0..plan.nlevels())
+            .map(|l| {
+                let v = plan.level(l).v();
+                let targets = v.row_offsets().windows(2).filter(|w| w[1] > w[0]).count();
+                (v.len(), targets)
+            })
+            .collect();
         timings.shapes = lap(&mut clock);
         // The operator's settings first, its tables once after them, on the pool (Helmholtz
         // CH4.0h).
@@ -1091,7 +1132,10 @@ impl HelmholtzFmmBuilder {
         .with_plane_wave_buffer(
             (self.plane_wave_budget != usize::MAX).then(|| self.plane_wave_budget / ranks_per_node),
         )
-        .with_plane_wave_boxes(&level_boxes);
+        .with_plane_wave_boxes(&level_boxes)
+        .with_rcr_split(self.rcr_split)
+        .with_rcr_buffer((self.rcr_budget != usize::MAX).then(|| self.rcr_budget / ranks_per_node))
+        .with_rcr_levels(&rcr_levels);
         if let Some(mul_add) = self.m2l_mul_add {
             operator = operator.with_m2l_mul_add(mul_add);
         }

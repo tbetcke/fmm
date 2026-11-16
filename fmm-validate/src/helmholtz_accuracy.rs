@@ -39,6 +39,9 @@
 //!   precision each level ran. [`Case::plane_wave_reach`] (Helmholtz CH6.2e) the lateral
 //!   reach of the quadratures' α counts (the corner's by default); [`Row::plane_wave_reach`]
 //!   the one built and [`Row::plane_wave_waves`] each level's waves per direction.
+//!   [`Case::rcr_split`] (Helmholtz CH4.0i) how the Rotation M2L's level calls split over
+//!   the threads (the library's `Auto` by default); [`Row::rcr_split`] the setting and
+//!   [`Row::rcr_by_pairs`] per level whether a level call ran by pairs;
 //!   [`Case::plane_wave_split`] (Helmholtz CH6.2f) how merge and shift splits over the
 //!   threads (the library's `Auto` by default); [`Row::plane_wave_split`] the setting and
 //!   [`Row::plane_wave_parts`] its thread-seconds by part per level. Auto with the
@@ -76,7 +79,7 @@ use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, VNear, Wavenumber, WxNear,
+    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RcrSplit, VNear, Wavenumber, WxNear,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -184,6 +187,10 @@ pub struct Case {
     /// `DEFAULT_BLOCK_BUDGET`). A level whose blocks do not fit forms them per V pair; no bit
     /// depends on it.
     pub block_budget: Option<usize>,
+    /// How the Rotation M2L's level calls split over the threads
+    /// (`HelmholtzFmmBuilder::rcr_split`, Helmholtz CH4.0i; `None` the library's, `Auto`). No
+    /// bit depends on it.
+    pub rcr_split: Option<RcrSplit>,
 }
 
 impl Case {
@@ -224,6 +231,7 @@ impl Case {
             near_v: VNear::Off,
             near_wx: WxNear::Off,
             block_budget: None,
+            rcr_split: None,
         }
     }
 }
@@ -678,6 +686,12 @@ pub struct Row {
     /// (`HelmholtzTables::m2l_blocks_stored`, Helmholtz CH4.0e); else they are formed per V
     /// pair. The same on every rank (the tables follow the global degrees and the budget).
     pub m2l_blocks_stored: Vec<bool>,
+    /// How the Rotation M2L's level calls split, as built (`HelmholtzOperator::rcr_split`;
+    /// Helmholtz CH4.0i).
+    pub rcr_split: RcrSplit,
+    /// Per level, whether the M2L's level calls of the last evaluation ran by pairs on some
+    /// rank (`HelmholtzOperator::rcr_counts`; Helmholtz CH4.0i).
+    pub rcr_by_pairs: Vec<bool>,
     /// Per level, the exponential M2L's passes in the last evaluation, [waves, merge and
     /// shift] seconds, each the slowest rank's (`HelmholtzOperator::plane_wave_times`;
     /// Helmholtz CH6.2d); zero where no level call ran merge and shift.
@@ -884,6 +898,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(split) = case.plane_wave_split {
         builder = builder.plane_wave_split(split);
     }
+    if let Some(split) = case.rcr_split {
+        builder = builder.rcr_split(split);
+    }
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
     }
@@ -933,11 +950,13 @@ pub fn run_output<C: CommunicatorCollectives>(
     let mut p2p_before: Vec<Duration> = Vec::new();
     let mut kinds_before: Vec<[Duration; 6]> = Vec::new();
     let mut passes_before: Vec<PlaneWaveTimes> = Vec::new();
+    let mut rcr_before: Vec<usize> = Vec::new();
     for evaluation in 0..case.evaluations.max(1) {
         before = fmm.operator().m2l_times().to_vec();
         p2p_before = fmm.operator().p2p_times().to_vec();
         kinds_before = fmm.operator().kind_times().to_vec();
         passes_before = fmm.operator().plane_wave_times().to_vec();
+        rcr_before = fmm.operator().rcr_counts().level_calls.clone();
         comm.barrier();
         let start = Instant::now();
         output = Some(fmm.evaluate(&charges)?);
@@ -968,6 +987,23 @@ pub fn run_output<C: CommunicatorCollectives>(
     let m2l_blocks_stored: Vec<bool> = (0..nlevels)
         .map(|l| fmm.operator().tables().m2l_blocks_stored(l))
         .collect();
+    // The level calls by pairs of the last evaluation, per level, summed over the ranks.
+    let calls: Vec<u64> = (0..nlevels)
+        .map(|l| {
+            let after = fmm
+                .operator()
+                .rcr_counts()
+                .level_calls
+                .get(l)
+                .copied()
+                .unwrap_or(0);
+            let before = rcr_before.get(l).copied().unwrap_or(0);
+            (after - before) as u64
+        })
+        .collect();
+    let mut summed = vec![0u64; nlevels];
+    comm.all_reduce_into(&calls[..], &mut summed[..], SystemOperation::sum());
+    let rcr_by_pairs: Vec<bool> = summed.iter().map(|&c| c > 0).collect();
     let seconds: Vec<f64> = fmm
         .operator()
         .p2p_times()
@@ -1167,6 +1203,8 @@ pub fn run_output<C: CommunicatorCollectives>(
         first_evaluate,
         m2l_seconds,
         m2l_blocks_stored,
+        rcr_split: fmm.operator().rcr_split(),
+        rcr_by_pairs,
         plane_wave_seconds,
         plane_wave_parts,
         batched_columns: v_pairs
