@@ -451,7 +451,7 @@ def summary(dirs):
             same, match, large = [], [], []
             slow_same, slow_match = [], []
             for case in cases_in_order(runs.keys()):
-                if (case, e) not in runs or case.startswith("w1-10"):
+                if (case, e) not in runs or case == "w1-10":
                     continue
                 _, r = best(runs[(case, e)])
                 grid = fm.get((case, v), {})
