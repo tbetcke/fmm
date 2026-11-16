@@ -3256,3 +3256,51 @@ request, using this template:
   read at the node's best split; (2) CH4.0j on the priority list beside CH4.0i (item 6), CH4.0k
   off it; (3) `nd-fmm-tables`' rule amended ("deterministic; a build's parts may run on a
   caller's threads, the same bits; the crate runs no thread"). Next: CH4.0i.
+
+## 2026-11-16: CH4.0i The coarse RCR levels
+- Done:
+  - `nd-fmm-tables`: `HelmholtzTables::{m2l_contribution, m2l_contribution_len, m2l_classes}`
+    and `add_m2l_contribution` (the two in turn `m2l` bit for bit); `HelmholtzScratch` keeps
+    its last per-call y-blocks with their degree and angle.
+  - `nd-fmm-exec`: the Rotation M2L by pairs (`RcrSplit::{Auto, Boxes, Pairs}`,
+    `rcr_by_pairs`, `RCR_PAIR_MIN_DEGREE` 48, `RCR_PAIR_FEW_DEGREE` 30, `RCR_PAIR_SHARE` 4;
+    `HelmholtzOperator::{with_rcr_split, with_rcr_buffer, with_rcr_levels, rcr_counts}`,
+    `HelmholtzFmmBuilder::{rcr_split, rcr_budget}`, `DEFAULT_RCR_NODE_BUDGET` 1 GiB per node;
+    the private `operator_rcr.rs`): a level's pairs in row-order chunks, each contribution
+    into its slot in (angle, distance) order on the pool, then each target's adds in row
+    order, so `main`'s bits at every split, thread count, buffer and rank count. `driver.rs`
+    untouched.
+  - `nd-fmm-validate`: `--rcr-split`, `Row::{rcr_split, rcr_by_pairs}`, `rotation by pairs`
+    in `--levels`; the `helmholtz_rcr_pair` example; `tools/helmholtz/ch4-0i-runs.sh`,
+    `ch4-0i-tables.py`.
+  - Runs (Kathleen jobs 634393, 634402, 634421; locust 2026-11-16): level 2 of W1 at kD = 500
+    by pairs 0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at 4 and 8, 0.56–0.60× on
+    one core (the class order and the kept blocks); at the best split 0.89–0.91 of linear
+    against CH4.0e's one core on Kathleen (locust 0.75–0.78 at 1 × 72), 0.44–0.54 against the
+    one core by pairs; the evaluation 0.50–0.91× by boxes. Why not 70 % of the new one core:
+    each pair at p = 131 reads a 12 MB coaxial table and 12 MB of y-blocks, from memory on every
+    thread (fewer formations per task: no gain; level 2's blocks stored: locust 0.58–0.69,
+    Kathleen +0.01–0.10, 601 MB per rank and 1.08–1.13× at 8 × 5, so the block budget stays).
+    The pair 1.80–2.41× S6's prototype on the same Grace core (S6 rerun: 0.606 ms at p = 72,
+    3.84 ms at p = 131). Auto's first rule (targets < 4 × threads) replaced by the degree rule
+    after forcing pairs on every Rotation level (losses 1.1–3.8× at p = 7–15, even at
+    p = 18–24, wins at p ≥ 30 with 64 boxes and p ≥ 66); CH3.6's matrix under it 0.974× by
+    boxes on locust (57 rows, 0.67–1.04). Every checksum equal to CH4.0h's. Report
+    `fmm-validate/results/helmholtz-ch4-0i.md`; raw outputs in
+    `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0i/`.
+- Tests: `nd-fmm-tables` `tests/helmholtz/contribution.rs` (the split, a row in order, kept
+  blocks, bit for bit); `nd-fmm-exec` `tests/helmholtz/rcr_split.rs` (the rule) and
+  `check_rcr_split` in `tests/helmholtz_fmm.rs` (every split, 1, 2, 3 and 20 threads, the
+  buffer's floor, two vectors, Rotation and Auto, against by boxes bit for bit, and the
+  one-rank FMM); `check_rcr_split` in `nd-fmm-validate`'s `tests/helmholtz_accuracy.rs`.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default
+  and workspace tests at opt-level 1 (1,274 and 1,388 passed), the MPI list at 2 and 4 ranks
+  (24 of 24); the one-rank opt-level 0 runs `helmholtz_fmm` 511 s (510 before), `helmholtz_accuracy`
+  249 s (252), `nd-fmm-exec`'s `tests/helmholtz/` 42.6 s (44), `nd-fmm-tables`' 36.7 s (35.9).
+- Decisions: questions for sign-off (the PR, report §7): (1) the acceptance read against
+  CH4.0e's one core; (2) `RcrSplit::Auto` by degree as the default; (3) CH4.0l off the
+  priority list.
+- Laplace: not touched (`driver.rs`, Laplace's operator and tables, `nd-fmm-plan`,
+  `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI list pass).
+- Follow-ups: CH4.0l (the RCR pair: a class's pairs at once, and vectorised chains), roadmap
+  line added, recommended off the list.

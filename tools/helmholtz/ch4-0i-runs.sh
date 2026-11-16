@@ -24,6 +24,11 @@
 #   pairs   CH3.6's matrix as matrix, --rcr-split boxes,pairs (by pairs on every Rotation
 #           level), on PAIRS_SPLITS (default the first and third of SPLITS), launches
 #           pairs-<case>-<split>: where by pairs loses, for Auto's rule
+#   rotation  W1 and W3 at kD = 100 at EPS with Rotation named on every level (degrees about
+#           7–38 over levels of 64–32,768 boxes), --rcr-split boxes,pairs, on PAIRS_SPLITS,
+#           launches rotation-<w>-100-<split>: the degrees of Auto's rule
+#   crossover `helmholtz_rcr_pair` on one core at p = 8–131, the box path against the pair
+#           path (crossover.md)
 #   pair    `helmholtz_rcr_pair` on one core (p = 72 and 131, five passes; under Linux
 #           `taskset -c 2`): the pair with blocks stored, formed per call and by class
 # SPLITS defaults to "1x40 2x20 4x10 8x5" under Slurm and "1x72 2x36 4x18 8x9" elsewhere
@@ -179,13 +184,31 @@ for stage in "$@"; do
             done
         done
         ;;
+    rotation)
+        # shellcheck disable=SC2086
+        for w in w1 w3; do
+            for s in $PAIRS_SPLITS; do
+                r=${s%x*} t=${s#*x}
+                # shellcheck disable=SC2046
+                launch "rotation-$w-100-$s" $(mpi "$r" "$t") "$A" --workload "$w" --kd 100 \
+                    --eps "$EPS" --m2l rotation --near-v cost --near-wx cost --levels \
+                    --evaluations 2 --rcr-split boxes,pairs --threads "$t"
+            done
+        done
+        ;;
+    crossover)
+        pin=()
+        [ "$(uname)" = Linux ] && pin=(taskset -c 2)
+        launch crossover ${pin[@]+"${pin[@]}"} "$P" --reps 5 \
+            --cases 8@1,12@2,16@4,20@6,24@8,32@12,40@16,48@20,56@24,72@31.25,131@62.5
+        ;;
     pair)
         pin=()
         [ "$(uname)" = Linux ] && pin=(taskset -c 2)
-        launch pair "${pin[@]}" "$P" --cases 72@31.25,131@62.5 --reps 5
+        launch pair ${pin[@]+"${pin[@]}"} "$P" --cases 72@31.25,131@62.5 --reps 5
         ;;
     *)
-        echo "ch4-0i-runs.sh: unknown stage $stage (levels, stored, matrix, pairs or pair)" >&2
+        echo "ch4-0i-runs.sh: unknown stage $stage (levels, stored, matrix, pairs, rotation, crossover or pair)" >&2
         exit 2
         ;;
     esac

@@ -7,6 +7,9 @@ of tools/helmholtz/ch4-0i-runs.sh, beside CH4.0h's launches of the same machine
     ch4-0i-tables.py stored <ch4-0i-dir> <ch4-0h-dir>   by pairs, blocks stored against not
     ch4-0i-tables.py matrix <ch4-0i-dir> <ch4-0h-dir>   CH3.6's matrix: boxes against auto
     ch4-0i-tables.py pairs  <ch4-0i-dir> <ch4-0h-dir>   CH3.6's matrix: boxes against pairs
+    ch4-0i-tables.py degrees <ch4-0i-dir> -             every Rotation level of the stages
+                                                         rotation, pairs and levels (order a)
+                                                         by degree: boxes against pairs
 
 Every row's checksum is compared with CH4.0h's launches of the same case and ε (all equal
 there across splits and launches): a difference is printed as a line "CHECKSUM DIFFERS". Times
@@ -202,12 +205,38 @@ def matrix(here, before, prefix="matrix", other="auto"):
               f" over {len(ratios)} rows")
 
 
+def degrees(here, _before):
+    """Every Rotation level with both splits in a launch, by degree."""
+    rows = {}
+    paths = [p for prefix in ("rotation", "pairs", "levels") for p in
+             sorted(Path(here).glob(f"{prefix}-*.md")) if not p.name.endswith("-b.md")]
+    for path in paths:
+        for r in tables(path).get("M2L per level", []):
+            if not r["level"].isdigit() or not r["ran"].startswith("rotation"):
+                continue
+            case = path.name[:-len(".md")]
+            key = (case, eps_of(r), r["ranks × threads"], int(r["level"]), int(r["p"]),
+                   int(r["boxes"]), int(r["V pairs"]))
+            split = split_of(r)
+            if split != "auto":
+                rows.setdefault(key, {})[split] = float(r["M2L s"])
+    print("| launch | ε | ranks × threads | level | p | boxes | V pairs | boxes s | pairs s "
+          "| pairs ÷ boxes |")
+    print("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    for key, v in sorted(rows.items(), key=lambda kv: (kv[0][4], kv[0][5], kv[0][0])):
+        if "boxes" in v and "pairs" in v and v["boxes"] >= 0.001:
+            case, e, rt, level, p, boxes, pairs = key
+            print(f"| {case} | {e} | {rt} | {level} | {p} | {boxes} | {pairs} "
+                  f"| {v['boxes']:.4f} | {v['pairs']:.4f} | {v['pairs'] / v['boxes']:.2f} |")
+
+
 if __name__ == "__main__":
     modes = {
         "levels": levels,
         "stored": stored,
         "matrix": matrix,
         "pairs": lambda here, before: matrix(here, before, "pairs", "pairs"),
+        "degrees": degrees,
     }
     if len(sys.argv) != 4 or sys.argv[1] not in modes:
         sys.exit(__doc__)

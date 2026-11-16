@@ -148,6 +148,37 @@ same case, ABBA (by boxes against by pairs):
   the report says so, with the per-step profile, and the angle order is the lever inside this
   task.
 
+## As built (departures from the plan)
+
+- The level call by pairs needs a plan, so its bit-for-bit tests are in the MPI test
+  `tests/helmholtz_fmm.rs` (`check_rcr_split`: 1, 2, 3 and 20 threads, the buffer's floor, two
+  vectors, Rotation and Auto, the one-rank FMM), not in `tests/helmholtz/`; the rule alone is
+  `tests/helmholtz/rcr_split.rs`.
+- The pair: the class order and the kept y-blocks were built (the plan's lever); the pair is
+  timed by variant (stored, per call, by class; the box path against the pair path) by the
+  new `helmholtz_rcr_pair`, not by step: a step profile would need a restatement of the
+  private steps. The step costs are argued from their operation counts in the report §4.
+- Auto's rule: first "by pairs where targets < 4 × threads"; replaced after the runs by the
+  degree rule (p ≥ 48; p ≥ 30 with targets < 4 × threads), report §5. Tried and not kept: one
+  run of consecutive slots per task (no gain, report §3).
+- Extra stages: `stored` (level 2's blocks stored, CH4.0e's question 2 again), `pairs`,
+  `rotation`, `crossover` (Auto's rule).
+
+## Results
+
+Report `fmm-validate/results/helmholtz-ch4-0i.md`. Level 2 of W1 at kD = 500 by pairs:
+0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at more; at the best split 0.89–0.91 of
+linear against CH4.0e's one core (Kathleen 2 × 20; locust 0.75–0.78 at 1 × 72), 0.44–0.54
+against the one core by pairs. The pair 1.80–2.41× S6's on the same core. Every checksum
+CH4.0h's.
+
 ## Pending runs
 
+- Kathleen job 634421 (`ch4-0i-runs.sh … kathleen-rule matrix rotation crossover`): the
+  matrix under the degree rule, the rule's degrees and the one-core crossover on Kathleen; the
+  report's §4 and §5 Kathleen parts.
+
 ## Open questions
+
+The PR's questions for sign-off (report §7): (1) the acceptance read against CH4.0e's one
+core; (2) `RcrSplit::Auto` by degree as the default; (3) CH4.0l off the priority list.
