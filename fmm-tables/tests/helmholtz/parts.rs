@@ -311,10 +311,13 @@ fn the_matrices_on_threads_are_the_serial_matrices() {
     }
 }
 
+/// k̂₀ as (Re, Im), the degrees given, the tolerance and the reach.
+type PlaneWaveCase = ((f64, f64), [usize; 6], f64, f64);
+
 /// The exponential M2L's cases: k̂₀ (real and complex), the degrees given, the tolerance
 /// and the reach. 10⁻³ takes iprec 1 at the level's degree, 10⁻⁶ iprec 2, 10⁻⁸ iprec 3 at
 /// the raised degree max(p_l, 32) (`plane_wave_degree`), as the operator builds them.
-const PLANE_WAVE_CASES: [((f64, f64), [usize; 6], f64, f64); 5] = [
+const PLANE_WAVE_CASES: [PlaneWaveCase; 5] = [
     ((20.0, 2.0), [0, 0, 20, 12, 9, 7], 1e-6, RHO_MAX),
     ((40.0, 0.0), [0, 0, 30, 20, 12, 9], 1e-3, RHO_MAX),
     ((40.0, 0.0), [0, 0, 30, 20, 12, 9], 1e-8, RHO_MAX),

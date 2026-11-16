@@ -252,42 +252,41 @@ fn i_pow(n: i64) -> C {
     }
 }
 
-impl<T: RealScalar> PlaneWaveLevel<T> {
-    /// The tables of the level with k̂ = k r_l (the [module documentation](self)) at degree
-    /// p, with CH6.1a's quadrature of κ = 2k̂.
-    ///
-    /// # Panics
-    ///
-    /// If the quadrature's κ is not 2k̂, and as [`from_nodes`](Self::from_nodes).
-    pub fn new(k_hat: Complex<f64>, p: usize, quadrature: &Quadrature) -> Self {
-        assert!(
-            quadrature.kappa() == k_hat * 2.0,
-            "the quadrature's κ = {} is not 2k̂ = {}",
-            quadrature.kappa(),
-            k_hat * 2.0
-        );
-        Self::from_nodes(
-            k_hat,
-            p,
-            Nodes {
-                lambda: quadrature.lambda(),
-                t: quadrature.t(),
-                weights: quadrature.weights(),
-                alpha: quadrature.alpha_counts(),
-                fourier: quadrature.fourier_counts(),
-            },
-        )
-    }
+/// A level's tables before their values (Helmholtz CH4.0j): k̂, p, the nodes and the
+/// blocks of [`PlaneWaveLevel::from_nodes`]. Its parts are each node's values (the cos and
+/// sin of mαⱼ and the factors Pₖ(n, m)), then the two frames' rotation blocks, each a
+/// function of the layout and its number alone, so a build may compute them as parts
+/// (`super::merge`); [`with_parts`](Self::with_parts) puts them together in order.
+/// `from_nodes` is the parts in turn, the same bits.
+#[derive(Clone, Debug)]
+pub(crate) struct LevelLayout<'a> {
+    k_hat: C,
+    p: usize,
+    nodes: Nodes<'a>,
+    blocks: Vec<NodeBlock>,
+    waves: usize,
+    orders: usize,
+    trig: usize,
+    factor: usize,
+}
 
-    /// The tables of the level with k̂ = k r_l at degree p with the nodes of a quadrature
-    /// of κ = 2k̂ (for instance `nd_fmm_ref`'s generated one). Builds in f64 and rounds to
-    /// T; allocates.
+/// One part of a [`LevelLayout`]: a node's values, or a frame's rotation blocks.
+#[derive(Clone, Debug)]
+pub(crate) enum LevelPart<T> {
+    /// cos αⱼ and sin αⱼ (f64), cos mαⱼ and sin mαⱼ, then the outgoing and incoming
+    /// factors' real and imaginary parts, of one node.
+    Node([Vec<f64>; 2], [Vec<T>; 6]),
+    /// Oⁿ(Q) of one frame.
+    Frame(Vec<T>),
+}
+
+impl<'a> LevelLayout<'a> {
+    /// The layout of the level with k̂ = k r_l at degree p with `nodes`.
     ///
     /// # Panics
     ///
-    /// Unless k̂ is finite with Re k̂ > 0 and Im k̂ ≥ 0 (as `HelmholtzTables`: Yukawa's real
-    /// path, Re k = 0, is not served), the node slices have one length, and every Nₖ ≥ 1.
-    pub fn from_nodes(k_hat: Complex<f64>, p: usize, nodes: Nodes<'_>) -> Self {
+    /// As [`PlaneWaveLevel::from_nodes`].
+    pub(crate) fn new(k_hat: Complex<f64>, p: usize, nodes: Nodes<'a>) -> Self {
         assert!(
             k_hat.re.is_finite() && k_hat.im.is_finite() && k_hat.re > 0.0 && k_hat.im >= 0.0,
             "k̂ must be finite with Re > 0 and Im ≥ 0 (Yukawa's real path is not served)"
@@ -305,13 +304,6 @@ impl<T: RealScalar> PlaneWaveLevel<T> {
             "node slices of different lengths"
         );
         assert!(nodes.alpha.iter().all(|&n| n >= 1), "an α count of 0");
-        let level = Level::new(k_hat, 1.0);
-        let (scale, beta) = (level.scale(), level.damping());
-        let kappa = k_hat * 2.0;
-        let sk = C::new(scale, 0.0) / kappa;
-        let r2 = C::new(scale * scale, 0.0);
-        let growth = beta.exp();
-
         let mut blocks = Vec::with_capacity(s);
         let (mut waves, mut orders, mut trig, mut factor) = (0, 0, 0, 0);
         for k in 0..s {
@@ -329,65 +321,166 @@ impl<T: RealScalar> PlaneWaveLevel<T> {
             factor += (0..block.orders).map(|m| p + 1 - m).sum::<usize>();
             blocks.push(block);
         }
-
-        let (mut alpha_cos, mut alpha_sin) = (Vec::with_capacity(waves), Vec::with_capacity(waves));
-        let (mut cos, mut sin) = (Vec::with_capacity(trig), Vec::with_capacity(trig));
-        let cast = |v: f64| T::from_f64(v);
-        for b in &blocks {
-            let n = b.len;
-            for j in 0..n {
-                let (sa, ca) = (TAU * j as f64 / n as f64).sin_cos();
-                alpha_cos.push(ca);
-                alpha_sin.push(sa);
-            }
-            for m in 0..b.orders {
-                for j in 0..n {
-                    // mαⱼ reduced exactly: m j mod N of the N equal steps.
-                    let (sa, ca) = (TAU * ((m * j) % n) as f64 / n as f64).sin_cos();
-                    cos.push(cast(ca));
-                    sin.push(cast(sa));
-                }
-            }
-        }
-
-        let mut harmonic = vec![C::new(0.0, 0.0); (p + 1) * (p + 2) / 2];
-        let (mut out_re, mut out_im) = (Vec::with_capacity(factor), Vec::with_capacity(factor));
-        let (mut in_re, mut in_im) = (Vec::with_capacity(factor), Vec::with_capacity(factor));
-        for (k, b) in blocks.iter().enumerate() {
-            let z = sk * C::i() * nodes.lambda[k];
-            let rho = sk * nodes.t[k];
-            harmonic_factors(p, z, rho, r2, &mut harmonic);
-            let outgoing = nodes.weights[k] * (TAU * growth / b.len as f64);
-            let incoming = 4.0 * PI * growth;
-            for m in 0..b.orders {
-                for n in m..=p {
-                    let pnm = i_pow(-(n as i64)) * harmonic[n * (n + 1) / 2 + m];
-                    let o = outgoing * pnm;
-                    let sign = if n % 2 == 0 { 1.0 } else { -1.0 };
-                    let i = pnm * (incoming * sign);
-                    out_re.push(cast(o.re));
-                    out_im.push(cast(o.im));
-                    in_re.push(cast(i.re));
-                    in_im.push(cast(i.im));
-                }
-            }
-        }
-
-        let frames = [1, 2].map(|f| {
-            rotation_blocks(p, frame_element(f))
-                .into_iter()
-                .map(cast)
-                .collect()
-        });
-
         Self {
             k_hat,
             p,
-            lambda: nodes.lambda.to_vec(),
-            t: nodes.t.to_vec(),
+            nodes,
             blocks,
             waves,
             orders,
+            trig,
+            factor,
+        }
+    }
+
+    /// The layout of [`PlaneWaveLevel::new`]: CH6.1a's quadrature of κ = 2k̂.
+    ///
+    /// # Panics
+    ///
+    /// As [`PlaneWaveLevel::new`].
+    pub(crate) fn of_quadrature(k_hat: Complex<f64>, p: usize, quadrature: &'a Quadrature) -> Self {
+        assert!(
+            quadrature.kappa() == k_hat * 2.0,
+            "the quadrature's κ = {} is not 2k̂ = {}",
+            quadrature.kappa(),
+            k_hat * 2.0
+        );
+        Self::new(
+            k_hat,
+            p,
+            Nodes {
+                lambda: quadrature.lambda(),
+                t: quadrature.t(),
+                weights: quadrature.weights(),
+                alpha: quadrature.alpha_counts(),
+                fourier: quadrature.fourier_counts(),
+            },
+        )
+    }
+
+    /// The parts: one per node, then one per frame.
+    pub(crate) fn parts(&self) -> usize {
+        self.blocks.len() + 2
+    }
+
+    /// Part `i` of [`parts`](Self::parts).
+    pub(crate) fn part<T: RealScalar>(&self, i: usize) -> LevelPart<T> {
+        let cast = |v: f64| T::from_f64(v);
+        let p = self.p;
+        let Some(b) = self.blocks.get(i) else {
+            let frame = i - self.blocks.len() + 1;
+            return LevelPart::Frame(
+                rotation_blocks(p, frame_element(frame))
+                    .into_iter()
+                    .map(cast)
+                    .collect(),
+            );
+        };
+        let k = i;
+        let n = b.len;
+        let (mut alpha_cos, mut alpha_sin) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        for j in 0..n {
+            let (sa, ca) = (TAU * j as f64 / n as f64).sin_cos();
+            alpha_cos.push(ca);
+            alpha_sin.push(sa);
+        }
+        let (mut cos, mut sin) = (
+            Vec::with_capacity(b.orders * n),
+            Vec::with_capacity(b.orders * n),
+        );
+        for m in 0..b.orders {
+            for j in 0..n {
+                // mαⱼ reduced exactly: m j mod N of the N equal steps.
+                let (sa, ca) = (TAU * ((m * j) % n) as f64 / n as f64).sin_cos();
+                cos.push(cast(ca));
+                sin.push(cast(sa));
+            }
+        }
+
+        let level = Level::new(self.k_hat, 1.0);
+        let (scale, beta) = (level.scale(), level.damping());
+        let kappa = self.k_hat * 2.0;
+        let sk = C::new(scale, 0.0) / kappa;
+        let r2 = C::new(scale * scale, 0.0);
+        let growth = beta.exp();
+        let mut harmonic = vec![C::new(0.0, 0.0); (p + 1) * (p + 2) / 2];
+        let len = (0..b.orders).map(|m| p + 1 - m).sum::<usize>();
+        let (mut out_re, mut out_im) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        let (mut in_re, mut in_im) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        let z = sk * C::i() * self.nodes.lambda[k];
+        let rho = sk * self.nodes.t[k];
+        harmonic_factors(p, z, rho, r2, &mut harmonic);
+        let outgoing = self.nodes.weights[k] * (TAU * growth / b.len as f64);
+        let incoming = 4.0 * PI * growth;
+        for m in 0..b.orders {
+            for n in m..=p {
+                let pnm = i_pow(-(n as i64)) * harmonic[n * (n + 1) / 2 + m];
+                let o = outgoing * pnm;
+                let sign = if n % 2 == 0 { 1.0 } else { -1.0 };
+                let i = pnm * (incoming * sign);
+                out_re.push(cast(o.re));
+                out_im.push(cast(o.im));
+                in_re.push(cast(i.re));
+                in_im.push(cast(i.im));
+            }
+        }
+        LevelPart::Node(
+            [alpha_cos, alpha_sin],
+            [cos, sin, out_re, out_im, in_re, in_im],
+        )
+    }
+
+    /// The level's tables from its parts, `parts[i]` = [`part`](Self::part)`(i)`.
+    ///
+    /// # Panics
+    ///
+    /// Unless `parts` holds every part in order.
+    pub(crate) fn with_parts<T: RealScalar>(self, parts: Vec<LevelPart<T>>) -> PlaneWaveLevel<T> {
+        assert_eq!(parts.len(), self.parts(), "every part of the level");
+        let (mut alpha_cos, mut alpha_sin) = (
+            Vec::with_capacity(self.waves),
+            Vec::with_capacity(self.waves),
+        );
+        let (mut cos, mut sin) = (Vec::with_capacity(self.trig), Vec::with_capacity(self.trig));
+        let (mut out_re, mut out_im) = (
+            Vec::with_capacity(self.factor),
+            Vec::with_capacity(self.factor),
+        );
+        let (mut in_re, mut in_im) = (
+            Vec::with_capacity(self.factor),
+            Vec::with_capacity(self.factor),
+        );
+        let mut frames = Vec::with_capacity(2);
+        for part in parts {
+            match part {
+                LevelPart::Node([ac, as_], [c, s, o_re, o_im, i_re, i_im]) => {
+                    alpha_cos.extend(ac);
+                    alpha_sin.extend(as_);
+                    cos.extend(c);
+                    sin.extend(s);
+                    out_re.extend(o_re);
+                    out_im.extend(o_im);
+                    in_re.extend(i_re);
+                    in_im.extend(i_im);
+                }
+                LevelPart::Frame(f) => frames.push(f),
+            }
+        }
+        let Ok(frames) = <[Vec<T>; 2]>::try_from(frames) else {
+            panic!("two frames, after the nodes");
+        };
+        assert!(
+            alpha_cos.len() == self.waves && cos.len() == self.trig && out_re.len() == self.factor,
+            "the nodes' parts before the frames"
+        );
+        PlaneWaveLevel {
+            k_hat: self.k_hat,
+            p: self.p,
+            lambda: self.nodes.lambda.to_vec(),
+            t: self.nodes.t.to_vec(),
+            blocks: self.blocks,
+            waves: self.waves,
+            orders: self.orders,
             alpha_cos,
             alpha_sin,
             cos,
@@ -398,6 +491,34 @@ impl<T: RealScalar> PlaneWaveLevel<T> {
             in_im,
             frames,
         }
+    }
+}
+
+impl<T: RealScalar> PlaneWaveLevel<T> {
+    /// The tables of the level with k̂ = k r_l (the [module documentation](self)) at degree
+    /// p, with CH6.1a's quadrature of κ = 2k̂.
+    ///
+    /// # Panics
+    ///
+    /// If the quadrature's κ is not 2k̂, and as [`from_nodes`](Self::from_nodes).
+    pub fn new(k_hat: Complex<f64>, p: usize, quadrature: &Quadrature) -> Self {
+        let layout = LevelLayout::of_quadrature(k_hat, p, quadrature);
+        let parts = (0..layout.parts()).map(|i| layout.part::<T>(i)).collect();
+        layout.with_parts(parts)
+    }
+
+    /// The tables of the level with k̂ = k r_l at degree p with the nodes of a quadrature
+    /// of κ = 2k̂ (for instance `nd_fmm_ref`'s generated one). Builds in f64 and rounds to
+    /// T; allocates.
+    ///
+    /// # Panics
+    ///
+    /// Unless k̂ is finite with Re k̂ > 0 and Im k̂ ≥ 0 (as `HelmholtzTables`: Yukawa's real
+    /// path, Re k = 0, is not served), the node slices have one length, and every Nₖ ≥ 1.
+    pub fn from_nodes(k_hat: Complex<f64>, p: usize, nodes: Nodes<'_>) -> Self {
+        let layout = LevelLayout::new(k_hat, p, nodes);
+        let parts = (0..layout.parts()).map(|i| layout.part::<T>(i)).collect();
+        layout.with_parts(parts)
     }
 
     /// k̂ = k r_l.
