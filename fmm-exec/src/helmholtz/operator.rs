@@ -929,6 +929,11 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// Runs every level call in `pool`, each target on one of its threads, with one
     /// scratch set per thread. The output is bit for bit the serial operator's.
     pub fn with_pool(mut self, pool: Arc<ThreadPool>) -> Self {
+        if self.unbuilt {
+            // `build_tables` makes the scratch sets, one per thread, for the tables.
+            self.execution.pool = Some(pool);
+            return self;
+        }
         let n = pool.current_num_threads().max(1);
         let clock = Instant::now();
         self.execution.scratch = (0..n)
@@ -1456,10 +1461,17 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.plane_wave_times.fill(PlaneWaveTimes::default());
         // The class scratch, the batched columns and the exponential M2L's buffers are sized
         // by their tables' largest level.
+        // One per thread of the pool, made on its threads (Helmholtz CH4.0h; no value depends
+        // on which), the old sets dropped first: at p = 135 a set holds about 27 MB.
         let clock = Instant::now();
-        for scratch in &mut self.execution.scratch {
-            *scratch.get_mut().expect("a scratch set is never poisoned") = Scratch::new(kernel);
-        }
+        let kernel = &*kernel;
+        let n = self
+            .execution
+            .pool
+            .as_ref()
+            .map_or(1, |pool| pool.current_num_threads().max(1));
+        self.execution.scratch.clear();
+        self.execution.scratch = parts.map(n, &|_| Mutex::new(Scratch::new(kernel)));
         timings.scratch += clock.elapsed();
     }
 
