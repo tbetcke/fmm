@@ -19,5 +19,6 @@ mod operator;
 mod p2p;
 mod plane_wave;
 mod plane_wave_reach;
+mod rcr_split;
 mod v_crossover;
 mod wavenumber;

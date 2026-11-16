@@ -279,6 +279,22 @@
 //! a level with waves merge and shift ("M2L"). [`PairOperator`] runs the same
 //! bodies pair by pair.
 //!
+//! A Rotation (RCR) level splits by pairs where its boxes are few (Helmholtz CH4.0i;
+//! [`RcrSplit`], [`with_rcr_split`](HelmholtzOperator::with_rcr_split)): target by target
+//! one task holds a box's whole V row, so a level of fewer boxes than threads leaves threads
+//! idle (level 2 of W1 at kD = 500, 64 boxes at p = 131). By pairs, the level's V pairs in
+//! the plan's order run in chunks that fit a buffer
+//! ([`with_rcr_buffer`](HelmholtzOperator::with_rcr_buffer)): every pair of a chunk writes
+//! its contribution, the terms `HelmholtzTables::m2l` adds to the local, into a slot of its
+//! own on the pool, the chunk's pairs by polar angle and distance so that consecutive pairs
+//! share their y-blocks (which the scratch keeps where they are formed per call) and coaxial
+//! table; then every target adds its pairs' slots in its row's order. Each value of a local
+//! receives the same terms, computed by the same operations and added in the same order, so
+//! the output is target by target's bit for bit under every split, thread count and buffer,
+//! and [`RcrSplit::Auto`] may read the pool's threads: by pairs on a level of degree at least
+//! [`RCR_PAIR_MIN_DEGREE`], and of degree at least [`RCR_PAIR_FEW_DEGREE`] where its targets
+//! with a V row are fewer than [`RCR_PAIR_SHARE`] times them ([`rcr_by_pairs`]).
+//!
 //! Yukawa (Re k = 0) is not served: its real path is CH2.1's.
 
 use std::sync::{Arc, Mutex};
@@ -321,9 +337,16 @@ use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
 
 #[path = "operator_plane_wave.rs"]
 mod plane_wave;
+#[path = "operator_rcr.rs"]
+mod rcr;
 
 pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveSplit, PlaneWaveTimes};
 use plane_wave::{PlaneBuffer, PlaneScratch};
+use rcr::RcrBuffer;
+pub use rcr::{
+    DEFAULT_RCR_BUFFER, RCR_PAIR_FEW_DEGREE, RCR_PAIR_MIN_DEGREE, RCR_PAIR_SHARE, RcrCounts,
+    RcrSplit, rcr_by_pairs,
+};
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
 #[derive(Clone, Copy, Debug, Error, PartialEq)]
@@ -659,6 +682,8 @@ pub struct HelmholtzOperator<T: SimdScalar> {
     /// Under [`HelmholtzM2l::PlaneWave`], the level call's waves of one frame of a chunk's
     /// sources, up and down, and their positions.
     plane_buffer: PlaneBuffer<T>,
+    /// The Rotation M2L's buffer of contributions by pairs (Helmholtz CH4.0i).
+    rcr_buffer: RcrBuffer<T>,
     /// The M2L level calls' wall time per level since the tables were last chosen
     /// ([`m2l_times`](HelmholtzOperator::m2l_times)).
     m2l_times: Vec<Duration>,
@@ -923,6 +948,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             kernel,
             execution,
             plane_buffer: PlaneBuffer::default(),
+            rcr_buffer: RcrBuffer::default(),
             m2l_times,
             p2p_times,
             kind_times,
@@ -957,6 +983,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             .collect();
         self.table_timings.scratch += clock.elapsed();
         self.execution.pool = Some(pool);
+        self.size_rcr_buffer();
         self
     }
 
@@ -1473,6 +1500,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         timings.rcr += clock.elapsed();
         self.plane_buffer.size(kernel.plane_waves.as_ref());
         self.plane_buffer.counts = PlaneWaveCounts::default();
+        self.rcr_buffer.counts = RcrCounts::default();
         self.m2l_times.fill(Duration::ZERO);
         self.p2p_times.fill(Duration::ZERO);
         self.kind_times.fill([Duration::ZERO; 6]);
@@ -1491,6 +1519,89 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.execution.scratch.clear();
         self.execution.scratch = parts.map(n, &|_| Mutex::new(Scratch::new(kernel)));
         timings.scratch += clock.elapsed();
+        self.size_rcr_buffer();
+    }
+
+    /// Sizes the Rotation M2L's buffer for the plan's levels that run by pairs on the
+    /// pool's threads ([`with_rcr_levels`](Self::with_rcr_levels)); nothing while the
+    /// tables are unbuilt.
+    fn size_rcr_buffer(&mut self) {
+        if self.unbuilt {
+            return;
+        }
+        let threads = match (&self.execution.pool, self.execution.serial) {
+            (Some(_), false) => self.execution.scratch.len(),
+            _ => 1,
+        };
+        let m = self.kernel.densities.vectors();
+        let rotation: Vec<bool> = (0..self.kernel.tables.nlevels())
+            .map(|l| self.m2l_on(l) == HelmholtzM2l::Rotation)
+            .collect();
+        let tables = &self.kernel.tables;
+        self.rcr_buffer.size(
+            threads,
+            |l| rotation.get(l).copied().unwrap_or(false),
+            |l| tables.m2l_degree(l),
+            |l| tables.m2l_contribution_len(l, m),
+        );
+    }
+
+    /// Splits the Rotation (RCR) M2L's level calls over the pool by `split` (default
+    /// [`RcrSplit::Auto`]; Helmholtz CH4.0i; module documentation, "Execution"). The output
+    /// is the same bit for bit under every setting.
+    pub fn with_rcr_split(mut self, split: RcrSplit) -> Self {
+        self.rcr_buffer.split = split;
+        self.size_rcr_buffer();
+        self
+    }
+
+    /// How the Rotation M2L's level calls split over the pool
+    /// ([`with_rcr_split`](Self::with_rcr_split)).
+    pub fn rcr_split(&self) -> RcrSplit {
+        self.rcr_buffer.split
+    }
+
+    /// Bounds the buffer of the Rotation M2L's contributions by pairs at `bytes` (default
+    /// [`DEFAULT_RCR_BUFFER`]; `None`: every pair of a level): a level call by pairs then
+    /// runs by chunks of pairs whose contributions fit, at least one pair per thread. The
+    /// output is the same at every bound. `HelmholtzFmmBuilder` sets it from its node budget
+    /// ([`rcr_budget`](super::HelmholtzFmmBuilder::rcr_budget)) and sizes it from the plan
+    /// ([`with_rcr_levels`](Self::with_rcr_levels)); without the plan's levels the first level
+    /// call by pairs of a level grows it, up to the bound.
+    pub fn with_rcr_buffer(mut self, bytes: Option<usize>) -> Self {
+        self.rcr_buffer.bound = bytes;
+        self.size_rcr_buffer();
+        self
+    }
+
+    /// The byte bound of the Rotation M2L's buffer ([`with_rcr_buffer`](Self::with_rcr_buffer)).
+    pub fn rcr_buffer(&self) -> Option<usize> {
+        self.rcr_buffer.bound
+    }
+
+    /// Sizes the Rotation M2L's buffer for levels of `levels[l]` = (V pairs, targets with a
+    /// V row) on this rank, so that no level call by pairs grows it. `HelmholtzFmmBuilder`
+    /// counts them in the plan.
+    pub fn with_rcr_levels(mut self, levels: &[(usize, usize)]) -> Self {
+        self.rcr_buffer.levels = levels.to_vec();
+        self.size_rcr_buffer();
+        self
+    }
+
+    /// The bytes of the Rotation M2L's buffer as sized.
+    pub fn rcr_buffer_bytes(&self) -> usize {
+        self.rcr_buffer.bytes()
+    }
+
+    /// The most bytes the Rotation M2L's buffer held since the operator was built.
+    pub fn rcr_buffer_peak_bytes(&self) -> usize {
+        self.rcr_buffer.peak
+    }
+
+    /// The counts of the Rotation M2L's level calls by pairs since its M2L was last chosen
+    /// ([`RcrCounts`]).
+    pub fn rcr_counts(&self) -> &RcrCounts {
+        &self.rcr_buffer.counts
     }
 
     /// The wall time of building the tables by part since the operator was constructed
@@ -2317,6 +2428,9 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T>
                         .block_targets
                         .unwrap_or_else(|| batched_block_targets(batch.locals.len(), threads));
                     batched.m2l(&mut self.execution, batch, width, |s| &mut s.columns)
+                }
+                None if self.m2l_on(level) == HelmholtzM2l::Rotation => {
+                    self.rotation_m2l(batch);
                 }
                 None => driver::m2l(&self.kernel, &mut self.execution, batch),
             }

@@ -664,13 +664,33 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   degrees, the M2L per level, the blocks only on RCR levels, the bytes and every pair body
   bit for bit; `check_build_timings` (in `check_defaults`) the build's parts on every rank;
   the 2 threads of every check now also build the tables on the pool against one thread's
-  serial build. Laplace's builder, drivers and pipeline unchanged. `tests/helmholtz_fmm.rs`
+  serial build. Laplace's builder, drivers and pipeline unchanged.
+  `tests/helmholtz_fmm.rs`
   (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,
   and the errors, with one scenario that leaves rank 0 empty; ε = 10⁻⁶ and kD = 100 in
   release only (about 36 s at one rank in debug on the M6; 46 s since CH3.4c's P2P
   kernel checks).
+  Since Helmholtz CH4.0i (docs/helmholtz/tasks/CH4.0i.md; fmm-validate/results/helmholtz-ch4-0i.md)
+  a Rotation (RCR) M2L level call may run by pairs (`RcrSplit::{Auto, Boxes, Pairs}`,
+  `HelmholtzOperator::{with_rcr_split, with_rcr_buffer, with_rcr_levels, rcr_counts}`,
+  `HelmholtzFmmBuilder::{rcr_split, rcr_budget}`, `DEFAULT_RCR_NODE_BUDGET` 1 GiB per node
+  over the ranks per node; the private `operator_rcr.rs`): the level's V pairs in the plan's
+  order in chunks that fit the buffer, every pair's contribution
+  (`HelmholtzTables::m2l_contribution`) into its own slot on the pool, the chunk's pairs by
+  (polar angle, distance) so that the scratch's kept y-blocks and the coaxial tables are
+  reused, then each target adds its slots in its row's order
+  (`nd_fmm_tables::helmholtz::add_m2l_contribution`): the shared driver's chain bit for bit,
+  so `Auto` may read the pool's threads (`rcr_by_pairs`: by pairs at p_l ≥
+  `RCR_PAIR_MIN_DEGREE` = 48 at every thread count, and at p_l ≥ `RCR_PAIR_FEW_DEGREE` = 30
+  where a level's targets with a V row are fewer than `RCR_PAIR_SHARE` = 4 times the
+  threads). `driver.rs` unchanged. `tests/helmholtz_fmm.rs`'s `check_rcr_split` holds
+  `Pairs` serially, on 2 threads with the default buffer and on 3 at the buffer's floor (one
+  pair per thread, rows across chunks), `Auto` at 20 threads, and two vectors to by boxes bit
+  for bit, under Rotation and the library's Auto (some level by pairs), and on P ranks to the
+  one-rank FMM; no scenario reaches p ≥ 30, so Auto's choice of pairs inside an FMM is
+  `tests/helmholtz/rcr_split.rs`' rule alone.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

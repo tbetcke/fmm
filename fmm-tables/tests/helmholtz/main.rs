@@ -23,6 +23,7 @@ use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
 
 mod batched;
 mod classes;
+mod contribution;
 mod dense;
 mod parts;
 mod plane_wave_merge;

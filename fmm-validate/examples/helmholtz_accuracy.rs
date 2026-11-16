@@ -132,6 +132,11 @@
 //! - `--block-budget MB` (Helmholtz CH4.0e): the bytes of the M2L's stored rotation blocks
 //!   per rank (default the library's, 512 MiB); the levels that do not fit, coarsest first,
 //!   form their blocks per V pair. No bit depends on it.
+//! - `--rcr-split auto|boxes|pairs,…` (Helmholtz CH4.0i, `HelmholtzFmmBuilder::rcr_split`):
+//!   how the Rotation M2L's level calls split over the threads (`auto`, the default, the
+//!   library's), the outermost loop of the runs; the column "M2L" of a row with a named split
+//!   ends with `/rcr-boxes` or `/rcr-pairs`, and `--levels`' column "ran" says `rotation by
+//!   pairs` where a level call ran by pairs. No bit depends on it.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
 //!   touches the buffers, which on a large exponential M2L's waves costs seconds).
@@ -163,7 +168,7 @@ use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, VNear, Wavenumber, WxNear, s7_degree,
+    PlaneWaveSplit, RcrSplit, VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -196,6 +201,7 @@ struct Arguments {
     block_budget: Option<usize>,
     reaches: Vec<Option<f64>>,
     splits: Vec<Option<PlaneWaveSplit>>,
+    rcr_splits: Vec<Option<RcrSplit>>,
     raises: Vec<Option<PlaneWaveRaise>>,
     terms: Vec<bool>,
     blocks: Vec<Option<usize>>,
@@ -275,6 +281,7 @@ fn arguments() -> Arguments {
              [--dense-budget MB] [--plane-wave-budget MB|whole] [--block-budget MB] \
              [--reach corner|r,…] \
              [--split auto|parents|children,…] [--raise rule|level|leaves|m2l,…] \
+             [--rcr-split auto|boxes|pairs,…] \
              [--term on|off,…] [--block auto|w,…] [--empty-boxes on|off,…] [--near-v off|cost|n|inf,…] [--near-wx off|cost|n|inf,…] \
              [--leaf-size auto|n,…] [--c-leaf auto|c,…] [--levels] \
              [--evaluations n]; got {args:?}"
@@ -299,6 +306,7 @@ fn arguments() -> Arguments {
         block_budget: None,
         reaches: vec![None],
         splits: vec![None],
+        rcr_splits: vec![None],
         raises: vec![None],
         terms: vec![true],
         blocks: vec![None],
@@ -441,6 +449,17 @@ fn arguments() -> Arguments {
                         })
                         .collect::<Option<Vec<_>>>()
                         .map(|s| parsed.splits = s)
+                        .is_some(),
+                    "--rcr-split" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "auto" => Some(None),
+                            "boxes" => Some(Some(RcrSplit::Boxes)),
+                            "pairs" => Some(Some(RcrSplit::Pairs)),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|s| parsed.rcr_splits = s)
                         .is_some(),
                     "--raise" => value
                         .split(',')
@@ -730,8 +749,19 @@ fn reach_suffix(row: &Row) -> String {
 
 /// The setting of a row in one word: `rotation`, `dense`, `classes`, `batched`,
 /// `batched-fused`, `auto ≤ d` (`auto ≤ d, pw ≥ e` with waves) or `planewave` (with ` ρ r`
-/// at another reach).
+/// at another reach), ending with `/rcr-boxes` or `/rcr-pairs` where the Rotation M2L's
+/// split is named (Helmholtz CH4.0i).
 fn setting_name(row: &Row) -> String {
+    let split = match row.rcr_split {
+        RcrSplit::Auto => "",
+        RcrSplit::Boxes => "/rcr-boxes",
+        RcrSplit::Pairs => "/rcr-pairs",
+    };
+    format!("{}{split}", m2l_setting_name(row))
+}
+
+/// [`setting_name`] without the Rotation M2L's split.
+fn m2l_setting_name(row: &Row) -> String {
     match row.m2l {
         HelmholtzM2l::Rotation => "rotation".into(),
         HelmholtzM2l::Dense => "dense".into(),
@@ -749,13 +779,17 @@ fn setting_name(row: &Row) -> String {
 }
 
 /// The M2L that ran on `level` of a row: `planewave iq`, the setting's tables (`dense`,
-/// `classes`, `batched`, `batched-fused`; Auto's are batched) or `rotation`.
+/// `classes`, `batched`, `batched-fused`; Auto's are batched), `rotation`, or `rotation by
+/// pairs` where a level call ran by pairs (Helmholtz CH4.0i).
 fn level_m2l(row: &Row, level: usize) -> String {
     if let Some(q) = row.plane_wave[level] {
         return format!("planewave i{}", q.iprec());
     }
     if !row.dense_levels[level] {
-        return "rotation".into();
+        return match row.rcr_by_pairs[level] {
+            true => "rotation by pairs".into(),
+            false => "rotation".into(),
+        };
     }
     match row.m2l {
         HelmholtzM2l::Classes => "classes".into(),
@@ -1240,10 +1274,18 @@ fn main() {
                 .iter()
                 .flat_map(|&n| arguments.c_leaves.iter().map(move |&c| (n, c)))
                 .collect();
-            let rules = trees
-                .iter()
-                .flat_map(|&tree| rules.iter().map(move |&rule| (tree, rule)));
-            for ((leaf_size, c_leaf), (empty_boxes, near_v, near_wx)) in rules {
+            // `--rcr-split` outermost (Helmholtz CH4.0i): no bit depends on it.
+            let mut runs_by_rule = Vec::new();
+            for &rcr in &arguments.rcr_splits {
+                for &tree in &trees {
+                    for &rule in &rules {
+                        runs_by_rule.push((rcr, tree, rule));
+                    }
+                }
+            }
+            let rules = runs_by_rule;
+            for (rcr_split, (leaf_size, c_leaf), (empty_boxes, near_v, near_wx)) in rules {
+                case.rcr_split = rcr_split;
                 case.max_points_per_leaf = leaf_size;
                 case.c_leaf = c_leaf;
                 case.empty_boxes = empty_boxes;

@@ -27,8 +27,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzM2l, LevelShape, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, VNear, Wavenumber, WavenumberKind, WxNear, auto_m2l_mul_add,
-    s7_degree,
+    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, VNear, Wavenumber, WavenumberKind, WxNear,
+    auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -664,6 +664,7 @@ fn helmholtz_accuracy_harness() {
     check_leaves(&world);
     check_near_wx(&world);
     check_block_budget(&world);
+    check_rcr_split(&world);
 }
 
 /// Helmholtz CH4.0e: the M2L's rotation blocks formed per V pair (a block budget of 0)
@@ -725,6 +726,42 @@ fn check_block_budget(world: &SimpleCommunicator) {
             "{steps} > {}",
             row_stored.build
         );
+    }
+}
+
+/// The Rotation M2L by pairs (Helmholtz CH4.0i) on W1 at kD = 30: `None` in `Case::new` (the
+/// library's `Auto`); by pairs at 2 threads the checksum and errors of by boxes, every level
+/// with V pairs reported by pairs, none by boxes.
+fn check_rcr_split(world: &SimpleCommunicator) {
+    let auto = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-3));
+    assert_eq!(auto.rcr_split, None, "Case::new's");
+    let boxes = Case {
+        rcr_split: Some(RcrSplit::Boxes),
+        ..auto.clone()
+    };
+    let pairs = Case {
+        rcr_split: Some(RcrSplit::Pairs),
+        ..auto.clone()
+    };
+    let problem = Problem::new(&auto);
+    let oracle = Oracle::sharded(complex_k(&auto), &problem, auto.gradients, 2, world);
+    let row_boxes = run(&boxes, &problem, &oracle, 2, world).expect("the FMM runs");
+    let row_pairs = run(&pairs, &problem, &oracle, 2, world).expect("the FMM runs");
+    let row_auto = run(&auto, &problem, &oracle, 2, world).expect("the FMM runs");
+    assert_eq!(row_auto.rcr_split, RcrSplit::Auto);
+    assert_eq!(row_boxes.rcr_split, RcrSplit::Boxes);
+    assert_eq!(row_pairs.rcr_split, RcrSplit::Pairs);
+    for l in 0..row_pairs.levels {
+        assert!(!row_boxes.rcr_by_pairs[l], "level {l} by pairs");
+        assert_eq!(
+            row_pairs.rcr_by_pairs[l],
+            row_pairs.v_pairs[l] > 0,
+            "level {l}"
+        );
+    }
+    for row in [&row_pairs, &row_auto] {
+        assert_eq!(row.checksum, row_boxes.checksum);
+        assert_eq!(row.errors, row_boxes.errors);
     }
 }
 
