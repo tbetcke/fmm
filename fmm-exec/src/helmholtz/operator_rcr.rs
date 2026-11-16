@@ -10,7 +10,9 @@
 //!
 //! 1. each pair writes its contribution, the terms `HelmholtzTables::m2l` would add to the
 //!    target's local (`HelmholtzTables::m2l_contribution`), into its own slot, in any order
-//!    on any thread;
+//!    on any thread: the chunk's pairs in the order of their polar angle and distance
+//!    (`HelmholtzTables::m2l_classes`), so that a thread's consecutive pairs share their
+//!    y-blocks (kept in its scratch where they are formed per call) and coaxial table;
 //! 2. each target of the chunk adds its pairs' slots in its row's order
 //!    (`nd_fmm_tables::helmholtz::add_m2l_contribution`).
 //!
@@ -75,6 +77,9 @@ pub struct RcrCounts {
 /// allocates.
 pub(super) struct RcrBuffer<T> {
     values: Vec<T>,
+    /// A chunk's pairs (from its first) in the order of their slots, and each pair's slot.
+    order: Vec<u32>,
+    slot_of: Vec<u32>,
     /// The byte bound of `values`, or `None` for every pair of a level.
     pub(super) bound: Option<usize>,
     /// Each level's V pairs and targets with a V row on this rank, if the plan named them.
@@ -89,6 +94,8 @@ impl<T> Default for RcrBuffer<T> {
     fn default() -> Self {
         Self {
             values: Vec::new(),
+            order: Vec::new(),
+            slot_of: Vec::new(),
             bound: Some(DEFAULT_RCR_BUFFER),
             levels: Vec::new(),
             split: RcrSplit::Auto,
@@ -118,19 +125,23 @@ impl<T: SimdScalar> RcrBuffer<T> {
         rotation: impl Fn(usize) -> bool,
         size: impl Fn(usize) -> usize,
     ) {
-        let mut values = 0;
+        let (mut values, mut slots) = (0, 0);
         for (l, &(pairs, targets)) in self.levels.iter().enumerate() {
             if l >= 2 && pairs > 0 && rotation(l) && rcr_by_pairs(self.split, targets, threads) {
-                values = values.max(self.capacity(pairs, size(l), threads) * size(l));
+                let capacity = self.capacity(pairs, size(l), threads);
+                values = values.max(capacity * size(l));
+                slots = slots.max(capacity);
             }
         }
         self.values = vec![T::zero(); values];
+        self.order = vec![0; slots];
+        self.slot_of = vec![0; slots];
         self.peak = self.peak.max(self.bytes());
     }
 
     /// Its bytes.
     pub(super) fn bytes(&self) -> usize {
-        self.values.len() * size_of::<T>()
+        self.values.len() * size_of::<T>() + 4 * (self.order.len() + self.slot_of.len())
     }
 }
 
@@ -164,9 +175,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let buffer = &mut self.rcr_buffer;
         let npairs = pairs.len();
         let capacity = buffer.capacity(npairs, size, threads);
-        if buffer.values.len() < capacity * size {
+        if buffer.values.len() < capacity * size || buffer.order.len() < capacity {
             // The plan did not size the buffer for this level.
-            buffer.values.resize(capacity * size, T::zero());
+            buffer
+                .values
+                .resize(buffer.values.len().max(capacity * size), T::zero());
+            buffer.order.resize(buffer.order.len().max(capacity), 0);
+            buffer.slot_of.resize(buffer.slot_of.len().max(capacity), 0);
             buffer.peak = buffer.peak.max(buffer.bytes());
         }
         if buffer.counts.level_calls.len() <= level {
@@ -179,12 +194,27 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         while lo < npairs {
             let hi = (lo + capacity).min(npairs);
             buffer.counts.chunks += 1;
+            // The slots of the pairs lo..hi by angle and distance; no bit depends on it.
+            let n = hi - lo;
+            let (order, slot_of) = (&mut buffer.order[..n], &mut buffer.slot_of[..n]);
+            for (i, o) in order.iter_mut().enumerate() {
+                *o = i as u32;
+            }
+            order.sort_unstable_by_key(|&i| {
+                (
+                    kernel.tables.m2l_classes(offsets[lo + i as usize] as usize),
+                    i,
+                )
+            });
+            for (j, &i) in order.iter().enumerate() {
+                slot_of[i as usize] = j as u32;
+            }
+            let (order, slot_of) = (&*order, &*slot_of);
             // 1. The contributions of the pairs lo..hi, each into its slot.
-            self.execution.chunks(
-                &mut buffer.values[..(hi - lo) * size],
-                size,
-                |i, slot, scratch| {
-                    let (s, d) = (sources[lo + i] as usize, offsets[lo + i] as usize);
+            self.execution
+                .chunks(&mut buffer.values[..n * size], size, |j, slot, scratch| {
+                    let g = lo + order[j] as usize;
+                    let (s, d) = (sources[g] as usize, offsets[g] as usize);
                     kernel.tables.m2l_contribution(
                         level,
                         d,
@@ -194,12 +224,11 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                         m,
                         &mut scratch.tables,
                     );
-                },
-            );
+                });
             // 2. The targets whose rows meet lo..hi add their pairs' slots in row order.
             let first = row_offsets.partition_point(|&r| (r as usize) <= lo) - 1;
             let last = row_offsets.partition_point(|&r| (r as usize) < hi);
-            let slots = &buffer.values[..(hi - lo) * size];
+            let slots = &buffer.values[..n * size];
             self.execution.chunks(
                 &mut locals[first * size..last * size],
                 size,
@@ -216,7 +245,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                             offsets[g] as usize,
                             "the offset index of a V-list entry disagrees with its keys"
                         );
-                        add_m2l_contribution(&slots[(g - lo) * size..(g - lo + 1) * size], local);
+                        let j = slot_of[g - lo] as usize;
+                        add_m2l_contribution(&slots[j * size..(j + 1) * size], local);
                     }
                 },
             );

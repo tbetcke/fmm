@@ -366,11 +366,17 @@ struct OffsetKeys<T> {
 
 /// The caller-owned scratch of the applications: one expansion of two planes at the
 /// largest degree twice, and the y-blocks of one polar angle with their work space.
+///
+/// The y-blocks formed per call are kept with their degree and angle (Helmholtz CH4.0i), so
+/// that the next M2L of the same degree and angle reads them instead of forming them
+/// again: the same function of the same inputs, so the same bits.
 pub struct HelmholtzScratch<T: RealScalar> {
     rotated: Vec<T>,
     work: Vec<T>,
     blocks: Vec<T>,
     block_scratch: BlockScratch<T>,
+    /// The degree and (cos θ, sin θ) of the blocks in `blocks`, if any.
+    held: Option<(usize, T, T)>,
 }
 
 impl<T: RealScalar> HelmholtzTables<T> {
@@ -733,6 +739,14 @@ impl<T: RealScalar> HelmholtzTables<T> {
         self.levels.iter().map(|l| l.m2l.len()).max().unwrap_or(0)
     }
 
+    /// The polar-angle and distance classes of the V-list offset `d` (Helmholtz CH4.0i): M2L
+    /// pairs of one angle use one y-block set and pairs of one distance one coaxial table, so
+    /// a caller may order pairs by them. Panics if d ≥ 316.
+    pub fn m2l_classes(&self, d: usize) -> (usize, usize) {
+        let keys = &self.offsets[d];
+        (keys.angle, keys.distance)
+    }
+
     /// The number of polar-angle classes of the 316 offsets, 49, one y-block set each.
     pub fn m2l_polar_angles(&self) -> usize {
         self.m2l_angles.len()
@@ -766,6 +780,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
             work: vec![T::zero(); 2 * len],
             blocks: vec![T::zero(); compact_blocks_len(self.p_max)],
             block_scratch: BlockScratch::new(self.p_max),
+            held: None,
         }
     }
 
@@ -991,13 +1006,18 @@ impl<T: RealScalar> HelmholtzTables<T> {
             work,
             blocks: block_buffer,
             block_scratch,
+            held,
         } = scratch;
         let blocks: &[T] = match blocks {
             Blocks::Stored(blocks) => blocks,
             Blocks::PerCall((c, s)) => {
                 let p = p_in.max(p_out);
                 let out = &mut block_buffer[..compact_blocks_len(p)];
-                y_blocks(p, c, s, out, block_scratch);
+                // Formed again unless the scratch holds this degree's and angle's.
+                if *held != Some((p, c, s)) {
+                    y_blocks(p, c, s, out, block_scratch);
+                    *held = Some((p, c, s));
+                }
                 out
             }
         };

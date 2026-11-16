@@ -123,3 +123,46 @@ fn a_row_added_in_order_is_successive_m2l_calls() {
         assert_bits(&got, &expected, &format!("{name}: the row"));
     }
 }
+
+/// The y-blocks a scratch keeps between per-call M2Ls (Helmholtz CH4.0i): every offset of two
+/// levels of different degrees, in the order of `m2l_classes` (angle, then distance), in
+/// reverse, and alternating between the levels with one scratch, each M2L bit for bit the
+/// same M2L with a fresh scratch.
+#[test]
+fn kept_blocks_give_the_bits_of_fresh_ones() {
+    let tables = HelmholtzTables::<f64>::build(Complex::new(6.0, 0.5), &[0, 0, 7, 6], 0);
+    assert!(!tables.m2l_blocks_stored(2) && !tables.m2l_blocks_stored(3));
+    let one = |level: usize, d: usize, scratch: &mut _| {
+        let q = tables.m2l_degree(level);
+        let mut y = vec![0.0; 2 * Layout::new(q).len()];
+        tables.m2l(level, d, &input(q, 2, d as u64), 2, &mut y, 1, scratch);
+        y
+    };
+    let mut by_class: Vec<usize> = (0..M2L_OFFSET_COUNT).collect();
+    by_class.sort_by_key(|&d| tables.m2l_classes(d));
+    assert!(
+        by_class
+            .windows(2)
+            .any(|w| tables.m2l_classes(w[0]).0 == tables.m2l_classes(w[1]).0)
+    );
+    let reversed: Vec<usize> = by_class.iter().rev().copied().collect();
+    let mut kept = tables.scratch();
+    for order in [&by_class, &reversed] {
+        for &d in order {
+            for level in [2, 3] {
+                let want = one(level, d, &mut tables.scratch());
+                assert_bits(
+                    &one(level, d, &mut kept),
+                    &want,
+                    &format!("level {level}, d = {d}"),
+                );
+                // The same angle again on the same level, from the kept blocks.
+                assert_bits(
+                    &one(level, d, &mut kept),
+                    &want,
+                    &format!("again, level {level}, d = {d}"),
+                );
+            }
+        }
+    }
+}
