@@ -184,6 +184,8 @@ builds is again the shared steps.
 
 ## 6. Questions for sign-off
 
+Signed off on 2026-11-16 (the user on #223: "Yes to both questions"): both as recommended below.
+
 1. **The acceptance as read.** *Recommended*: met. The tables are bit for bit; the plane-wave
    tables' part of the build fell to 0.05–0.42 of CH4.0h's; the build of CH3.6's cases under
    1 s is at most half CH4.0h's on 8 of 51 case-ε pairs (locust) and 12 of 43 (Kathleen), and

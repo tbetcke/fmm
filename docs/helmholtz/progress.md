@@ -3353,3 +3353,5 @@ request, using this template:
 - Laplace: not touched (`nd-fmm-tables`' Laplace tables, `nd-fmm-exec`, `nd-fmm-plan`,
   `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI list pass).
 - Follow-ups: none new; CH4.0k's line notes it is now most of the small cases' build.
+- Sign-off (the user on #223, 2026-11-16: "Yes to both questions"): (1) the acceptance met as read; (2)
+  CH4.0k stays off the priority list. Next: CHA.1–CHA.3.

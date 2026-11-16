@@ -153,3 +153,4 @@ hashes in release. No Laplace path changed, so no D9 runs.
 ## Open questions
 
 The report's §6: (1) the acceptance as read; (2) CH4.0k's place.
+Signed off 2026-11-16 (the user on #223: "Yes to both questions"): both as recommended.

@@ -9,7 +9,7 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0i are merged, and CH4.0j
-(PR open, waiting for its sign-off) builds the exponential M2L's tables within a level in parts,
+(#223, signed off, waiting for the merge) builds the exponential M2L's tables within a level in parts,
 bit for bit: their build part 0.05–0.42 of CH4.0h's at one rank per node; the builds of CH3.6's
 small cases are now mostly the shared steps (CH4.0k, off the list). HR, H0, H1 and H2 are still
 open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CHA.1–CHA.3, then CH1.3d.
@@ -83,7 +83,8 @@ item 6, CH4.0k off the list.
 10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
-CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list); CH4.0l (added at CH4.0i;
+CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list; kept off at CH4.0j, on
+#223); CH4.0l (added at CH4.0i;
 the user, 2026-11-16, on #222: off the list);
 CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
@@ -642,8 +643,9 @@ task's full line is in its record or report and its progress entry
   a part (`nd-fmm-tables`), the tables `main`'s bits: their build part 0.05–0.29 of CH4.0h's on
   locust 1 × 72, 0.08–0.42 on Kathleen 1 × 40; the build of CH3.6's cases under 1 s at most half
   on 8 of 51 and 12 of 43 case-ε pairs, the rest above half without any plane-wave tables (the
-  shared steps, Batched's matrices) or near that floor. *Sign-off:* pending (the PR's questions
-  1–2: the acceptance as read; CH4.0k's place).
+  shared steps, Batched's matrices) or near that floor. *Sign-off:* the PR's questions 1–2 as
+  recommended (the user on #223, 2026-11-16: "Yes to both questions"): the acceptance met as read; CH4.0k
+  stays off the list.
 - [ ] **CH4.0k The shared build steps on the node.** Added on 2026-11-16 at CH4.0h (report §3,
   §6): the plan with its rules (`Plan::with_rules_on`), the routes (`Points::route`) and the
   octree run serially in each rank: 2.0–2.4 s of W1 at kD = 500's build at one rank per node,
