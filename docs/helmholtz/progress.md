@@ -3310,3 +3310,46 @@ request, using this template:
   `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI list pass).
 - Follow-ups: CH4.0l (the RCR pair: a class's pairs at once, and vectorised chains), roadmap
   line added, off the list (question 3).
+
+## 2026-11-16: CH4.0j The exponential M2L's tables within a level in parts
+- Done:
+  - `nd-fmm-tables` (`helmholtz::plane_wave` only): `QuadratureNodes` (a quadrature's nodes, each
+    node's counts a part), `LevelLayout` and `LevelPart` (a `PlaneWaveLevel`'s node values and
+    frames' rotation blocks as parts), `ShiftOffsets` and `build_levels` in `merge` (three maps
+    of the caller's `Parts`, every level's parts together); a level's shift tables kept one
+    allocation each (`Shifts`, its `Debug` the flat list's text). `Quadrature::with_reach`,
+    `PlaneWaveLevel::new`, `MergeLevel::with_reach` and `PlaneWaveM2l::build_with_reach_on` run
+    them; no public API, value or layout changed; `nd-fmm-exec` unchanged (its pool already
+    reaches `build_with_reach_on`).
+  - Runs (locust 2026-11-16, 1 × 72; Kathleen job 634435, node-c11b-047, 1 × 40): a level's
+    build by part on one thread (quadrature counts 51–76 %, shift tables 20–45 %,
+    `PlaneWaveLevel` 1–11 %); CH3.6's matrix at one rank per node, `main` (45dcc10) and the
+    branch in turn, 76 launches per machine, every checksum CH4.0h's. The plane-wave tables'
+    build part 0.05–0.29 of CH4.0h's on locust (2–9 ms), 0.08–0.42 on Kathleen (4–29 ms); the
+    build of the case-ε pairs under 1 s at most half CH4.0h's on 8 of 51 (locust) and 12 of 43
+    (Kathleen), the others above half even without plane-wave tables (39, 28: the plan, routes
+    and octree, Batched's matrices at 10⁻³) or 0.05–0.11 above that floor (4, 3). On locust
+    W1 at kD = 100's remaining 6.5 ms: 2.0 ms the first parse of FMM3D's quadrature file.
+    Report `fmm-validate/results/helmholtz-ch4-0j.md`; raw outputs in
+    `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0j/`; `tools/helmholtz/ch4-0j-runs.sh`,
+    `ch4-0j-tables.py`.
+  - Found: the timing test's first map started its threads per call (7 ms at 72 threads on
+    locust whatever the level); dropped, the time on many threads is the FMM's pool's.
+- Self-review (subagent): no code defect; the bit identity read through value by value. Taken:
+  the report's distance from the floor (0.05–0.07 and 0.08–0.11, not "within 0.06"), the case
+  above ½ without its tables, the parts' shares, iprec 1 named in the tests (the rule gives
+  iprec 2 at 10⁻³), the oracle's reach stated (the hashes hold the steps to `main`).
+- Tests: `nd-fmm-tables` `tests/helmholtz/parts.rs`: the plane-wave tables on threads against
+  serial (seven cases: real and complex k̂₀, the rule at 10⁻³, 10⁻⁶ and 10⁻⁸, iprec 1 named,
+  reach 4), each level in parts against the level by its public steps, the ignored
+  `time_a_levels_parts`; `print_the_hashes` `main`'s and CH4.0h's (plane waves
+  bc43acd5206e0682, 2b62dea0a7d6d982, 38d11660252af3c9, b9419e1bdc4071ca).
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default
+  and workspace tests at opt-level 1 (1,275 and 1,389 passed), the MPI list at 2 and 4 ranks
+  (24 of 24); `nd-fmm-tables`' `tests/helmholtz` at opt-level 0 37.8 s at load 12 (36.7 s);
+  `cargo test -p nd-fmm-tables --release -- --ignored` (19 passed, 38 min). Nothing pending.
+- Decisions: questions for sign-off (the PR, report §6): (1) the acceptance as read, met; (2)
+  CH4.0k unchanged, off the priority list.
+- Laplace: not touched (`nd-fmm-tables`' Laplace tables, `nd-fmm-exec`, `nd-fmm-plan`,
+  `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI list pass).
+- Follow-ups: none new; CH4.0k's line notes it is now most of the small cases' build.
