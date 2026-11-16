@@ -566,6 +566,13 @@ stored, formed per call and formed per call in the pair split's order, and `y_bl
 and errors on W1 at kD = 30. `tools/helmholtz/ch4-0i-runs.sh` runs the task's stages. Its
 report is `results/helmholtz-ch4-0i.md`.
 
+Helmholtz CH4.0j (the exponential M2L's tables within a level in parts;
+docs/helmholtz/tasks/CH4.0j.md) changed no harness code: `tools/helmholtz/ch4-0j-runs.sh` runs
+`nd-fmm-tables`' ignored `time_a_levels_parts` (`parts`) and CH3.6's matrix at one rank per
+node, `main` and the branch in turn (`matrix`, `MAIN`), and `ch4-0j-tables.py` compares the
+builds, their plane-wave tables and the checksums with CH4.0h's launches. Its report is
+`results/helmholtz-ch4-0j.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

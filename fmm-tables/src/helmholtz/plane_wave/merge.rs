@@ -20,6 +20,20 @@
 //! T. The product of a slot's and a child's shift is the pair's to rounding
 //! (`tests/helmholtz/plane_wave_merge.rs`).
 //!
+//! # The build in parts
+//!
+//! A level's tables are its quadrature (the α and Fourier counts of each node, three Bessel
+//! tails each: about 55–60 % of a level's serial build), its [`PlaneWaveLevel`] (each
+//! node's cos and sin of mαⱼ and factors Pₖ(n, m), and the two frames' rotation blocks)
+//! and its 152 shift tables (104 distinct source shifts and 48 child shifts, W complex
+//! exponentials each: about 40 %). [`PlaneWaveM2l::build_with_reach_on`] builds them in
+//! three maps of a caller's [`Parts`], every level's parts in one map (Helmholtz CH4.0j;
+//! one part per level since CH4.0h): every node's counts; every node's values and every
+//! frame's blocks; every shift table. Each part is the serial build's function of the
+//! level's inputs and its number alone, and the results are put together in part order (the
+//! shift tables kept as computed, one allocation each), so the tables are the serial
+//! build's bit for bit on any map; [`MergeLevel::new`] is the same build on [`Serial`].
+//!
 //! # The quadrature of a level
 //!
 //! Measured in the FMM (Helmholtz CH6.1e, `fmm-validate/results/helmholtz-ch6-1e.md`): on
@@ -73,8 +87,8 @@
 
 use nd_fmm_math::{Complex, RealScalar};
 
-use super::pair::PlaneWaveLevel;
-use super::quadrature::{Precision, Quadrature, RHO_MAX, assert_reach, domain_of};
+use super::pair::{LevelLayout, PlaneWaveLevel};
+use super::quadrature::{Precision, Quadrature, QuadratureNodes, RHO_MAX, assert_reach, domain_of};
 use crate::parts::{Parts, Serial};
 use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOTS};
 
@@ -185,6 +199,25 @@ fn level_k_hat(k_root: Complex<f64>, level: usize) -> Complex<f64> {
     k_root * (0.5f64).powi(level as i32)
 }
 
+/// A level's shift tables, each its 2W reals in an allocation of its own, so that a build
+/// in parts keeps each part's table as computed (Helmholtz CH4.0j). Its `Debug` lists every
+/// table's values in order, as one `Vec` of them all.
+#[derive(Clone)]
+struct Shifts<T>(Vec<Vec<T>>);
+
+impl<T> Shifts<T> {
+    /// The reals of every table.
+    fn values(&self) -> usize {
+        self.0.iter().map(Vec::len).sum()
+    }
+}
+
+impl<T: core::fmt::Debug> core::fmt::Debug for Shifts<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_list().entries(self.0.iter().flatten()).finish()
+    }
+}
+
 /// One level's exponential M2L by merge and shift: its precision, its [`PlaneWaveLevel`]
 /// and the merge's shift factors (the [module documentation](self)).
 #[derive(Clone, Debug)]
@@ -192,11 +225,11 @@ pub struct MergeLevel<T: RealScalar> {
     precision: Precision,
     tables: PlaneWaveLevel<T>,
     /// The distinct source shifts, 2W reals each.
-    source_shifts: Vec<T>,
+    source_shifts: Shifts<T>,
     /// Per direction and slot, the index of its source shift, or `u16::MAX`.
     source_index: Vec<[u16; SLOTS]>,
     /// Per direction and child, its child shift, 2W reals each.
-    child_shifts: Vec<T>,
+    child_shifts: Shifts<T>,
 }
 
 impl<T: RealScalar> MergeLevel<T> {
@@ -231,47 +264,9 @@ impl<T: RealScalar> MergeLevel<T> {
         geometry: &MergeGeometry,
         reach: f64,
     ) -> Option<Self> {
-        let quadrature = Quadrature::with_reach(k_hat * 2.0, precision, reach)?;
-        let tables = PlaneWaveLevel::new(k_hat, p, &quadrature);
-        let w = tables.wave_len();
-        let mut factors = vec![T::zero(); w];
-        let mut keys: Vec<([i64; 3], bool)> = Vec::new();
-        let mut source_shifts = Vec::new();
-        let mut source_index = vec![[u16::MAX; SLOTS]; 6];
-        for direction in Direction::ALL {
-            let up = direction.is_up();
-            for accumulator in geometry.accumulators(direction) {
-                for &slot in &accumulator.slots {
-                    let a = geometry::slot_coordinates(slot as usize);
-                    // In half box widths, from the slot's centre to the parent's.
-                    let key = (direction.rotate(a.map(|x| 5 - 2 * x)), up);
-                    let index = keys.iter().position(|&k| k == key).unwrap_or_else(|| {
-                        keys.push(key);
-                        tables.shift_factors(key.0.map(|x| x as f64 / 2.0), up, &mut factors);
-                        source_shifts.extend_from_slice(&factors);
-                        keys.len() - 1
-                    });
-                    source_index[direction.index()][slot as usize] =
-                        u16::try_from(index).expect("fewer than 2¹⁶ shifts");
-                }
-            }
-        }
-        let mut child_shifts = Vec::with_capacity(6 * CHILDREN * w);
-        for direction in Direction::ALL {
-            for child in 0..CHILDREN {
-                let b = geometry::child_bits(child);
-                let d = direction.rotate(b.map(|x| (2 * x - 1) as f64 / 2.0));
-                tables.shift_factors(d, direction.is_up(), &mut factors);
-                child_shifts.extend_from_slice(&factors);
-            }
-        }
-        Some(Self {
-            precision,
-            tables,
-            source_shifts,
-            source_index,
-            child_shifts,
-        })
+        build_levels(&[Some((k_hat, p, precision))], geometry, reach, &Serial)
+            .pop()
+            .flatten()
     }
 
     /// The precision of its quadrature.
@@ -288,28 +283,23 @@ impl<T: RealScalar> MergeLevel<T> {
     /// slot has that direction.
     pub fn source_shift(&self, direction: Direction, slot: usize) -> Option<&[T]> {
         let index = self.source_index[direction.index()][slot];
-        (index != u16::MAX).then(|| {
-            let w = self.tables.wave_len();
-            &self.source_shifts[index as usize * w..(index as usize + 1) * w]
-        })
+        (index != u16::MAX).then(|| self.source_shifts.0[index as usize].as_slice())
     }
 
     /// The distinct source shifts.
     pub fn source_shift_count(&self) -> usize {
-        self.source_shifts.len() / self.tables.wave_len()
+        self.source_shifts.0.len()
     }
 
     /// The child shift of `child` in `direction` (2W reals).
     pub fn child_shift(&self, direction: Direction, child: usize) -> &[T] {
-        let w = self.tables.wave_len();
-        let at = (direction.index() * CHILDREN + child) * w;
-        &self.child_shifts[at..at + w]
+        &self.child_shifts.0[direction.index() * CHILDREN + child]
     }
 
     /// The bytes of its tables and shifts.
     pub fn bytes(&self) -> usize {
         self.tables.bytes()
-            + (self.source_shifts.len() + self.child_shifts.len()) * size_of::<T>()
+            + (self.source_shifts.values() + self.child_shifts.values()) * size_of::<T>()
             + self.source_index.len() * size_of::<[u16; SLOTS]>()
     }
 }
@@ -357,8 +347,11 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
         Self::build_with_reach_on(k_root, degrees, precisions, reach, &Serial)
     }
 
-    /// As [`build_with_reach`](Self::build_with_reach), each level's tables a part of
-    /// `parts` (Helmholtz CH4.0h): the same tables bit for bit.
+    /// As [`build_with_reach`](Self::build_with_reach), the tables in parts of `parts`: the
+    /// same tables bit for bit. Each level's quadrature counts by node, its
+    /// [`PlaneWaveLevel`] and its shift tables one by one, every level's together (Helmholtz
+    /// CH4.0j; each level one part since CH4.0h): the module documentation, "The build in
+    /// parts".
     ///
     /// # Panics
     ///
@@ -383,17 +376,12 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
             "no exponential M2L on levels 0 and 1: they have no V list"
         );
         let geometry = MergeGeometry::new();
-        let levels = parts.map(degrees.len(), &|l| {
-            precisions[l].and_then(|precision| {
-                MergeLevel::with_reach(
-                    level_k_hat(k_root, l),
-                    degrees[l],
-                    precision,
-                    &geometry,
-                    reach,
-                )
-            })
-        });
+        let specs: Vec<_> = precisions
+            .iter()
+            .enumerate()
+            .map(|(l, precision)| precision.map(|q| (level_k_hat(k_root, l), degrees[l], q)))
+            .collect();
+        let levels = build_levels(&specs, &geometry, reach, parts);
         Self { levels, geometry }
     }
 
@@ -421,6 +409,180 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
     pub fn bytes(&self) -> usize {
         self.levels.iter().flatten().map(MergeLevel::bytes).sum()
     }
+}
+
+/// The merge's shift offsets, the same on every level: the distinct source shifts (rotated
+/// d in half box widths, up), in the order the directions' accumulators' slots first name
+/// them, each direction's slots' indices into them, and the child shifts (d in box widths,
+/// up), direction by direction, child by child.
+struct ShiftOffsets {
+    sources: Vec<([i64; 3], bool)>,
+    source_index: Vec<[u16; SLOTS]>,
+    children: Vec<([f64; 3], bool)>,
+}
+
+impl ShiftOffsets {
+    fn new(geometry: &MergeGeometry) -> Self {
+        let mut sources: Vec<([i64; 3], bool)> = Vec::new();
+        let mut source_index = vec![[u16::MAX; SLOTS]; 6];
+        for direction in Direction::ALL {
+            let up = direction.is_up();
+            for accumulator in geometry.accumulators(direction) {
+                for &slot in &accumulator.slots {
+                    let a = geometry::slot_coordinates(slot as usize);
+                    // In half box widths, from the slot's centre to the parent's.
+                    let key = (direction.rotate(a.map(|x| 5 - 2 * x)), up);
+                    let index = sources.iter().position(|&k| k == key).unwrap_or_else(|| {
+                        sources.push(key);
+                        sources.len() - 1
+                    });
+                    source_index[direction.index()][slot as usize] =
+                        u16::try_from(index).expect("fewer than 2¹⁶ shifts");
+                }
+            }
+        }
+        let mut children = Vec::with_capacity(6 * CHILDREN);
+        for direction in Direction::ALL {
+            for child in 0..CHILDREN {
+                let b = geometry::child_bits(child);
+                let d = direction.rotate(b.map(|x| (2 * x - 1) as f64 / 2.0));
+                children.push((d, direction.is_up()));
+            }
+        }
+        Self {
+            sources,
+            source_index,
+            children,
+        }
+    }
+
+    /// The shift tables per level: the source shifts, then the child shifts.
+    fn len(&self) -> usize {
+        self.sources.len() + self.children.len()
+    }
+
+    /// Shift `i` of [`len`](Self::len): its d in box widths and up.
+    fn shift(&self, i: usize) -> ([f64; 3], bool) {
+        match self.sources.get(i) {
+            Some(&(d, up)) => (d.map(|x| x as f64 / 2.0), up),
+            None => self.children[i - self.sources.len()],
+        }
+    }
+}
+
+/// The merge's tables of the levels `specs` names ((k̂, p, precision); `None` none), on
+/// `parts` (the module documentation, "The build in parts"): every level with a
+/// precision whose κ = 2k̂ lies in the tables, `None` elsewhere.
+fn build_levels<T: RealScalar>(
+    specs: &[Option<(Complex<f64>, usize, Precision)>],
+    geometry: &MergeGeometry,
+    reach: f64,
+    parts: &impl Parts,
+) -> Vec<Option<MergeLevel<T>>> {
+    assert_reach(reach);
+    let nodes: Vec<Option<QuadratureNodes>> = specs
+        .iter()
+        .map(|spec| {
+            spec.and_then(|(k_hat, _, precision)| {
+                QuadratureNodes::new(k_hat * 2.0, precision, reach)
+            })
+        })
+        .collect();
+    // 1. Every level's nodes' counts.
+    let node_parts: Vec<(usize, usize)> = nodes
+        .iter()
+        .enumerate()
+        .flat_map(|(l, n)| (0..n.as_ref().map_or(0, QuadratureNodes::len)).map(move |k| (l, k)))
+        .collect();
+    let counts = parts.map(node_parts.len(), &|i| {
+        let (l, k) = node_parts[i];
+        nodes[l]
+            .as_ref()
+            .expect("a part of a level with nodes")
+            .counts(k)
+    });
+    let mut counts = counts.into_iter();
+    let quadratures: Vec<Option<Quadrature>> = nodes
+        .into_iter()
+        .map(|n| {
+            n.map(|n| {
+                let s = n.len();
+                n.with_counts(counts.by_ref().take(s).collect())
+            })
+        })
+        .collect();
+    // 2. Every level's conversions and pair translation: each node's values, each frame's
+    // rotation blocks.
+    let layouts: Vec<Option<LevelLayout>> = quadratures
+        .iter()
+        .zip(specs)
+        .map(|(quadrature, spec)| {
+            quadrature.as_ref().map(|quadrature| {
+                let (k_hat, p, _) = spec.expect("a level with a quadrature has a spec");
+                LevelLayout::of_quadrature(k_hat, p, quadrature)
+            })
+        })
+        .collect();
+    let level_parts: Vec<(usize, usize)> = layouts
+        .iter()
+        .enumerate()
+        .flat_map(|(l, layout)| {
+            (0..layout.as_ref().map_or(0, LevelLayout::parts)).map(move |i| (l, i))
+        })
+        .collect();
+    let values = parts.map(level_parts.len(), &|j| {
+        let (l, i) = level_parts[j];
+        layouts[l]
+            .as_ref()
+            .expect("a part of a level with a layout")
+            .part::<T>(i)
+    });
+    let mut values = values.into_iter();
+    let tables: Vec<Option<PlaneWaveLevel<T>>> = layouts
+        .into_iter()
+        .map(|layout| {
+            layout.map(|layout| {
+                let n = layout.parts();
+                layout.with_parts(values.by_ref().take(n).collect())
+            })
+        })
+        .collect();
+    // 3. Every level's shift tables.
+    let offsets = ShiftOffsets::new(geometry);
+    let shift_parts: Vec<(usize, usize)> = tables
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.is_some())
+        .flat_map(|(l, _)| (0..offsets.len()).map(move |i| (l, i)))
+        .collect();
+    let shifts = parts.map(shift_parts.len(), &|j| {
+        let (l, i) = shift_parts[j];
+        let level = tables[l].as_ref().expect("a part of a level with tables");
+        let (d, up) = offsets.shift(i);
+        let mut factors = vec![T::zero(); level.wave_len()];
+        level.shift_factors(d, up, &mut factors);
+        factors
+    });
+    let mut shifts = shifts.into_iter();
+    let sources = offsets.sources.len();
+    tables
+        .into_iter()
+        .zip(specs)
+        .map(|(tables, spec)| {
+            tables.map(|tables| {
+                let precision = spec.expect("a level with tables has a spec").2;
+                let source_shifts = Shifts(shifts.by_ref().take(sources).collect());
+                let child_shifts = Shifts(shifts.by_ref().take(offsets.children.len()).collect());
+                MergeLevel {
+                    precision,
+                    tables,
+                    source_shifts,
+                    source_index: offsets.source_index.clone(),
+                    child_shifts,
+                }
+            })
+        })
+        .collect()
 }
 
 /// `v` ⊙= `factors` value by value, complex, on split planes of equal length: per value

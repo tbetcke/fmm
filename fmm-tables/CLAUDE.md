@@ -15,7 +15,8 @@ CH6.1c (`helmholtz::plane_wave::pair`, the exponential M2L's conversions, shifts
 translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1d
 (`helmholtz::plane_wave::merge`, the merge's shifts and each level's quadrature), the
 rule of which Helmholtz CH6.1e measured; Helmholtz CH4.0h (`parts`, the parts of a build on
-a caller's threads).
+a caller's threads); Helmholtz CH4.0j (the exponential M2L's tables in parts within a
+level).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -182,12 +183,22 @@ a caller's threads).
   translations or none, the levels with M2L tables and with stored blocks; and
   `set_m2l_blocks`), `DenseM2l`, `BatchedM2l` and `ClassM2l::build_on` (their f64 tables
   now hold the M2L of their own levels alone, no translations) and
-  `PlaneWaveM2l::build_with_reach_on`. `tests/helmholtz/parts.rs` checks every build on a
-  map that runs the parts in reverse on three threads against the serial build, bit for bit
+  `PlaneWaveM2l::build_with_reach_on` (since Helmholtz CH4.0j within a level too, every
+  level's parts in three maps: each node's quadrature counts (`QuadratureNodes`), each
+  node's values and each frame's rotation blocks (`LevelLayout`), each shift table, the
+  shift tables kept one allocation each; `merge`'s module docs, "The build in parts").
+  `tests/helmholtz/parts.rs` checks every build on a map that runs the parts in reverse on
+  three threads against the serial build, bit for bit
   through every application (and the matrices, and the plane-wave tables' `Debug` text),
   the restricted builds' M2L against the full build's, the refusals, and the blocks of
   named levels; its ignored `print_the_hashes` prints the applications' hashes, which were
-  the same before and after the change on the M6 (docs/helmholtz/tasks/CH4.0h.md).
+  the same before and after the change on the M6 (docs/helmholtz/tasks/CH4.0h.md; again at
+  CH4.0j, docs/helmholtz/tasks/CH4.0j.md). Since CH4.0j it also checks every level of the
+  exponential M2L built in parts against the level formed from the public steps one by one
+  (`every_level_in_parts_is_the_level_by_its_steps`; the steps run the same node and level
+  parts, so the hashes are what hold them to the build before), and its ignored
+  `time_a_levels_parts` prints a level's build by part on one thread (no time asserted; the time on many threads
+  is the FMM's, `helmholtz_accuracy`'s build part "plane-wave tables").
 - Generic over T: RealScalar. Allocate only in builders and constructors, never in
   apply functions: their temporaries come from caller-owned scratch.
 - The octant and offset order are restated here from §3.12, not imported from

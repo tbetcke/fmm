@@ -8,11 +8,11 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0h are merged, and CH4.0i
-(#222, signed off, waiting for the merge) runs the coarse RCR levels by pairs, bit for bit, by
-degree under `Auto`: level 2 of W1 at kD = 500 0.55–0.69× by boxes at one and two ranks per node
-and 0.23–0.40× at more; CH4.0l (the pair itself) off the list. HR, H0, H1 and H2 are still open;
-of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0j, then CHA.1–CHA.3.
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0i are merged, and CH4.0j
+(#223, signed off, waiting for the merge) builds the exponential M2L's tables within a level in parts,
+bit for bit: their build part 0.05–0.42 of CH4.0h's at one rank per node; the builds of CH3.6's
+small cases are now mostly the shared steps (CH4.0k, off the list). HR, H0, H1 and H2 are still
+open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CHA.1–CHA.3, then CH1.3d.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -83,7 +83,8 @@ item 6, CH4.0k off the list.
 10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
-CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list); CH4.0l (added at CH4.0i;
+CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list; kept off at CH4.0j, on
+#223); CH4.0l (added at CH4.0i;
 the user, 2026-11-16, on #222: off the list);
 CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
@@ -636,21 +637,23 @@ task's full line is in its record or report and its progress entry
   Helmholtz only. *Needs:* CH4.0i. *Machines:* Kathleen, locust. Off the priority list
   (CH4.0i's question 3, the user, 2026-11-16, on #222): H4's diagonal form takes these levels'
   passing classes.
-- [ ] **CH4.0j The exponential M2L's tables within a level in parts.** Added on 2026-11-16 at
-  CH4.0h (report §4, §6): a level's `MergeLevel` (its quadrature, `PlaneWaveLevel` and the shift
-  factors of every source shift and child) is one part, so a tree with one or two levels with
-  waves builds them nearly serially; it is most of the build on CH3.6's small cases (locust,
-  W1 at kD = 100 at 10⁻³: 0.066 of 0.084 s), where CH4.0e found FMM3D faster because of our
-  build. Time a level's parts, then build them as parts of `nd_fmm_tables::parts`. *Done
-  when:* the tables bit for bit; on CH3.6's cases under 1 s the build at one rank per node at
-  most half CH4.0h's, or the report says why not. Helmholtz only. *Needs:* CH4.0h.
-  *Machines:* Kathleen, locust.
+- [x] **CH4.0j The exponential M2L's tables within a level in parts.** Report:
+  `fmm-validate/results/helmholtz-ch4-0j.md`; record `docs/helmholtz/tasks/CH4.0j.md`. Each
+  node's quadrature counts, each node's level values and each frame's blocks, each shift table
+  a part (`nd-fmm-tables`), the tables `main`'s bits: their build part 0.05–0.29 of CH4.0h's on
+  locust 1 × 72, 0.08–0.42 on Kathleen 1 × 40; the build of CH3.6's cases under 1 s at most half
+  on 8 of 51 and 12 of 43 case-ε pairs, the rest above half without any plane-wave tables (the
+  shared steps, Batched's matrices) or near that floor. *Sign-off:* the PR's questions 1–2 as
+  recommended (the user on #223, 2026-11-16: "Yes to both questions"): the acceptance met as read; CH4.0k
+  stays off the list.
 - [ ] **CH4.0k The shared build steps on the node.** Added on 2026-11-16 at CH4.0h (report §3,
   §6): the plan with its rules (`Plan::with_rules_on`), the routes (`Points::route`) and the
   octree run serially in each rank: 2.0–2.4 s of W1 at kD = 500's build at one rank per node,
   2.8–3.8 s of W3 at kD = 100's (4·10⁶ points); several ranks split them by points. Time them
   by part, then thread what pays. Laplace's paths (`nd-fmm-plan`, `pipeline.rs`, `nd-octree`):
   constraint 1, its outputs bit for bit, D9's benchmarks on the M6, locust and Kathleen.
+  Since CH4.0j also most of the build of CH3.6's cases under 1 s at one rank per node (the plan
+  5–66 ms, the routes 13–24 ms, the octree 5–19 ms; CH4.0j's report §4).
   *Done when:* W1 at kD = 500's build at 1 × 40 and 1 × 72 at most half its one-core time, the
   output bit for bit; Laplace's builds no slower (D9). *Needs:* CH4.0h. *Machines:* Kathleen,
   locust (the M6 with the user's go-ahead). *Sign-off:* the Laplace change.

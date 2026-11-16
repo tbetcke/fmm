@@ -346,43 +346,9 @@ impl Quadrature {
     ///
     /// If `reach` is not finite or not above [`SOURCE_REACH`].
     pub fn with_reach(kappa: Complex<f64>, precision: Precision, reach: f64) -> Option<Self> {
-        assert_reach(reach);
-        let domain = domain_of(kappa)?;
-        let table = &domains(precision)[domain - 1];
-        let s = table.nodes.len();
-        let (mut lambda, mut weight, mut t) = (
-            Vec::with_capacity(s),
-            Vec::with_capacity(s),
-            Vec::with_capacity(s),
-        );
-        for k in 0..s {
-            let (l, w) = table.map_node(k, kappa);
-            lambda.push(l);
-            weight.push(w);
-            t.push((l * l + kappa * kappa).sqrt());
-        }
-        let share = table.stated_error / (4.0 * s as f64);
-        let (mut alpha, mut fourier) = (Vec::with_capacity(s), Vec::with_capacity(s));
-        for k in 0..s {
-            let scale = 2.0 * weight[k].norm() * (-lambda[k].re).exp();
-            let f = tail_count(t[k], SOURCE_REACH, scale, share) - 1;
-            let n = tail_count(t[k], reach, scale, share)
-                .max(tail_count(t[k], reach - SOURCE_REACH, scale, share) + f);
-            alpha.push(n);
-            fourier.push(f);
-        }
-        Some(Self {
-            kappa,
-            precision,
-            domain,
-            stated_error: table.stated_error,
-            lambda,
-            t,
-            weight,
-            alpha,
-            fourier,
-            reach,
-        })
+        let nodes = QuadratureNodes::new(kappa, precision, reach)?;
+        let counts = (0..nodes.len()).map(|k| nodes.counts(k)).collect();
+        Some(nodes.with_counts(counts))
     }
 
     /// The lateral reach the α counts bound, [`RHO_MAX`] unless named
@@ -449,6 +415,85 @@ impl Quadrature {
     /// The Fourier coefficients per direction, Σₖ (2Fₖ + 1) (FMM3D's `nexptot`).
     pub fn mode_count(&self) -> usize {
         self.fourier.iter().map(|&f| 2 * f + 1).sum()
+    }
+}
+
+/// A quadrature before its counts (Helmholtz CH4.0j): the nodes λₖ, tₖ and weights at κ,
+/// and the share of the stated error each node's counts bound. [`counts`](Self::counts) of
+/// each node is a function of that node alone, so a build may compute them as parts
+/// (`super::merge`); [`with_counts`](Self::with_counts) puts them together in node order.
+/// [`Quadrature::with_reach`] is the three in turn, the same bits.
+#[derive(Clone, Debug)]
+pub(crate) struct QuadratureNodes {
+    quadrature: Quadrature,
+    share: f64,
+}
+
+impl QuadratureNodes {
+    /// The nodes of κ's domain at `precision`, or `None` outside the tables.
+    ///
+    /// # Panics
+    ///
+    /// If `reach` is not finite or not above [`SOURCE_REACH`].
+    pub(crate) fn new(kappa: Complex<f64>, precision: Precision, reach: f64) -> Option<Self> {
+        assert_reach(reach);
+        let domain = domain_of(kappa)?;
+        let table = &domains(precision)[domain - 1];
+        let s = table.nodes.len();
+        let (mut lambda, mut weight, mut t) = (
+            Vec::with_capacity(s),
+            Vec::with_capacity(s),
+            Vec::with_capacity(s),
+        );
+        for k in 0..s {
+            let (l, w) = table.map_node(k, kappa);
+            lambda.push(l);
+            weight.push(w);
+            t.push((l * l + kappa * kappa).sqrt());
+        }
+        let share = table.stated_error / (4.0 * s as f64);
+        Some(Self {
+            quadrature: Quadrature {
+                kappa,
+                precision,
+                domain,
+                stated_error: table.stated_error,
+                lambda,
+                t,
+                weight,
+                alpha: Vec::new(),
+                fourier: Vec::new(),
+                reach,
+            },
+            share,
+        })
+    }
+
+    /// The number of nodes, s.
+    pub(crate) fn len(&self) -> usize {
+        self.quadrature.lambda.len()
+    }
+
+    /// Node k's α count Nₖ and Fourier count Fₖ (the module documentation, "The counts").
+    pub(crate) fn counts(&self, k: usize) -> (usize, usize) {
+        let q = &self.quadrature;
+        let scale = 2.0 * q.weight[k].norm() * (-q.lambda[k].re).exp();
+        let f = tail_count(q.t[k], SOURCE_REACH, scale, self.share) - 1;
+        let n = tail_count(q.t[k], q.reach, scale, self.share)
+            .max(tail_count(q.t[k], q.reach - SOURCE_REACH, scale, self.share) + f);
+        (n, f)
+    }
+
+    /// The quadrature with every node's counts, `counts[k]` = [`counts`](Self::counts)`(k)`.
+    ///
+    /// # Panics
+    ///
+    /// Unless there is one pair of counts per node.
+    pub(crate) fn with_counts(self, counts: Vec<(usize, usize)>) -> Quadrature {
+        assert_eq!(counts.len(), self.len(), "one pair of counts per node");
+        let mut quadrature = self.quadrature;
+        (quadrature.alpha, quadrature.fourier) = counts.into_iter().unzip();
+        quadrature
     }
 }
 
