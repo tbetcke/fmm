@@ -664,6 +664,9 @@ pub struct Row {
     pub wx_near: [usize; 4],
     /// The build, seconds (slowest rank).
     pub build: f64,
+    /// The build by part, seconds, each the slowest rank's, in the order of [`BUILD_PARTS`]
+    /// (`HelmholtzFmm::build_timings`; Helmholtz CH4.0h). The operator includes its tables.
+    pub build_parts: [f64; BUILD_PARTS.len()],
     /// The evaluation, seconds (slowest rank); the last of [`Case::evaluations`].
     pub evaluate: f64,
     /// The first evaluation, seconds (slowest rank); `evaluate` with one evaluation.
@@ -755,6 +758,25 @@ impl Row {
         re_k * span * 3f64.sqrt() * self.widest_occupied_leaf()
     }
 }
+
+/// The parts of [`Row::build_parts`]: the builder's steps (`HelmholtzBuildTimings`), then the
+/// operator's tables by part (`TableTimings`, within "operator").
+pub const BUILD_PARTS: [&str; 14] = [
+    "settings",
+    "domain",
+    "octree",
+    "routes",
+    "counts",
+    "plan",
+    "shapes",
+    "operator",
+    "RCR tables",
+    "matrices",
+    "plane-wave tables",
+    "scratch",
+    "evaluator",
+    "load",
+];
 
 /// The slowest rank's `seconds`.
 fn slowest<C: CommunicatorCollectives>(seconds: f64, comm: &C) -> f64 {
@@ -876,6 +898,26 @@ pub fn run_output<C: CommunicatorCollectives>(
     }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
+    let timings = fmm.build_timings();
+    let local = [
+        timings.settings,
+        timings.domain,
+        timings.octree,
+        timings.routes,
+        timings.counts,
+        timings.plan,
+        timings.shapes,
+        timings.operator,
+        timings.tables.rcr,
+        timings.tables.matrices,
+        timings.tables.plane_waves,
+        timings.tables.scratch,
+        timings.evaluator,
+        timings.load,
+    ]
+    .map(|d| d.as_secs_f64());
+    let mut build_parts = [0.0f64; BUILD_PARTS.len()];
+    comm.all_reduce_into(&local[..], &mut build_parts[..], SystemOperation::max());
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
         .map(|v| match case.charges {
             ChargeKind::Real => Charges::Real(&problem.re[v][block.clone()]),
@@ -1120,6 +1162,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         kind_seconds,
         far_leaf_entries,
         build,
+        build_parts,
         evaluate,
         first_evaluate,
         m2l_seconds,

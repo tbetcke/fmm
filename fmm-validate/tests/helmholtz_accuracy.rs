@@ -35,8 +35,8 @@ use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_f
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    Case, Density, Oracle, PLANE_WAVE_DIRECTION, Problem, Row, checksum, complex_k, run,
-    run_output, sweep_crossovers,
+    BUILD_PARTS, Case, Density, Oracle, PLANE_WAVE_DIRECTION, Problem, Row, checksum, complex_k,
+    run, run_output, sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_boxes::{Errors, Reference, box_sample};
 use nd_fmm_validate::helmholtz_calibration::Curve;
@@ -668,7 +668,7 @@ fn helmholtz_accuracy_harness() {
 
 /// Helmholtz CH4.0e: the M2L's rotation blocks formed per V pair (a block budget of 0)
 /// against the stored ones (the library's budget), on Rotation: the same bits, and the
-/// stored levels reported.
+/// stored levels reported; and (Helmholtz CH4.0h) the build by part, `Row::build_parts`.
 fn check_block_budget(world: &SimpleCommunicator) {
     let stored = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-6));
     assert_eq!(stored.block_budget, None, "Case::new's");
@@ -694,6 +694,38 @@ fn check_block_budget(world: &SimpleCommunicator) {
     assert_eq!(row_stored.m2l_blocks_stored.len(), row_stored.levels);
     assert_eq!(row_per_pair.checksum, row_stored.checksum);
     assert_eq!(row_per_pair.errors, row_stored.errors);
+    // The build by part (Helmholtz CH4.0h): the octree, the routes, the plan, the operator
+    // and its RCR tables timed; on one rank the tables within the operator and the steps
+    // within the build (on several, each part is the slowest rank's, maybe not one rank's).
+    let parts = |name: &str| {
+        let i = BUILD_PARTS.iter().position(|&p| p == name).expect("a part");
+        row_stored.build_parts[i]
+    };
+    for name in [
+        "octree",
+        "routes",
+        "plan",
+        "operator",
+        "RCR tables",
+        "evaluator",
+    ] {
+        assert!(parts(name) > 0.0, "{name}: {:?}", row_stored.build_parts);
+    }
+    let tables = ["RCR tables", "matrices", "plane-wave tables", "scratch"];
+    if world.size() == 1 {
+        let in_tables: f64 = tables.iter().map(|&n| parts(n)).sum();
+        assert!(in_tables <= parts("operator") * (1.0 + 1e-9));
+        let steps: f64 = BUILD_PARTS
+            .iter()
+            .filter(|n| !tables.contains(n))
+            .map(|&n| parts(n))
+            .sum();
+        assert!(
+            steps <= row_stored.build * 1.000_001,
+            "{steps} > {}",
+            row_stored.build
+        );
+    }
 }
 
 /// The W and X pairs as near pairs (Helmholtz CH4.0d3) on W4's clusters (N = 2,000, kD = 10;

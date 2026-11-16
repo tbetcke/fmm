@@ -75,6 +75,7 @@ use nd_fmm_math::{Complex, RealScalar};
 
 use super::pair::PlaneWaveLevel;
 use super::quadrature::{Precision, Quadrature, RHO_MAX, assert_reach, domain_of};
+use crate::parts::{Parts, Serial};
 use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOTS};
 
 /// The smallest tolerance at which a level with a quadrature runs at its own degree
@@ -324,7 +325,8 @@ pub struct PlaneWaveM2l<T: RealScalar> {
 impl<T: RealScalar> PlaneWaveM2l<T> {
     /// The levels of a tree with k̂₀ = k r₀ and degrees p_l, level l with the quadrature of
     /// `precisions[l]` where it is `Some` and κ_l lies in the tables, none elsewhere
-    /// ([`select`] gives the rule's precisions). Builds in f64, serially; allocates.
+    /// ([`select`] gives the rule's precisions). Builds in f64, serially
+    /// ([`build_with_reach_on`](Self::build_with_reach_on) on a caller's threads); allocates.
     ///
     /// # Panics
     ///
@@ -352,6 +354,22 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
         precisions: &[Option<Precision>],
         reach: f64,
     ) -> Self {
+        Self::build_with_reach_on(k_root, degrees, precisions, reach, &Serial)
+    }
+
+    /// As [`build_with_reach`](Self::build_with_reach), each level's tables a part of
+    /// `parts` (Helmholtz CH4.0h): the same tables bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// As [`build_with_reach`](Self::build_with_reach).
+    pub fn build_with_reach_on(
+        k_root: Complex<f64>,
+        degrees: &[usize],
+        precisions: &[Option<Precision>],
+        reach: f64,
+        parts: &impl Parts,
+    ) -> Self {
         assert_reach(reach);
         assert_eq!(
             precisions.len(),
@@ -365,16 +383,17 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
             "no exponential M2L on levels 0 and 1: they have no V list"
         );
         let geometry = MergeGeometry::new();
-        let levels = degrees
-            .iter()
-            .zip(precisions)
-            .enumerate()
-            .map(|(l, (&p, &precision))| {
-                precision.and_then(|precision| {
-                    MergeLevel::with_reach(level_k_hat(k_root, l), p, precision, &geometry, reach)
-                })
+        let levels = parts.map(degrees.len(), &|l| {
+            precisions[l].and_then(|precision| {
+                MergeLevel::with_reach(
+                    level_k_hat(k_root, l),
+                    degrees[l],
+                    precision,
+                    &geometry,
+                    reach,
+                )
             })
-            .collect();
+        });
         Self { levels, geometry }
     }
 

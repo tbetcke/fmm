@@ -15,13 +15,16 @@
 //!
 //! # Build
 //!
-//! [`DenseM2l::build`] builds [`HelmholtzTables`] in f64 for the same k̂₀ and degrees, and
-//! takes column j of offset d on level l as their M2L of e_j (one real plane) into zeros:
+//! [`DenseM2l::build`] builds [`HelmholtzTables`] in f64 for the same k̂₀ and degrees, the
+//! M2L tables of the chosen levels alone (since Helmholtz CH4.0h: no translations, no other
+//! level's; the M2L of a level reads only its own tables), and takes column j of offset d on level l as their M2L of e_j (one real plane) into zeros:
 //! the matrices hold the stored form of `HelmholtzTables` (its "The stored form, folded
 //! in"), Rotation's coefficients applied to unit vectors, in f64, rounded to T entry by
 //! entry. So Dense agrees with Rotation to the rounding of the two orders of operations,
-//! and with `nd_fmm_ref::helmholtz::rcr` as Rotation does. The build is serial and
-//! deterministic; it costs n Rotation applications per offset, O(p⁵).
+//! and with `nd_fmm_ref::helmholtz::rcr` as Rotation does. The build is deterministic; it
+//! costs n Rotation applications per offset, O(p⁵). [`DenseM2l::build_on`] computes its
+//! parts (the f64 tables', then the matrices of a few offsets at a time) with a caller's
+//! [`Parts`], the same bits (Helmholtz CH4.0h).
 //!
 //! # Levels and the budget
 //!
@@ -47,8 +50,9 @@
 
 use nd_fmm_math::{Complex, Layout, RealScalar};
 
-use super::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
+use super::{DEFAULT_BLOCK_BUDGET, HelmholtzTables, TableChoice};
 use crate::geometry::M2L_OFFSET_COUNT;
+use crate::parts::{Parts, Serial};
 
 /// The dense M2L tables of the chosen levels of an octree (the
 /// [module documentation](self)).
@@ -88,6 +92,21 @@ impl<T: RealScalar> DenseM2l<T> {
     /// If `levels` and `degrees` differ in length, level 0 or 1 is chosen, or as
     /// [`HelmholtzTables::build`] panics.
     pub fn build(k_root: Complex<f64>, degrees: &[usize], levels: &[bool]) -> Self {
+        Self::build_on(k_root, degrees, levels, &Serial)
+    }
+
+    /// As [`build`](Self::build), its parts computed by `parts` (module documentation,
+    /// "Build"): the same tables bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// As [`build`](Self::build).
+    pub fn build_on(
+        k_root: Complex<f64>,
+        degrees: &[usize],
+        levels: &[bool],
+        parts: &impl Parts,
+    ) -> Self {
         assert_eq!(
             levels.len(),
             degrees.len(),
@@ -104,12 +123,13 @@ impl<T: RealScalar> DenseM2l<T> {
                 levels: degrees.iter().map(|&p| (p, None)).collect(),
             };
         }
-        let tables = HelmholtzTables::<f64>::build(k_root, degrees, DEFAULT_BLOCK_BUDGET);
+        let tables = m2l_tables(k_root, degrees, levels, parts);
+        let all: Vec<usize> = (0..M2L_OFFSET_COUNT).collect();
         let levels = degrees
             .iter()
             .zip(levels)
             .enumerate()
-            .map(|(l, (&p, &on))| (p, on.then(|| matrices(&tables, l, 0..M2L_OFFSET_COUNT))))
+            .map(|(l, (&p, &on))| (p, on.then(|| matrices_on(&tables, l, &all, parts))))
             .collect();
         Self { levels }
     }
@@ -184,6 +204,42 @@ impl<T: RealScalar> DenseM2l<T> {
             apply(a, n, planes, m, l);
         }
     }
+}
+
+/// The f64 tables of the M2L of the chosen `levels` alone (no translations, no other
+/// level's), the M2L blocks within [`DEFAULT_BLOCK_BUDGET`], built by `parts`: their M2L on
+/// a chosen level is that of `HelmholtzTables::build`'s, bit for bit.
+pub(super) fn m2l_tables(
+    k_root: Complex<f64>,
+    degrees: &[usize],
+    levels: &[bool],
+    parts: &impl Parts,
+) -> HelmholtzTables<f64> {
+    let choice = TableChoice {
+        translations: false,
+        m2l_levels: Some(levels),
+        ..TableChoice::new(DEFAULT_BLOCK_BUDGET)
+    };
+    HelmholtzTables::build_by(k_root, degrees, &choice, parts)
+}
+
+/// The offsets of one part of [`matrices_on`].
+const OFFSETS_PER_PART: usize = 8;
+
+/// [`matrices`] of `offsets` on `level`, [`OFFSETS_PER_PART`] offsets per part of `parts`,
+/// put together in the offsets' order: the same values.
+pub(super) fn matrices_on<T: RealScalar>(
+    tables: &HelmholtzTables<f64>,
+    level: usize,
+    offsets: &[usize],
+    parts: &impl Parts,
+) -> Vec<T> {
+    let chunks: Vec<&[usize]> = offsets.chunks(OFFSETS_PER_PART).collect();
+    parts
+        .map(chunks.len(), &|i| {
+            matrices::<T>(tables, level, chunks[i].iter().copied())
+        })
+        .concat()
 }
 
 /// The matrices of `offsets` on `level`, one after the other: column j of each Rotation's

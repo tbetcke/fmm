@@ -645,7 +645,26 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   every other check keeps its tree and pairs; `check_defaults` (the sphere with a tolerance,
   the clusters with named degrees) checks the defaults as built, the output the same
   settings named bit for bit, the errors, 2 threads and the one-rank FMM;
-  `tests/helmholtz/leaf_rule.rs` the rule's table. `tests/helmholtz_fmm.rs`
+  `tests/helmholtz/leaf_rule.rs` the rule's table.
+  Since Helmholtz CH4.0h (docs/helmholtz/tasks/CH4.0h.md; fmm-validate/results/helmholtz-ch4-0h.md)
+  the build is timed by step (`HelmholtzBuildTimings`, `HelmholtzFmm::build_timings`: the
+  settings, the domain, the octree, the routes, the counts, the plan, the shapes, the
+  operator with its tables by part, `TableTimings` of `HelmholtzOperator::table_timings`, the
+  evaluator and the coordinates; clock reads only) and the operator's tables are built once,
+  on the pool: `HelmholtzOperator::unbuilt` records the setters and builds nothing until
+  `build_tables` (the builder names every setting and the pool first; `with_block_budget`
+  is `unbuilt` then the build, as before), and `select_tables` decides each level's M2L
+  first, then builds the RCR tables again only where their degrees change, with the M2L
+  y-blocks stored for the levels whose M2L is RCR's alone (`set_m2l_blocks` on built
+  tables); every table build and the scratch sets run as `nd_fmm_tables::parts` on the
+  pool (`PoolParts`, rayon's indexed collect, which keeps the parts' order), so the tables
+  and the output are the serial build's bit for bit. `tests/helmholtz/build.rs` checks the
+  unbuilt operator on a pool against `with_block_budget`'s with the setters after it, under
+  Rotation, Auto (10⁻⁶, raised below 10⁻⁷), PlaneWave, Batched, Dense and Classes: the
+  degrees, the M2L per level, the blocks only on RCR levels, the bytes and every pair body
+  bit for bit; `check_build_timings` (in `check_defaults`) the build's parts on every rank;
+  the 2 threads of every check now also build the tables on the pool against one thread's
+  serial build. Laplace's builder, drivers and pipeline unchanged. `tests/helmholtz_fmm.rs`
   (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,

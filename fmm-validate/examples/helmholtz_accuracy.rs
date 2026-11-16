@@ -139,6 +139,10 @@
 //! The last column, "÷ Rotation", is the row's error of φ and of ∇φ over the case's
 //! Rotation row at the same P2P kernel and threads, where one ran before it.
 //!
+//! A last table "Build" (Helmholtz CH4.0h) has a row per run with the build's seconds and
+//! its parts (`Row::build_parts`, in the order of `BUILD_PARTS`, each the slowest rank's;
+//! the operator's tables by part within "operator"), the evaluation and the checksum.
+//!
 //! Run in release mode, on any number of ranks (each rank passes a contiguous block of
 //! the points, the oracle is sharded over the ranks, rank 0 prints), with one BLAS
 //! thread:
@@ -168,7 +172,7 @@ use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, domain_of};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    Case, Oracle, Problem, Row, complex_k, run, sweep_crossovers,
+    BUILD_PARTS, Case, Oracle, Problem, Row, complex_k, run, sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_workloads::Workload;
 use nd_fmm_validate::scaling::resident_memory;
@@ -819,6 +823,7 @@ fn main() {
     let mut left_out: Vec<String> = Vec::new();
     let mut near: Vec<String> = Vec::new();
     let mut leaf_rows: Vec<String> = Vec::new();
+    let mut build_rows: Vec<String> = Vec::new();
     let mut leaf_operators: Vec<String> = Vec::new();
     // Whether `--leaf-size` and `--c-leaf` named a value (Helmholtz CH4.0d3): the column
     // "M2L" then ends with it.
@@ -1123,6 +1128,26 @@ fn main() {
                     all[1],
                 )
             };
+            // The row of the table "Build" (Helmholtz CH4.0h): the build by part.
+            let build_line = |row: &Row| -> String {
+                let parts: Vec<String> =
+                    row.build_parts.iter().map(|s| format!("{s:.3}")).collect();
+                format!(
+                    "| {} | {} | {kd_string} | {degrees_name} | {}{}{} | {} × {} | {:.3} | {} \
+                     | {:.3} | {:016x} |",
+                    workload.name(),
+                    problem.len(),
+                    setting_name(row),
+                    empty_suffix(row),
+                    leaf_suffix(row, named),
+                    row.ranks,
+                    row.threads,
+                    row.build,
+                    parts.join(" | "),
+                    row.evaluate,
+                    row.checksum,
+                )
+            };
             // The rows of the table "Leaf operators" (Helmholtz CH4.0d3): the run's, and with
             // `--levels` one per level with P2P, P2L or M2P work.
             let operator_lines = |row: &Row| -> Vec<String> {
@@ -1363,6 +1388,7 @@ fn main() {
                                                 left_out.push(left_out_line(&row));
                                                 near.extend(near_lines(&row));
                                                 leaf_rows.push(leaves_line(&row));
+                                                build_rows.push(build_line(&row));
                                                 leaf_operators.extend(operator_lines(&row));
                                             }
                                             if is_rotation && reference.is_none() {
@@ -1514,6 +1540,21 @@ fn main() {
              | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
         );
         for line in &leaf_operators {
+            println!("{line}");
+        }
+        println!();
+        println!("## Build");
+        println!();
+        println!(
+            "| Workload | N | kD | degrees | M2L | ranks × threads | build s | {} s | evaluate s \
+             | checksum |",
+            BUILD_PARTS.join(" s | ")
+        );
+        println!(
+            "| --- | ---: | --- | --- | --- | --- | ---: | {}---: | --- |",
+            "---: | ".repeat(BUILD_PARTS.len())
+        );
+        for line in &build_rows {
             println!("{line}");
         }
     }

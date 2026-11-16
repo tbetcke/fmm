@@ -2409,7 +2409,9 @@ fn check_leaf_sizes(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// none for named degrees, and this machine's ISA), `DEFAULT_C_LEAF` and the V, W and X
 /// rules of the cost model, and its output is that of the same settings named bit for bit;
 /// the errors against the direct sum within the scenario's bound, 2 threads and on P ranks
-/// the one-rank FMM bit for bit.
+/// the one-rank FMM bit for bit. Since Helmholtz CH4.0h also the build by part
+/// ([`check_build_timings`]); the 2 threads build the tables on the pool, the one thread
+/// serially, so the two outputs' bits also hold the parallel tables to the serial ones.
 fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
     let inputs = Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
@@ -2429,6 +2431,7 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_eq!(fmm.c_leaf(), DEFAULT_C_LEAF, "{name}");
     assert_eq!(fmm.near_v(), VNear::CostModel, "{name}");
     assert_eq!(fmm.near_wx(), WxNear::CostModel, "{name}");
+    check_build_timings(name, &defaults, &inputs, comm);
     let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
     if comm.rank() == 0 {
         println!(
@@ -2454,6 +2457,53 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
     let (_, threaded) = run(&defaults.clone().threads(2), &inputs, kind, comm);
     assert_same(&format!("{name}: 2 threads"), &threaded, &output, comm);
     check_one_rank(name, &defaults, &inputs, kind, &output, comm);
+}
+
+/// The build by part (Helmholtz CH4.0h; `HelmholtzFmm::build_timings`) of `builder`, built
+/// once more under a wall clock: the octree, the routes, the plan, the operator and its RCR
+/// tables timed, the tables within the operator, the steps' sum within the wall time of
+/// `build`; and the operator's RCR tables store M2L blocks only on the levels whose M2L is
+/// RCR's. On every rank or none.
+fn check_build_timings(
+    name: &str,
+    builder: &HelmholtzFmmBuilder,
+    inputs: &Inputs,
+    comm: &SimpleCommunicator,
+) {
+    let start = Instant::now();
+    let fmm: HelmholtzFmm<'_, f64> = builder
+        .build(&inputs.sources, &inputs.targets, comm)
+        .unwrap_or_else(|error| panic!("rank {}: the build: {error}", comm.rank()));
+    let wall = start.elapsed();
+    let timings = fmm.build_timings();
+    let timed = [
+        timings.octree,
+        timings.routes,
+        timings.plan,
+        timings.operator,
+        timings.tables.rcr,
+        timings.evaluator,
+    ]
+    .iter()
+    .all(|&t| t > Duration::ZERO);
+    let within = timings.tables.total() <= timings.operator && timings.total() <= wall;
+    let op = fmm.operator();
+    let blocks = (0..fmm.nlevels())
+        .all(|l| !op.tables().m2l_blocks_stored(l) || op.m2l_on(l) == HelmholtzM2l::Rotation);
+    assert!(
+        everywhere(timed && within && blocks, comm),
+        "{name}: the build by part (rank {}: timed {timed}, within {within}, blocks {blocks}: \
+         {timings:?})",
+        comm.rank()
+    );
+    if comm.rank() == 0 {
+        println!(
+            "{name}: build {:.3} s, the operator {:.3} s (RCR tables {:.3} s)",
+            timings.total().as_secs_f64(),
+            timings.operator.as_secs_f64(),
+            timings.tables.rcr.as_secs_f64()
+        );
+    }
 }
 
 /// The errors of the V pairs' near rule may be this many times the rule off's (Helmholtz
