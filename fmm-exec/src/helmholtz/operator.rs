@@ -279,6 +279,22 @@
 //! a level with waves merge and shift ("M2L"). [`PairOperator`] runs the same
 //! bodies pair by pair.
 //!
+//! A Rotation (RCR) level splits by pairs where its boxes are few (Helmholtz CH4.0i;
+//! [`RcrSplit`], [`with_rcr_split`](HelmholtzOperator::with_rcr_split)): target by target
+//! one task holds a box's whole V row, so a level of fewer boxes than threads leaves threads
+//! idle (level 2 of W1 at kD = 500, 64 boxes at p = 131). By pairs, the level's V pairs in
+//! the plan's order run in chunks that fit a buffer
+//! ([`with_rcr_buffer`](HelmholtzOperator::with_rcr_buffer)): every pair of a chunk writes
+//! its contribution, the terms `HelmholtzTables::m2l` adds to the local, into a slot of its
+//! own on the pool, the chunk's pairs by polar angle and distance so that consecutive pairs
+//! share their y-blocks (which the scratch keeps where they are formed per call) and coaxial
+//! table; then every target adds its pairs' slots in its row's order. Each value of a local
+//! receives the same terms, computed by the same operations and added in the same order, so
+//! the output is target by target's bit for bit under every split, thread count and buffer,
+//! and [`RcrSplit::Auto`] may read the pool's threads: by pairs on a level of degree at least
+//! [`RCR_PAIR_MIN_DEGREE`], and of degree at least [`RCR_PAIR_FEW_DEGREE`] where its targets
+//! with a V row are fewer than [`RCR_PAIR_SHARE`] times them ([`rcr_by_pairs`]).
+//!
 //! Yukawa (Re k = 0) is not served: its real path is CH2.1's.
 
 use std::sync::{Arc, Mutex};
@@ -327,7 +343,10 @@ mod rcr;
 pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveSplit, PlaneWaveTimes};
 use plane_wave::{PlaneBuffer, PlaneScratch};
 use rcr::RcrBuffer;
-pub use rcr::{DEFAULT_RCR_BUFFER, RCR_PAIR_SHARE, RcrCounts, RcrSplit, rcr_by_pairs};
+pub use rcr::{
+    DEFAULT_RCR_BUFFER, RCR_PAIR_FEW_DEGREE, RCR_PAIR_MIN_DEGREE, RCR_PAIR_SHARE, RcrCounts,
+    RcrSplit, rcr_by_pairs,
+};
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
 #[derive(Clone, Copy, Debug, Error, PartialEq)]
@@ -1522,6 +1541,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.rcr_buffer.size(
             threads,
             |l| rotation.get(l).copied().unwrap_or(false),
+            |l| tables.m2l_degree(l),
             |l| tables.m2l_contribution_len(l, m),
         );
     }

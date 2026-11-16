@@ -33,8 +33,9 @@ use crate::driver;
 /// under every setting.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RcrSplit {
-    /// By pairs on a level whose targets with a V row are fewer than [`RCR_PAIR_SHARE`]
-    /// times the pool's threads, by boxes elsewhere and without a pool.
+    /// By pairs on a level of degree p_l ≥ [`RCR_PAIR_MIN_DEGREE`], also serially, and on a
+    /// level of degree p_l ≥ [`RCR_PAIR_FEW_DEGREE`] whose targets with a V row are fewer
+    /// than [`RCR_PAIR_SHARE`] times the pool's threads; by boxes elsewhere ([`rcr_by_pairs`]).
     #[default]
     Auto,
     /// Target by target, each target's V row on one thread (the shared driver).
@@ -43,8 +44,23 @@ pub enum RcrSplit {
     Pairs,
 }
 
-/// Under [`RcrSplit::Auto`] a Rotation level runs by pairs where its targets with a V row
-/// are fewer than this many times the pool's threads (Helmholtz CH4.0i).
+/// Under [`RcrSplit::Auto`] a Rotation level of degree at least this runs by pairs at every
+/// thread count (Helmholtz CH4.0i): on one Grace core the pair path takes 0.93× the box path
+/// at p = 72 and 0.60–0.66× at p = 131 (the y-blocks kept and the coaxial tables reused in
+/// class order), and in the FMM levels of p = 66–135 ran 0.26–0.98× by boxes at every
+/// split on locust and Kathleen, while levels of p = 24 and thousands of boxes ran 1.03–1.12×
+/// (fmm-validate/results/helmholtz-ch4-0i.md).
+pub const RCR_PAIR_MIN_DEGREE: usize = 48;
+
+/// Under [`RcrSplit::Auto`] a Rotation level of degree at least this whose targets with a V
+/// row are fewer than [`RCR_PAIR_SHARE`] times the pool's threads runs by pairs (Helmholtz
+/// CH4.0i): levels of 64 boxes at p = 30–38 ran 0.39–0.90× by boxes on 72 threads, levels of
+/// p = 7–15 1.1–3.8× at every box count.
+pub const RCR_PAIR_FEW_DEGREE: usize = 30;
+
+/// Under [`RcrSplit::Auto`] a Rotation level of degree at least [`RCR_PAIR_FEW_DEGREE`] runs
+/// by pairs where its targets with a V row are fewer than this many times the pool's threads
+/// (Helmholtz CH4.0i).
 pub const RCR_PAIR_SHARE: usize = 4;
 
 /// The default byte bound of the Rotation M2L's buffer of contributions by pairs, 1 GiB
@@ -52,13 +68,19 @@ pub const RCR_PAIR_SHARE: usize = 4;
 /// (about 3,000 pairs of 279 KB at p = 131) in one chunk.
 pub const DEFAULT_RCR_BUFFER: usize = 1 << 30;
 
-/// Whether a Rotation level call with `targets` targets with a V row on `threads` threads
-/// runs by pairs under `split` (Helmholtz CH4.0i; [`RcrSplit`]).
-pub fn rcr_by_pairs(split: RcrSplit, targets: usize, threads: usize) -> bool {
+/// Whether a Rotation level call of degree `degree` with `targets` targets with a V row on
+/// `threads` threads runs by pairs under `split` (Helmholtz CH4.0i; [`RcrSplit`]). No bit
+/// depends on it.
+pub fn rcr_by_pairs(split: RcrSplit, degree: usize, targets: usize, threads: usize) -> bool {
     match split {
         RcrSplit::Boxes => false,
         RcrSplit::Pairs => true,
-        RcrSplit::Auto => threads > 1 && targets < RCR_PAIR_SHARE * threads,
+        RcrSplit::Auto => {
+            degree >= RCR_PAIR_MIN_DEGREE
+                || (threads > 1
+                    && degree >= RCR_PAIR_FEW_DEGREE
+                    && targets < RCR_PAIR_SHARE * threads)
+        }
     }
 }
 
@@ -117,17 +139,22 @@ impl<T: SimdScalar> RcrBuffer<T> {
     }
 
     /// Sizes the buffer for the plan's levels on which a level call on `threads` threads
-    /// runs by pairs, `rotation(l)` telling the Rotation levels and `size(l)` their values per
-    /// contribution; empty where none does.
+    /// runs by pairs, `rotation(l)` telling the Rotation levels, `degree(l)` their degrees and
+    /// `size(l)` their values per contribution; empty where none does.
     pub(super) fn size(
         &mut self,
         threads: usize,
         rotation: impl Fn(usize) -> bool,
+        degree: impl Fn(usize) -> usize,
         size: impl Fn(usize) -> usize,
     ) {
         let (mut values, mut slots) = (0, 0);
         for (l, &(pairs, targets)) in self.levels.iter().enumerate() {
-            if l >= 2 && pairs > 0 && rotation(l) && rcr_by_pairs(self.split, targets, threads) {
+            if l >= 2
+                && pairs > 0
+                && rotation(l)
+                && rcr_by_pairs(self.split, degree(l), targets, threads)
+            {
                 let capacity = self.capacity(pairs, size(l), threads);
                 values = values.max(capacity * size(l));
                 slots = slots.max(capacity);
@@ -155,7 +182,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         };
         let row_offsets = batch.pairs.row_offsets();
         let targets = row_offsets.windows(2).filter(|w| w[1] > w[0]).count();
-        if batch.pairs.is_empty() || !rcr_by_pairs(self.rcr_buffer.split, targets, threads) {
+        let degree = self.kernel.tables.m2l_degree(batch.level);
+        if batch.pairs.is_empty() || !rcr_by_pairs(self.rcr_buffer.split, degree, targets, threads)
+        {
             return driver::m2l(&self.kernel, &mut self.execution, batch);
         }
         let M2l {

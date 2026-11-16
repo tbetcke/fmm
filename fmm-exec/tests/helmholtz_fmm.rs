@@ -76,8 +76,8 @@
 //! (complex k with complex charges and rank 0 empty; real k with real charges and separate
 //! targets) `RcrSplit::Pairs` at 1, 2 and 3 threads, at the default buffer and at the
 //! budget's floor (one pair per thread, so rows span chunks), and `RcrSplit::Auto` at 20
-//! threads (level 2 by pairs), each bit for bit `RcrSplit::Boxes` at one thread, with the
-//! counts of the level calls by pairs; two vectors; the library's M2L (Auto: waves and
+//! threads (no level by pairs below the rule's degree), each bit for bit `RcrSplit::Boxes` at
+//! one thread, with the counts of the level calls by pairs; two vectors; the library's M2L (Auto: waves and
 //! Batched on some levels, Rotation on the rest); on P ranks the one-rank FMM.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
@@ -104,9 +104,9 @@ use nd_fmm_exec::helmholtz::{
     C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
     DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RcrSplit, VNear,
-    Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
-    auto_plane_wave_min_degree, default_max_points_per_leaf,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE,
+    RcrSplit, VNear, Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns,
+    auto_m2l_mul_add, auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -2028,10 +2028,16 @@ fn check_rcr_split(scenario: &Scenario, comm: &SimpleCommunicator) {
             match split {
                 // Every Rotation level with pairs: level 2 on some rank at least.
                 RcrSplit::Pairs => assert!(by_level[2] > 0, "{what}: level 2 not by pairs"),
-                // Level 2 (at most 64 targets, below 4 × 20) by pairs on some rank; the
-                // floor's 2 threads would need fewer than 8 targets on a level.
-                _ if threads == 20 => assert!(by_level[2] > 0, "{what}: level 2 not by pairs"),
-                _ => {}
+                // Auto's rule reads the degree: by pairs only on levels of degree at least
+                // RCR_PAIR_FEW_DEGREE (none here, p ≤ 15), whatever the threads.
+                _ => {
+                    let degrees = fmm.degrees();
+                    assert!(
+                        (0..by_level.len())
+                            .all(|l| by_level[l] == 0 || degrees[l] >= RCR_PAIR_FEW_DEGREE),
+                        "{what}: by pairs below the rule's degree ({by_level:?}, {degrees:?})"
+                    );
+                }
             }
             // At the floor (one pair per thread) a level call takes a chunk per `threads`
             // pairs, so more chunks than calls wherever a call has more pairs.

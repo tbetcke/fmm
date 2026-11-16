@@ -554,6 +554,18 @@ the evaluation and the checksum). `tools/helmholtz/ch4-0h-runs.sh` runs W1 at kD
 core and every split (`build`) and CH3.6's matrix on two splits (`matrix`) at the defaults.
 Its report is `results/helmholtz-ch4-0h.md`.
 
+Helmholtz CH4.0i (the coarse RCR levels; docs/helmholtz/tasks/CH4.0i.md) added
+`helmholtz_accuracy::Case::rcr_split` (`HelmholtzFmmBuilder::rcr_split`; `None` the library's
+`Auto`) and `Row::{rcr_split, rcr_by_pairs}` (the setting as built; per level whether a level
+call of the last evaluation ran by pairs on some rank), the example's `--rcr-split
+auto|boxes|pairs,…` (the outermost loop; the column "M2L" ending `/rcr-boxes` or
+`/rcr-pairs`, `--levels`' "ran" `rotation by pairs`), and the `helmholtz_rcr_pair` example
+(MPI-free, not registered; it times): the RCR pair on one core at p = 72 and 131, its blocks
+stored, formed per call and formed per call in the pair split's order, and `y_blocks` alone.
+`tests/helmholtz_accuracy.rs` (`check_rcr_split`) holds `pairs` and `auto` to `boxes`' checksum
+and errors on W1 at kD = 30. `tools/helmholtz/ch4-0i-runs.sh` runs the task's stages. Its
+report is `results/helmholtz-ch4-0i.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

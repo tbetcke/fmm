@@ -53,6 +53,14 @@ a caller's threads).
   measured on the M6). Its y-blocks are built in T, as `rcr`
   builds them per call, so that stored and per-call blocks agree; the M2L blocks are
   stored from the finest level up within a byte budget. Not cached (CH2.2).
+  Since Helmholtz CH4.0i `HelmholtzTables::m2l_contribution` writes the terms `m2l` adds
+  (step 3 stores instead of adding) and `add_m2l_contribution` adds them, the two in turn
+  `m2l` bit for bit (`to_bits`), so a caller may compute a level's pairs in any order and
+  add them in each row's order; `m2l_classes(d)` gives an offset's (angle, distance), and a
+  `HelmholtzScratch` keeps the per-call y-blocks it formed last with their degree and
+  (cos θ, sin θ), forming them again only for another (the same function of the same
+  inputs). `tests/helmholtz/contribution.rs` checks the split, a row added in order, and
+  kept blocks against fresh ones in three orders, bit for bit.
   Since Helmholtz CH6.1h `HelmholtzTables::build_with_m2l_degrees` gives each level a
   second degree q_l ≥ p_l (`m2l_degree`): its expansions and M2L at q_l, the M2M into it
   from the children's first p_{l+1} degrees into q_l, the L2L from q_l into the children's

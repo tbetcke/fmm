@@ -664,7 +664,23 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   degrees, the M2L per level, the blocks only on RCR levels, the bytes and every pair body
   bit for bit; `check_build_timings` (in `check_defaults`) the build's parts on every rank;
   the 2 threads of every check now also build the tables on the pool against one thread's
-  serial build. Laplace's builder, drivers and pipeline unchanged. `tests/helmholtz_fmm.rs`
+  serial build. Laplace's builder, drivers and pipeline unchanged.
+  Since Helmholtz CH4.0i (docs/helmholtz/tasks/CH4.0i.md; fmm-validate/results/helmholtz-ch4-0i.md)
+  a Rotation (RCR) M2L level call may run by pairs (`RcrSplit::{Auto, Boxes, Pairs}`,
+  `HelmholtzOperator::{with_rcr_split, with_rcr_buffer, with_rcr_levels, rcr_counts}`,
+  `HelmholtzFmmBuilder::{rcr_split, rcr_budget}`, `DEFAULT_RCR_NODE_BUDGET` 1 GiB per node
+  over the ranks per node; the private `operator_rcr.rs`): the level's V pairs in the plan's
+  order in chunks that fit the buffer, every pair's contribution
+  (`HelmholtzTables::m2l_contribution`) into its own slot on the pool, the chunk's pairs by
+  (polar angle, distance) so that the scratch's kept y-blocks and the coaxial tables are
+  reused, then each target adds its slots in its row's order
+  (`nd_fmm_tables::helmholtz::add_m2l_contribution`): the shared driver's chain bit for bit,
+  so `Auto` reads the pool's threads (by pairs where a level's targets with a V row are
+  fewer than `RCR_PAIR_SHARE` times them). `driver.rs` unchanged; `tests/helmholtz_fmm.rs`'s
+  `check_rcr_split` holds every split, thread count (1, 2, 3, 20), buffer (the floor of one
+  pair per thread) and two vectors to by boxes bit for bit, under Rotation and the library's
+  Auto, and on P ranks to the one-rank FMM; `tests/helmholtz/rcr_split.rs` the rule.
+  `tests/helmholtz_fmm.rs`
   (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,

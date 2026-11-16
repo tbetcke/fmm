@@ -357,7 +357,7 @@ impl HelmholtzFmmBuilder {
     /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`] per rank and
     /// [`DEFAULT_DENSE_NODE_BUDGET`] per node, the exponential M2L's waves
     /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the Rotation M2L by pairs on levels
-    /// of few boxes ([`RcrSplit::Auto`]) within [`DEFAULT_RCR_NODE_BUDGET`] per node, the leaf
+    /// of high degree ([`RcrSplit::Auto`]) within [`DEFAULT_RCR_NODE_BUDGET`] per node, the leaf
     /// width [`DEFAULT_C_LEAF`],
     /// the P2P kernel of [`P2pChoice::Auto`], the empty-box rule and the V, W and X pairs
     /// near pairs by the cost model.
@@ -667,8 +667,8 @@ impl HelmholtzFmmBuilder {
     }
 
     /// How the Rotation (RCR) M2L's level calls split over the threads (default
-    /// [`RcrSplit::Auto`]: by pairs on a level whose targets with a V row are fewer than
-    /// [`RCR_PAIR_SHARE`](super::RCR_PAIR_SHARE) times the threads;
+    /// [`RcrSplit::Auto`]: by pairs on levels of high degree, and of middle degree with few
+    /// targets per thread, [`rcr_by_pairs`](super::rcr_by_pairs);
     /// `HelmholtzOperator::with_rcr_split`; Helmholtz CH4.0i). Every setting gives the same
     /// output bit for bit.
     pub fn rcr_split(mut self, split: RcrSplit) -> Self {

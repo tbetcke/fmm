@@ -15,6 +15,15 @@
 //!   call orders a chunk's pairs: the scratch keeps the last angle's blocks (Helmholtz
 //!   CH4.0i), so each angle's are formed once a pass;
 //!
+//! the two level calls of a level whose blocks are stored within the default budget
+//! (`DEFAULT_BLOCK_BUDGET`, so formed per call at p = 131), as `nd-fmm-exec`'s RCR level call
+//! runs them on one thread:
+//!
+//! - **boxes**: `HelmholtzTables::m2l` in index order (target by target, a row in offset
+//!   order);
+//! - **pairs**: `HelmholtzTables::m2l_contribution` in class order into a slot per pair, then
+//!   `add_m2l_contribution` of every slot in index order (the split by pairs);
+//!
 //! and `nd_fmm_math::orthonormal::rotation::y_blocks` alone (one angle's blocks at p, 16
 //! calls a pass), the share of forming them. Each figure is the median of `--reps` passes (default 3) after one
 //! untimed pass; the locals of the variants are compared bit for bit first (they are the
@@ -35,7 +44,7 @@ use std::time::Instant;
 use nd_fmm_math::orthonormal::rotation::{Scratch, compact_blocks_len, y_blocks};
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_tables::geometry::M2L_OFFSET_COUNT;
-use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
+use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables, add_m2l_contribution};
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 
@@ -112,9 +121,13 @@ fn main() {
     println!();
     println!(
         "| p | k̂ | planes | stored ms | per call ms | by class ms | per call ÷ stored \
-         | by class ÷ stored | y-blocks ms | y-blocks ÷ per call |"
+         | by class ÷ stored | y-blocks ms | y-blocks ÷ per call | boxes ms | pairs ms \
+         | pairs ÷ boxes |"
     );
-    println!("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    println!(
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: \
+         | ---: |"
+    );
     for &(p, k_hat) in &arguments.cases {
         // k̂₀ = 4 k̂ on level 2.
         let k_root = Complex::new(4.0 * k_hat, 0.0);
@@ -123,6 +136,8 @@ fn main() {
             HelmholtzTables::<f64>::build(k_root, &degrees, DEFAULT_BLOCK_BUDGET.max(1 << 31));
         let per_call = HelmholtzTables::<f64>::build(k_root, &degrees, 0);
         assert!(stored.m2l_blocks_stored(LEVEL) && !per_call.m2l_blocks_stored(LEVEL));
+        // The level as the FMM builds it: blocks stored within the default budget.
+        let level = HelmholtzTables::<f64>::build(k_root, &degrees, DEFAULT_BLOCK_BUDGET);
         let len = Layout::new(p).len();
         let index_order: Vec<usize> = (0..M2L_OFFSET_COUNT).collect();
         let mut class_order = index_order.clone();
@@ -184,13 +199,41 @@ fn main() {
             let t_class = pair(median(arguments.reps, || {
                 run(&per_call, &class_order, &mut locals)
             }));
+            // The pair path: contributions in class order into their slots, then the adds.
+            let size = level.m2l_contribution_len(LEVEL, 1);
+            let mut slots = vec![0.0f64; M2L_OFFSET_COUNT * size];
+            let mut by_pairs = |out: &mut Vec<Vec<f64>>| {
+                let mut scratch = level.scratch();
+                for &d in &class_order {
+                    level.m2l_contribution(
+                        LEVEL,
+                        d,
+                        &multipoles[d],
+                        planes,
+                        &mut slots[d * size..(d + 1) * size],
+                        1,
+                        &mut scratch,
+                    );
+                }
+                for (d, local) in out.iter_mut().enumerate() {
+                    add_m2l_contribution(&slots[d * size..(d + 1) * size], local);
+                }
+            };
+            let mut e = fresh();
+            by_pairs(&mut e);
+            assert!(bits(&a) == bits(&e), "p = {p}: the pair path differs");
+            let t_boxes = pair(median(arguments.reps, || {
+                run(&level, &index_order, &mut locals)
+            }));
+            let t_pairs = pair(median(arguments.reps, || by_pairs(&mut locals)));
             black_box(&locals);
             println!(
                 "| {p} | {k_hat} | {planes} | {t_stored:.3} | {t_call:.3} | {t_class:.3} | {:.2} \
-                 | {:.2} | {blocks_ms:.3} | {:.2} |",
+                 | {:.2} | {blocks_ms:.3} | {:.2} | {t_boxes:.3} | {t_pairs:.3} | {:.2} |",
                 t_call / t_stored,
                 t_class / t_stored,
                 blocks_ms / t_call,
+                t_pairs / t_boxes,
             );
         }
     }
