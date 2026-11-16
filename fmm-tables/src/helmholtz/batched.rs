@@ -31,9 +31,10 @@
 
 use nd_fmm_math::{Complex, Layout, RealScalar};
 
-use super::dense::{DenseM2l, matrices};
-use super::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
+use super::HelmholtzTables;
+use super::dense::{DenseM2l, m2l_tables, matrices_on};
 use crate::geometry::M2L_OFFSET_COUNT;
+use crate::parts::{Parts, Serial};
 
 /// The batched M2L's tables of the chosen levels of an octree (the
 /// [module documentation](self)).
@@ -81,6 +82,21 @@ impl<T: RealScalar> BatchedM2l<T> {
     /// If `levels` and `degrees` differ in length, level 0 or 1 is chosen, or as
     /// [`HelmholtzTables::build`] panics.
     pub fn build(k_root: Complex<f64>, degrees: &[usize], levels: &[bool]) -> Self {
+        Self::build_on(k_root, degrees, levels, &Serial)
+    }
+
+    /// As [`build`](Self::build), its parts computed by `parts` (Dense's, `DenseM2l::build_on`):
+    /// the same tables bit for bit (Helmholtz CH4.0h).
+    ///
+    /// # Panics
+    ///
+    /// As [`build`](Self::build).
+    pub fn build_on(
+        k_root: Complex<f64>,
+        degrees: &[usize],
+        levels: &[bool],
+        parts: &impl Parts,
+    ) -> Self {
         assert_eq!(
             levels.len(),
             degrees.len(),
@@ -97,12 +113,12 @@ impl<T: RealScalar> BatchedM2l<T> {
                 levels: degrees.iter().map(|&p| (p, None)).collect(),
             };
         }
-        let tables = HelmholtzTables::<f64>::build(k_root, degrees, DEFAULT_BLOCK_BUDGET);
+        let tables = m2l_tables(k_root, degrees, levels, parts);
         let levels = degrees
             .iter()
             .zip(levels)
             .enumerate()
-            .map(|(l, (&p, &on))| (p, on.then(|| split(&tables, l))))
+            .map(|(l, (&p, &on))| (p, on.then(|| split(&tables, l, parts))))
             .collect();
         Self { levels }
     }
@@ -150,9 +166,10 @@ impl<T: RealScalar> BatchedM2l<T> {
 
 /// Dense's 316 matrices of `level`, each re-laid from [A_r; A_i] (2n × n) to A_r then A_i
 /// (n × n each), column-major.
-fn split<T: RealScalar>(tables: &HelmholtzTables<f64>, level: usize) -> Vec<T> {
+fn split<T: RealScalar>(tables: &HelmholtzTables<f64>, level: usize, parts: &impl Parts) -> Vec<T> {
     let n = Layout::new(tables.degree(level)).len();
-    let mut values: Vec<T> = matrices(tables, level, 0..M2L_OFFSET_COUNT);
+    let all: Vec<usize> = (0..M2L_OFFSET_COUNT).collect();
+    let mut values: Vec<T> = matrices_on(tables, level, &all, parts);
     let mut column = vec![T::zero(); 2 * n * n];
     for matrix in values.chunks_exact_mut(2 * n * n) {
         column.copy_from_slice(matrix);

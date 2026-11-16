@@ -9,6 +9,7 @@
 //! None of these tests initialises MPI. The trees of the reference workloads under the
 //! rule are tested in `nd-fmm-validate` (`tests/helmholtz_leaves.rs`).
 
+mod build;
 mod common;
 mod degree;
 mod dense;

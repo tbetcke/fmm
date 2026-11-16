@@ -89,6 +89,8 @@
 //!   M2L on complex planes (CONVENTIONS §3.15; Helmholtz CH3.1a). Like [`plane_wave`] they
 //!   restate an application (that of `nd_fmm_ref::helmholtz::rcr`), checked against it bit
 //!   for bit, and are not cached.
+//! - [`parts`]: the parts of a table build on a caller's threads ([`parts::Parts`];
+//!   Helmholtz CH4.0h), the same bits as the serial build.
 //! - [`cache`]: the versioned on-disk cache of every table family, [`TableCache`],
 //!   keyed by family, degree, precision and the convention and format versions (C2.4).
 //!
@@ -101,6 +103,7 @@ pub mod helmholtz;
 pub mod m2l;
 mod matrix_set;
 pub mod octant;
+pub mod parts;
 pub mod plane_wave;
 pub mod rotation;
 pub mod symmetry;

@@ -288,9 +288,13 @@ use nd_fmm_tables::helmholtz::plane_wave::merge::{
     PlaneWaveM2l, RESOLVING_STEP_TOLERANCE, plane_wave_degree, select,
 };
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
-use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
+use nd_fmm_tables::helmholtz::{
+    DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables, TableChoice,
+};
+use nd_fmm_tables::parts::Parts;
 use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
+use rayon::prelude::*;
 use thiserror::Error;
 
 use super::batched::Batched;
@@ -609,6 +613,29 @@ pub fn batched_block_targets(rows: usize, threads: usize) -> usize {
 /// The default byte budget of the dense or class M2L tables of one rank, 1 GiB.
 pub const DEFAULT_DENSE_BUDGET: usize = 1 << 30;
 
+/// The wall time of building the operator's tables, by part, summed over its construction
+/// and every later choice of its M2L ([`HelmholtzOperator::table_timings`]; Helmholtz
+/// CH4.0h). This rank's, on the calling thread's clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TableTimings {
+    /// The RCR tables (`HelmholtzTables`): the translations' and M2L's coaxial tables and
+    /// the y-blocks, every time they are built.
+    pub rcr: Duration,
+    /// The matrices of Dense, Classes and Batched (their own f64 RCR tables included).
+    pub matrices: Duration,
+    /// The exponential M2L's tables (`PlaneWaveM2l`).
+    pub plane_waves: Duration,
+    /// The scratch sets of every thread, sized for the tables.
+    pub scratch: Duration,
+}
+
+impl TableTimings {
+    /// The sum of the parts.
+    pub fn total(&self) -> Duration {
+        self.rcr + self.matrices + self.plane_waves + self.scratch
+    }
+}
+
 /// The Helmholtz-family operator (module documentation).
 pub struct HelmholtzOperator<T: SimdScalar> {
     kernel: Kernel<T>,
@@ -628,6 +655,26 @@ pub struct HelmholtzOperator<T: SimdScalar> {
     /// The exponential M2L's passes per level since the tables were last chosen
     /// ([`plane_wave_times`](HelmholtzOperator::plane_wave_times)).
     plane_wave_times: Vec<PlaneWaveTimes>,
+    /// The tables' build time by part since construction
+    /// ([`table_timings`](HelmholtzOperator::table_timings)).
+    table_timings: TableTimings,
+    /// Whether the tables wait for [`build_tables`](HelmholtzOperator::build_tables)
+    /// ([`unbuilt`](HelmholtzOperator::unbuilt)).
+    unbuilt: bool,
+}
+
+/// The parts of a table build on the operator's pool, or on the calling thread without one
+/// (Helmholtz CH4.0h; `nd_fmm_tables::parts`): rayon's indexed collect keeps the parts'
+/// order, so the tables are the serial build's bit for bit.
+struct PoolParts<'a>(Option<&'a ThreadPool>);
+
+impl Parts for PoolParts<'_> {
+    fn map<R: Send>(&self, n: usize, f: &(dyn Fn(usize) -> R + Sync)) -> Vec<R> {
+        match self.0 {
+            Some(pool) => pool.install(|| (0..n).into_par_iter().map(f).collect()),
+            None => (0..n).map(f).collect(),
+        }
+    }
 }
 
 /// What the bodies read: the path, the levels and the tables.
@@ -759,6 +806,40 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         max_leaf_points: usize,
         block_budget: usize,
     ) -> Result<Self, OperatorError> {
+        let mut operator = Self::unbuilt(
+            k,
+            densities,
+            domain,
+            degrees,
+            gradients,
+            max_leaf_points,
+            block_budget,
+        )?;
+        operator.unbuilt = false;
+        operator.select_tables();
+        Ok(operator)
+    }
+
+    /// As [`with_block_budget`](Self::with_block_budget), but without the tables
+    /// (Helmholtz CH4.0h): the setters record their settings and build nothing, and
+    /// [`build_tables`](Self::build_tables) then builds the tables of the settings once, on
+    /// the pool's threads if [`with_pool`](Self::with_pool) gave one, the same tables as
+    /// the setters applied to [`with_block_budget`](Self::with_block_budget)'s operator in
+    /// any order. Until then the operator reports the degrees given and no M2L tables, and a
+    /// level call panics. `HelmholtzFmmBuilder` builds its operator so.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    pub fn unbuilt(
+        k: Wavenumber,
+        densities: Densities,
+        domain: &Domain,
+        degrees: &[usize],
+        gradients: bool,
+        max_leaf_points: usize,
+        block_budget: usize,
+    ) -> Result<Self, OperatorError> {
         if k.kind() == WavenumberKind::Yukawa {
             return Err(OperatorError::Yukawa);
         }
@@ -773,7 +854,15 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         }
         let radii: Vec<f64> = (0..degrees.len()).map(|l| radius(l, domain)).collect();
         let k_root = Complex::new(k.re() * radii[0], k.im() * radii[0]);
-        let tables = HelmholtzTables::build(k_root, degrees, block_budget);
+        let mut table_timings = TableTimings::default();
+        // No table yet: the levels and their degrees alone.
+        let none = vec![false; degrees.len()];
+        let choice = TableChoice {
+            translations: false,
+            m2l_levels: Some(&none),
+            ..TableChoice::new(block_budget)
+        };
+        let tables = HelmholtzTables::build_by(k_root, degrees, &choice, &PoolParts(None));
         let kernel = Kernel {
             k,
             densities,
@@ -803,11 +892,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
         };
+        let clock = Instant::now();
         let execution = Execution {
             scratch: vec![Mutex::new(Scratch::new(&kernel))],
             pool: None,
             serial: false,
         };
+        table_timings.scratch += clock.elapsed();
         let m2l_times = vec![Duration::ZERO; kernel.tables.nlevels()];
         let p2p_times = vec![Duration::ZERO; kernel.tables.nlevels()];
         let kind_times = vec![[Duration::ZERO; 6]; kernel.tables.nlevels()];
@@ -820,16 +911,30 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             p2p_times,
             kind_times,
             plane_wave_times,
+            table_timings,
+            unbuilt: true,
         })
+    }
+
+    /// Builds the tables of the operator's settings ([`unbuilt`](Self::unbuilt)), once, on
+    /// the pool's threads if it has one; nothing more on an operator with tables.
+    pub fn build_tables(mut self) -> Self {
+        if self.unbuilt {
+            self.unbuilt = false;
+            self.select_tables();
+        }
+        self
     }
 
     /// Runs every level call in `pool`, each target on one of its threads, with one
     /// scratch set per thread. The output is bit for bit the serial operator's.
     pub fn with_pool(mut self, pool: Arc<ThreadPool>) -> Self {
         let n = pool.current_num_threads().max(1);
+        let clock = Instant::now();
         self.execution.scratch = (0..n)
             .map(|_| Mutex::new(Scratch::new(&self.kernel)))
             .collect();
+        self.table_timings.scratch += clock.elapsed();
         self.execution.pool = Some(pool);
         self
     }
@@ -1203,7 +1308,12 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// the raised degrees (Helmholtz CH6.1g), or again at the degrees given where an earlier
     /// setting raised them.
     fn select_tables(&mut self) {
+        if self.unbuilt {
+            return;
+        }
+        let parts = PoolParts(self.execution.pool.as_deref());
         let kernel = &mut self.kernel;
+        let timings = &mut self.table_timings;
         let choice = kernel.m2l;
         let dense_budget = kernel.dense_budget;
         let base = kernel.base_degrees.clone();
@@ -1249,23 +1359,32 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             PlaneWaveRaise::Rule | PlaneWaveRaise::Level => &degrees,
             PlaneWaveRaise::Leaves | PlaneWaveRaise::M2l => &base,
         };
-        if (0..degrees.len()).any(|l| {
-            kernel.tables.m2l_degree(l) != degrees[l] || kernel.tables.degree(l) != translation[l]
-        }) {
-            kernel.tables = HelmholtzTables::build_with_m2l_degrees(
+        // Each level's M2L first (Helmholtz CH4.0h), so that the RCR tables store their
+        // M2L blocks for the levels whose M2L reads them alone.
+        let clock = Instant::now();
+        kernel.plane_waves = precisions.as_ref().map(|precisions| {
+            PlaneWaveM2l::build_with_reach_on(
                 k_root,
-                translation,
                 &degrees,
-                kernel.block_budget,
-            );
-        }
+                precisions,
+                kernel.plane_wave_reach,
+                &parts,
+            )
+        });
+        // No level with waves: nothing to hold.
+        kernel.plane_waves = kernel
+            .plane_waves
+            .take()
+            .filter(|m2l| (0..m2l.nlevels()).any(|l| m2l.level(l).is_some()));
+        timings.plane_waves += clock.elapsed();
+        let clock = Instant::now();
         kernel.dense = (choice == HelmholtzM2l::Dense).then(|| {
             let levels = DenseM2l::<T>::select(&degrees, dense_budget);
-            DenseM2l::build(k_root, &degrees, &levels)
+            DenseM2l::build_on(k_root, &degrees, &levels, &parts)
         });
         kernel.classes = (choice == HelmholtzM2l::Classes).then(|| {
             let levels = ClassM2l::<T>::select(&degrees, dense_budget);
-            ClassM2l::build(k_root, &degrees, &levels)
+            ClassM2l::build_on(k_root, &degrees, &levels, &parts)
         });
         let max_degree = match choice {
             HelmholtzM2l::Batched => Some(usize::MAX),
@@ -1297,16 +1416,38 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             } else {
                 BatchedM2l::<T>::select_within(&degrees, dense_budget, max_degree)
             };
-            BatchedM2l::build(k_root, &degrees, &levels)
+            BatchedM2l::build_on(k_root, &degrees, &levels, &parts)
         });
-        kernel.plane_waves = precisions.map(|precisions| {
-            PlaneWaveM2l::build_with_reach(k_root, &degrees, &precisions, kernel.plane_wave_reach)
-        });
-        // No level with waves: nothing to hold.
-        kernel.plane_waves = kernel
-            .plane_waves
-            .take()
-            .filter(|m2l| (0..m2l.nlevels()).any(|l| m2l.level(l).is_some()));
+        timings.matrices += clock.elapsed();
+        // The levels whose M2L is RCR's: only they read its M2L blocks.
+        let rcr: Vec<bool> = (0..degrees.len())
+            .map(|l| {
+                l >= 2
+                    && kernel.plane_wave_level(l).is_none()
+                    && !kernel.dense.as_ref().is_some_and(|d| d.is_dense(l))
+                    && !kernel.classes.as_ref().is_some_and(|c| c.is_class(l))
+                    && kernel.batched(l).is_none()
+            })
+            .collect();
+        let clock = Instant::now();
+        let tables = &mut kernel.tables;
+        if !tables.has_translations()
+            || (0..degrees.len()).any(|l| {
+                tables.m2l_degree(l) != degrees[l]
+                    || tables.degree(l) != translation[l]
+                    || (l >= 2 && !tables.has_m2l(l))
+            })
+        {
+            let choice = TableChoice {
+                m2l_degrees: Some(&degrees),
+                block_levels: Some(&rcr),
+                ..TableChoice::new(kernel.block_budget)
+            };
+            *tables = HelmholtzTables::build_by(k_root, translation, &choice, &parts);
+        } else {
+            tables.set_m2l_blocks(&rcr, kernel.block_budget, &parts);
+        }
+        timings.rcr += clock.elapsed();
         self.plane_buffer.size(kernel.plane_waves.as_ref());
         self.plane_buffer.counts = PlaneWaveCounts::default();
         self.m2l_times.fill(Duration::ZERO);
@@ -1315,9 +1456,18 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.plane_wave_times.fill(PlaneWaveTimes::default());
         // The class scratch, the batched columns and the exponential M2L's buffers are sized
         // by their tables' largest level.
+        let clock = Instant::now();
         for scratch in &mut self.execution.scratch {
             *scratch.get_mut().expect("a scratch set is never poisoned") = Scratch::new(kernel);
         }
+        timings.scratch += clock.elapsed();
+    }
+
+    /// The wall time of building the tables by part since the operator was constructed
+    /// (Helmholtz CH4.0h): every build of the RCR tables, of the matrices and of the
+    /// exponential M2L's tables, and the scratch sets, summed; this rank's.
+    pub fn table_timings(&self) -> TableTimings {
+        self.table_timings
     }
 
     /// The M2L setting ([`with_m2l`](Self::with_m2l)).

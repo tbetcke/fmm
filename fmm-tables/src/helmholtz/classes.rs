@@ -65,8 +65,8 @@ use nd_fmm_math::rotation::{block_range, blocks_len};
 use nd_fmm_math::{Complex, Layout, RealScalar};
 
 use super::dense;
-use super::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
 use crate::geometry::{M2L_OFFSET_COUNT, m2l_offset_index};
+use crate::parts::{Parts, Serial};
 use crate::symmetry::{
     GROUP_ORDER, M2L_CLASS_COUNT, SignedPermutation, class_of, class_representatives,
 };
@@ -458,8 +458,24 @@ impl<T: RealScalar> ClassM2l<T> {
     /// # Panics
     ///
     /// If `levels` and `degrees` differ in length, level 0 or 1 is chosen, or as
-    /// [`HelmholtzTables::build`] panics.
+    /// [`HelmholtzTables::build`](super::HelmholtzTables::build) panics.
     pub fn build(k_root: Complex<f64>, degrees: &[usize], levels: &[bool]) -> Self {
+        Self::build_on(k_root, degrees, levels, &Serial)
+    }
+
+    /// As [`build`](Self::build), its parts computed by `parts` (the f64 tables' as
+    /// `DenseM2l::build_on`'s, the class matrices a few at a time): the same tables bit for
+    /// bit (Helmholtz CH4.0h).
+    ///
+    /// # Panics
+    ///
+    /// As [`build`](Self::build).
+    pub fn build_on(
+        k_root: Complex<f64>,
+        degrees: &[usize],
+        levels: &[bool],
+        parts: &impl Parts,
+    ) -> Self {
         assert_eq!(
             levels.len(),
             degrees.len(),
@@ -490,7 +506,7 @@ impl<T: RealScalar> ClassM2l<T> {
                 offsets,
             };
         };
-        let tables = HelmholtzTables::<f64>::build(k_root, degrees, DEFAULT_BLOCK_BUDGET);
+        let tables = dense::m2l_tables(k_root, degrees, levels, parts);
         let representatives = class_representatives()
             .map(|d| m2l_offset_index(d).expect("a representative is a V-list offset"));
         let levels = degrees
@@ -498,7 +514,7 @@ impl<T: RealScalar> ClassM2l<T> {
             .zip(levels)
             .enumerate()
             .map(|(l, (&p, &on))| {
-                let matrices = on.then(|| dense::matrices(&tables, l, representatives.into_iter()));
+                let matrices = on.then(|| dense::matrices_on(&tables, l, &representatives, parts));
                 (p, matrices)
             })
             .collect();

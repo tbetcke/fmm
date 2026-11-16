@@ -166,6 +166,7 @@ use nd_fmm_math::{Complex, Layout, RealScalar};
 use nd_fmm_ref::helmholtz::{Level, rcr};
 
 use crate::geometry::{M2L_OFFSET_COUNT, OCTANT_COUNT, m2l_offsets, octant_direction};
+use crate::parts::{Parts, Serial};
 
 /// The default byte budget of the stored M2L y-blocks, 512 MiB.
 pub const DEFAULT_BLOCK_BUDGET: usize = 512 << 20;
@@ -175,6 +176,8 @@ pub const DEFAULT_BLOCK_BUDGET: usize = 512 << 20;
 #[derive(Clone, Debug)]
 pub struct HelmholtzTables<T: RealScalar> {
     real_shifts: bool,
+    /// Whether the M2M and L2L tables were built ([`TableChoice::translations`]).
+    translations: bool,
     levels: Vec<LevelTables<T>>,
     /// The azimuth and the key of the polar angle of each M2M shift −s_o; L2L's shift s_o
     /// has the opposite polar angle and azimuth.
@@ -185,6 +188,115 @@ pub struct HelmholtzTables<T: RealScalar> {
     m2l_angles: Vec<(T, T)>,
     /// The largest degree q_l of any level.
     p_max: usize,
+}
+
+/// Which tables a build of [`HelmholtzTables`] makes ([`HelmholtzTables::build_by`];
+/// Helmholtz CH4.0h). [`TableChoice::new`] names those of
+/// [`HelmholtzTables::build`]: every table, the M2L blocks within the budget.
+#[derive(Clone, Copy, Debug)]
+pub struct TableChoice<'a> {
+    /// The degree q_l ≥ p_l of each level's expansions and M2L (`None`: the degrees p_l;
+    /// [`HelmholtzTables::build_with_m2l_degrees`]).
+    pub m2l_degrees: Option<&'a [usize]>,
+    /// The byte budget of the stored M2L y-blocks, spent from the finest level up.
+    pub block_budget: usize,
+    /// Whether to build the translations between levels: M2M, L2L and the octant
+    /// blocks. Without them [`m2m`](HelmholtzTables::m2m) and [`l2l`](HelmholtzTables::l2l)
+    /// panic (the M2L tables of Dense, Classes and Batched need none).
+    pub translations: bool,
+    /// The levels with M2L tables, one entry per level (`None`: every level from 2). On
+    /// another level [`m2l`](HelmholtzTables::m2l) panics.
+    pub m2l_levels: Option<&'a [bool]>,
+    /// The levels whose M2L y-blocks may be stored, one entry per level (`None`: every
+    /// level with M2L tables); the others form them per call and spend none of the budget.
+    pub block_levels: Option<&'a [bool]>,
+}
+
+impl TableChoice<'_> {
+    /// Every table, the M2L blocks stored within `block_budget` bytes from the finest level
+    /// up: [`HelmholtzTables::build`]'s choice.
+    pub fn new(block_budget: usize) -> Self {
+        Self {
+            m2l_degrees: None,
+            block_budget,
+            translations: true,
+            m2l_levels: None,
+            block_levels: None,
+        }
+    }
+}
+
+/// A part of a build ([`HelmholtzTables::build_by`]).
+#[derive(Clone, Copy, Debug)]
+enum Task {
+    /// The M2M table from level l + 1 into level l.
+    Up(usize),
+    /// The L2L table from level l into level l + 1.
+    Down(usize),
+    /// The octant blocks of level l's pair of levels, by key.
+    Pair(usize, usize),
+    /// The M2L table of level l for a distance key.
+    M2l(usize, usize),
+    /// The M2L blocks of level l for a polar-angle key.
+    Blocks(usize, usize),
+}
+
+/// A part's result.
+enum Part<T> {
+    Shift(Shift<T>),
+    Blocks(Vec<T>),
+}
+
+impl<T> Part<T> {
+    fn shift(self) -> Shift<T> {
+        match self {
+            Part::Shift(shift) => shift,
+            Part::Blocks(_) => unreachable!("a shift's part"),
+        }
+    }
+
+    fn blocks(self) -> Vec<T> {
+        match self {
+            Part::Blocks(blocks) => blocks,
+            Part::Shift(_) => unreachable!("a blocks' part"),
+        }
+    }
+}
+
+/// The y-blocks of degree p at (cos θ, sin θ) = (c, s), as [`y_blocks`] forms them in T.
+fn blocks<T: RealScalar>(p: usize, c: T, s: T) -> Vec<T> {
+    let mut scratch = BlockScratch::new(p);
+    let mut out = vec![T::zero(); compact_blocks_len(p)];
+    y_blocks(p, c, s, &mut out, &mut scratch);
+    out
+}
+
+/// The levels whose M2L blocks are stored: from the finest level up, each level with M2L
+/// tables that `levels` names (all if `None`) wherever its `angles` sets at its degree fit
+/// in what is left of `budget` bytes; a level that does not fit is skipped, and a coarser
+/// one may still fit.
+fn block_selection(
+    degrees: &[usize],
+    has_m2l: &[bool],
+    levels: Option<&[bool]>,
+    angles: usize,
+    value_bytes: usize,
+    budget: usize,
+) -> Vec<bool> {
+    let mut stored = vec![false; degrees.len()];
+    let mut left = budget;
+    for l in (0..degrees.len()).rev() {
+        if !has_m2l[l] || levels.is_some_and(|m| !m[l]) {
+            continue;
+        }
+        let bytes = angles * compact_blocks_len(degrees[l]) * value_bytes;
+        if bytes > left {
+            continue;
+        }
+        left -= bytes;
+        stored[l] = true;
+    }
+    stored
 }
 
 /// The tables of one level.
@@ -284,6 +396,32 @@ impl<T: RealScalar> HelmholtzTables<T> {
         m2l_degrees: &[usize],
         block_budget: usize,
     ) -> Self {
+        let choice = TableChoice {
+            m2l_degrees: Some(m2l_degrees),
+            ..TableChoice::new(block_budget)
+        };
+        Self::build_by(k_root, degrees, &choice, &Serial)
+    }
+
+    /// As [`build_with_m2l_degrees`](Self::build_with_m2l_degrees), with the tables that
+    /// `choice` names (Helmholtz CH4.0h): the translations or none, the M2L tables of some
+    /// levels only, the M2L y-blocks of some levels only (the others neither store any nor
+    /// spend the budget), and its parts computed by `parts` ([`Parts`]; module
+    /// documentation, "Parts"). A table it builds is the one `build_with_m2l_degrees` builds,
+    /// bit for bit, whatever the map; with [`TableChoice::new`] and [`Serial`] it is
+    /// `build_with_m2l_degrees` itself.
+    ///
+    /// # Panics
+    ///
+    /// As [`build_with_m2l_degrees`](Self::build_with_m2l_degrees), and unless the level
+    /// masks have one entry per level.
+    pub fn build_by(
+        k_root: Complex<f64>,
+        degrees: &[usize],
+        choice: &TableChoice<'_>,
+        parts: &impl Parts,
+    ) -> Self {
+        let m2l_degrees = choice.m2l_degrees.unwrap_or(degrees);
         assert!(
             k_root.re.is_finite() && k_root.im.is_finite(),
             "k̂₀ must be finite"
@@ -298,8 +436,14 @@ impl<T: RealScalar> HelmholtzTables<T> {
                 && degrees.iter().zip(m2l_degrees).all(|(p, q)| q >= p),
             "the M2L degrees {m2l_degrees:?} must be at least the degrees {degrees:?}, one per level"
         );
-        let real_shifts = k_root.im == 0.0;
         let nlevels = degrees.len();
+        for mask in [choice.m2l_levels, choice.block_levels]
+            .into_iter()
+            .flatten()
+        {
+            assert_eq!(mask.len(), nlevels, "one entry per level in a level mask");
+        }
+        let real_shifts = k_root.im == 0.0;
         let k_hat = |l: usize| k_root * (0.5f64).powi(l as i32);
 
         // The shifts' classes, from their integer directions (module documentation,
@@ -308,7 +452,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
             let d = octant_direction(o).map(|s| -s);
             (azimuth(d), usize::from(d[2] < 0))
         });
-        let octant_angles = [[1, 1, 1], [1, 1, -1]].map(|d| polar(d).1);
+        let octant_angles: [(T, T); 2] = [[1, 1, 1], [1, 1, -1]].map(|d| polar(d).1);
         let mut m2l_angles: Vec<(PolarKey, (T, T))> = Vec::new();
         let mut distances: Vec<i64> = Vec::new();
         let offsets: Vec<OffsetKeys<T>> = m2l_offsets()
@@ -327,95 +471,205 @@ impl<T: RealScalar> HelmholtzTables<T> {
             .collect();
         let m2l_angles: Vec<(T, T)> = m2l_angles.into_iter().map(|(_, v)| v).collect();
 
-        let mut levels: Vec<LevelTables<T>> = (0..nlevels)
-            .map(|l| {
-                let (p, q) = (degrees[l], m2l_degrees[l]);
-                let (up, down, pair_blocks) = if l + 1 < nlevels {
-                    let (p_parent, p_child) = (q, degrees[l + 1]);
+        // Which levels have what: M2L tables on levels ≥ 2 (all, or those named), M2L
+        // blocks from the finest level up wherever they fit in what is left of the budget
+        // (a level that does not fit is skipped, and a coarser one may still fit).
+        let has_m2l: Vec<bool> = (0..nlevels)
+            .map(|l| l >= 2 && choice.m2l_levels.is_none_or(|m| m[l]))
+            .collect();
+        let stored = block_selection(
+            m2l_degrees,
+            &has_m2l,
+            choice.block_levels,
+            m2l_angles.len(),
+            size_of::<T>(),
+            choice.block_budget,
+        );
+
+        // The parts, each a function of its own inputs (module documentation, "Parts").
+        let mut tasks: Vec<Task> = Vec::new();
+        for l in 0..nlevels {
+            if choice.translations && l + 1 < nlevels {
+                tasks.extend([
+                    Task::Up(l),
+                    Task::Down(l),
+                    Task::Pair(l, 0),
+                    Task::Pair(l, 1),
+                ]);
+            }
+            if has_m2l[l] {
+                tasks.extend((0..distances.len()).map(|d| Task::M2l(l, d)));
+            }
+            if stored[l] {
+                tasks.extend((0..m2l_angles.len()).map(|a| Task::Blocks(l, a)));
+            }
+        }
+        let part = |i: usize| -> Part<T> {
+            match tasks[i] {
+                Task::Up(l) => {
+                    let (p_parent, p_child) = (m2l_degrees[l], degrees[l + 1]);
                     let child = Level::new(k_hat(l + 1), 1.0);
                     let parent = Level::new(k_hat(l + 1), 2.0);
                     let (sc, sp) = (child.scale(), parent.scale());
                     let m2m = rcr::m2m_table(p_child, p_parent, &child);
+                    Part::Shift(Shift::new(
+                        p_child,
+                        p_parent,
+                        real_shifts,
+                        |m, n_out, n_in| m2m.get(m, n_out, n_in) * power_ratio(sc, n_in, sp, n_out),
+                    ))
+                }
+                Task::Down(l) => {
+                    let (p_parent, p_child) = (m2l_degrees[l], degrees[l + 1]);
+                    let child = Level::new(k_hat(l + 1), 1.0);
+                    let parent = Level::new(k_hat(l + 1), 2.0);
+                    let (sc, sp) = (child.scale(), parent.scale());
                     let l2l = rcr::l2l_table(p_parent, p_child, &child);
-                    let up = Shift::new(p_child, p_parent, real_shifts, |m, n_out, n_in| {
-                        m2m.get(m, n_out, n_in) * power_ratio(sc, n_in, sp, n_out)
-                    });
-                    let down = Shift::new(p_parent, p_child, real_shifts, |m, n_out, n_in| {
-                        // ½: the change of units from the parent's to the child's.
-                        l2l.get(m, n_out, n_in) * power_ratio(sc, n_out, sp, n_in) * 0.5
-                    });
-                    let degree = p_parent.max(p_child);
-                    let mut scratch = BlockScratch::new(degree);
-                    let blocks = octant_angles.map(|(c, s)| {
-                        let mut out = vec![T::zero(); compact_blocks_len(degree)];
-                        y_blocks(degree, c, s, &mut out, &mut scratch);
-                        out
-                    });
-                    (Some(up), Some(down), blocks)
-                } else {
-                    (None, None, [Vec::new(), Vec::new()])
-                };
-                let m2l = if l >= 2 {
+                    Part::Shift(Shift::new(
+                        p_parent,
+                        p_child,
+                        real_shifts,
+                        |m, n_out, n_in| {
+                            // ½: the change of units from the parent's to the child's.
+                            l2l.get(m, n_out, n_in) * power_ratio(sc, n_out, sp, n_in) * 0.5
+                        },
+                    ))
+                }
+                Task::Pair(l, key) => {
+                    let degree = m2l_degrees[l].max(degrees[l + 1]);
+                    let (c, s) = octant_angles[key];
+                    Part::Blocks(blocks(degree, c, s))
+                }
+                Task::M2l(l, d) => {
+                    let q = m2l_degrees[l];
                     let level = Level::new(k_hat(l), 1.0);
                     let (k, a, s) = (level.k(), level.circumradius(), level.scale());
                     let beta = level.damping();
-                    distances
-                        .iter()
-                        .map(|&squared| {
-                            // |t| = 2 |d| in the level's units.
-                            let t = 2.0 * (squared as f64).sqrt();
-                            let table = CoaxialTable::m2l(k, t, a, s, q, q);
-                            let factor = four_pi_ik(k) * (beta + beta - k.im * t).exp();
-                            Shift::new(q, q, false, |m, n_out, n_in| {
-                                table.get(m, n_out, n_in) * factor
-                            })
-                        })
+                    // |t| = 2 |d| in the level's units.
+                    let t = 2.0 * (distances[d] as f64).sqrt();
+                    let table = CoaxialTable::m2l(k, t, a, s, q, q);
+                    let factor = four_pi_ik(k) * (beta + beta - k.im * t).exp();
+                    Part::Shift(Shift::new(q, q, false, |m, n_out, n_in| {
+                        table.get(m, n_out, n_in) * factor
+                    }))
+                }
+                Task::Blocks(l, a) => {
+                    let (c, s) = m2l_angles[a];
+                    Part::Blocks(blocks(m2l_degrees[l], c, s))
+                }
+            }
+        };
+        let mut results = parts.map(tasks.len(), &part).into_iter();
+
+        // Put together in the parts' order.
+        let levels: Vec<LevelTables<T>> = (0..nlevels)
+            .map(|l| {
+                let (up, down, pair_blocks) = if choice.translations && l + 1 < nlevels {
+                    let up = results.next().map(Part::shift);
+                    let down = results.next().map(Part::shift);
+                    let pair =
+                        [(); 2].map(|()| results.next().map(Part::blocks).unwrap_or_default());
+                    (up, down, pair)
+                } else {
+                    (None, None, [Vec::new(), Vec::new()])
+                };
+                let m2l = if has_m2l[l] {
+                    results
+                        .by_ref()
+                        .take(distances.len())
+                        .map(Part::shift)
                         .collect()
                 } else {
                     Vec::new()
                 };
+                let m2l_blocks = stored[l].then(|| {
+                    results
+                        .by_ref()
+                        .take(m2l_angles.len())
+                        .map(Part::blocks)
+                        .collect()
+                });
                 LevelTables {
                     k_hat: k_hat(l),
-                    p,
-                    q,
+                    p: degrees[l],
+                    q: m2l_degrees[l],
                     up,
                     down,
                     pair_blocks,
                     m2l,
-                    m2l_blocks: None,
+                    m2l_blocks,
                 }
             })
             .collect();
-
-        // M2L's blocks, finest level first, within the budget.
-        let mut left = block_budget;
-        for level in levels.iter_mut().skip(2).rev() {
-            let bytes = m2l_angles.len() * compact_blocks_len(level.q) * size_of::<T>();
-            if bytes > left {
-                continue;
-            }
-            left -= bytes;
-            let mut scratch = BlockScratch::new(level.q);
-            level.m2l_blocks = Some(
-                m2l_angles
-                    .iter()
-                    .map(|&(c, s)| {
-                        let mut out = vec![T::zero(); compact_blocks_len(level.q)];
-                        y_blocks(level.q, c, s, &mut out, &mut scratch);
-                        out
-                    })
-                    .collect(),
-            );
-        }
+        assert!(results.next().is_none(), "every part is placed");
 
         Self {
             real_shifts,
+            translations: choice.translations,
             p_max: m2l_degrees.iter().copied().max().unwrap_or(0),
             levels,
             octants,
             offsets,
             m2l_angles,
         }
+    }
+
+    /// Stores the M2L y-blocks of the levels `levels` names, from the finest level up
+    /// wherever they fit in `block_budget` bytes, and drops every other level's (Helmholtz
+    /// CH4.0h): the blocks the tables would have had from [`build_by`](Self::build_by) with
+    /// these block levels and budget, a level that keeps its blocks keeping them, the new
+    /// ones computed by `parts`. The applications do not change: a level without stored
+    /// blocks forms them per call, the same bits.
+    ///
+    /// # Panics
+    ///
+    /// Unless `levels` has one entry per level.
+    pub fn set_m2l_blocks(&mut self, levels: &[bool], block_budget: usize, parts: &impl Parts) {
+        assert_eq!(
+            levels.len(),
+            self.nlevels(),
+            "one entry per level in a level mask"
+        );
+        let has_m2l: Vec<bool> = self.levels.iter().map(|l| !l.m2l.is_empty()).collect();
+        let degrees: Vec<usize> = self.levels.iter().map(|l| l.q).collect();
+        let stored = block_selection(
+            &degrees,
+            &has_m2l,
+            Some(levels),
+            self.m2l_angles.len(),
+            size_of::<T>(),
+            block_budget,
+        );
+        let missing: Vec<(usize, usize)> = (0..self.nlevels())
+            .filter(|&l| stored[l] && self.levels[l].m2l_blocks.is_none())
+            .flat_map(|l| (0..self.m2l_angles.len()).map(move |a| (l, a)))
+            .collect();
+        let angles = &self.m2l_angles;
+        let new = parts.map(missing.len(), &|i| {
+            let (l, a) = missing[i];
+            let (c, s) = angles[a];
+            blocks(degrees[l], c, s)
+        });
+        let mut new = new.into_iter();
+        for (l, level) in self.levels.iter_mut().enumerate() {
+            if !stored[l] {
+                level.m2l_blocks = None;
+            } else if level.m2l_blocks.is_none() {
+                level.m2l_blocks = Some(new.by_ref().take(angles.len()).collect());
+            }
+        }
+    }
+
+    /// Whether the tables translate between levels (M2M and L2L; not when built with
+    /// [`TableChoice::translations`] off).
+    pub fn has_translations(&self) -> bool {
+        self.translations
+    }
+
+    /// Whether `level` has M2L tables (levels from 2, all unless
+    /// [`TableChoice::m2l_levels`] named some).
+    pub fn has_m2l(&self, level: usize) -> bool {
+        !self.levels[level].m2l.is_empty()
     }
 
     /// The number of levels.
@@ -509,7 +763,10 @@ impl<T: RealScalar> HelmholtzTables<T> {
         scratch: &mut HelmholtzScratch<T>,
     ) {
         let tables = &self.levels[level];
-        let shift = tables.up.as_ref().expect("M2M into the finest level");
+        let shift = tables
+            .up
+            .as_ref()
+            .expect("M2M into the finest level, or tables built without translations");
         let (azimuth, key) = self.octants[o];
         self.translate(
             shift,
@@ -543,7 +800,10 @@ impl<T: RealScalar> HelmholtzTables<T> {
     ) {
         assert!(level > 0, "L2L into level 0");
         let tables = &self.levels[level - 1];
-        let shift = tables.down.as_ref().expect("a parent level has an L2L");
+        let shift = tables
+            .down
+            .as_ref()
+            .expect("L2L from a parent level of tables built with translations");
         // The shift s_o is −(M2M's): the opposite polar angle and azimuth.
         let (azimuth, key) = self.octants[o];
         let azimuth = Azimuth {
@@ -583,6 +843,10 @@ impl<T: RealScalar> HelmholtzTables<T> {
         assert!(level >= 2, "no M2L on level {level}");
         assert!(d < M2L_OFFSET_COUNT, "offset index {d}");
         let tables = &self.levels[level];
+        assert!(
+            !tables.m2l.is_empty(),
+            "no M2L tables built on level {level}"
+        );
         let keys = self.offsets[d];
         let blocks = match &tables.m2l_blocks {
             Some(blocks) => Blocks::Stored(&blocks[keys.angle]),

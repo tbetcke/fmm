@@ -96,6 +96,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use mpi::Threading;
 use mpi::collective::SystemOperation;
@@ -122,8 +123,8 @@ use thiserror::Error;
 use super::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities, DensityError,
     HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
-    auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
+    PlaneWaveRaise, PlaneWaveSplit, TableTimings, Wavenumber, WavenumberKind,
+    auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{FmmError, PointSet, SettingsError};
 use crate::geometry::{Domain, radius};
@@ -767,6 +768,8 @@ impl HelmholtzFmmBuilder {
         T: SimdScalar + Equivalence + Default,
         C: CommunicatorCollectives,
     {
+        let mut timings = HelmholtzBuildTimings::default();
+        let mut clock = Instant::now();
         // Step 1: settings, MPI threading and the pool, finite points, the supplied
         // domain; one agreement.
         let provided = mpi::environment::threading_support();
@@ -811,8 +814,11 @@ impl HelmholtzFmmBuilder {
         let max_points_per_leaf = agreed[2] as usize;
         drop(node);
 
+        timings.settings = lap(&mut clock);
+
         // Step 3: the domain, and every point strictly inside it.
         let (coordinates, domain) = pipeline::domain(sources, targets, supplied, comm)?;
+        timings.domain = lap(&mut clock);
 
         // Step 4: the octree with the leaf rule, and its plan.
         let leaf_level = min_leaf_level(&self.k, &domain, self.c_leaf);
@@ -823,6 +829,7 @@ impl HelmholtzFmmBuilder {
             .with_min_leaf_level(leaf_level);
         let (keys, octree) = pipeline::octree(&coordinates, &domain, options, comm);
         let index = BoxIndex::of_octree(&octree).map_err(FmmError::Plan)?;
+        timings.octree = lap(&mut clock);
 
         // Steps 5 and 6: the points to their owners, routed on the index's local leaves.
         // Three coordinates per point move now, and on every evaluation c m strengths per
@@ -840,6 +847,7 @@ impl HelmholtzFmmBuilder {
         )?;
         drop(keys);
         drop(coordinates);
+        timings.routes = lap(&mut clock);
         // Step 7 (its first part before the plan, Helmholtz CH4.0d2): the degrees and the
         // M2L's agreed settings, which the V rule reads. The largest number of sources in a
         // leaf, over every rank, sizes P2P's scratch.
@@ -998,7 +1006,9 @@ impl HelmholtzFmmBuilder {
             near: near.as_ref(),
             empty_boxes: counts.as_ref().filter(|_| self.empty_boxes),
         };
+        timings.counts = lap(&mut clock);
         let plan = Plan::with_rules_on(&octree, index, &rules).map_err(FmmError::Plan)?;
+        timings.plan = lap(&mut clock);
 
         // Auto's term for Batched (Helmholtz CH4.0): each level's V pairs and boxes, each
         // box counted by the rank that computes it, summed over the ranks.
@@ -1045,7 +1055,10 @@ impl HelmholtzFmmBuilder {
         let level_boxes: Vec<usize> = (0..plan.index().nlevels())
             .map(|level| plan.index().len(level))
             .collect();
-        let mut operator = HelmholtzOperator::with_block_budget(
+        timings.shapes = lap(&mut clock);
+        // The operator's settings first, its tables once after them, on the pool (Helmholtz
+        // CH4.0h).
+        let mut operator = HelmholtzOperator::unbuilt(
             self.k,
             densities,
             &domain,
@@ -1085,6 +1098,7 @@ impl HelmholtzFmmBuilder {
         if let Some(pool) = &pool {
             operator = operator.with_pool(Arc::clone(pool));
         }
+        let operator = operator.build_tables();
         // The V rule's levels with waves are the operator's (Helmholtz CH4.0d2): on another
         // level a grouped decision would be needlessly coarse, and on a level with waves a
         // pair's decision would count its source twice.
@@ -1096,6 +1110,8 @@ impl HelmholtzFmmBuilder {
         );
         // The degrees the operator runs at (raised on the levels with waves below 10⁻⁶).
         let degrees: Vec<usize> = (0..degrees.len()).map(|l| operator.degree(l)).collect();
+        timings.tables = operator.table_timings();
+        timings.operator = lap(&mut clock);
         let calls = if self.pair_calls {
             Calls::Pairs(PerPair(operator))
         } else {
@@ -1109,10 +1125,12 @@ impl HelmholtzFmmBuilder {
             &points.target_leaves.counts,
         )
         .map_err(FmmError::Evaluator)?;
+        timings.evaluator = lap(&mut clock);
 
         // Step 8: the leaf-scaled coordinates.
         points.load_coordinates(&owned, &mut evaluator, &domain);
         drop(owned);
+        timings.load = lap(&mut clock);
 
         let strengths = densities.columns();
         Ok(HelmholtzFmm {
@@ -1136,7 +1154,63 @@ impl HelmholtzFmmBuilder {
             empty_boxes: self.empty_boxes,
             near_v: self.near_v,
             near_wx: self.near_wx,
+            build_timings: timings,
         })
+    }
+}
+
+/// The time since `clock`, which then restarts.
+fn lap(clock: &mut Instant) -> Duration {
+    let now = Instant::now();
+    let elapsed = now - *clock;
+    *clock = now;
+    elapsed
+}
+
+/// The wall time of [`HelmholtzFmmBuilder::build`] by step on this rank (Helmholtz CH4.0h;
+/// [`HelmholtzFmm::build_timings`]), on the calling thread's clock: the collective steps
+/// include the wait for the other ranks. No value of the FMM depends on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HelmholtzBuildTimings {
+    /// Steps 1 and 2: the settings, the pool, the points' checks, the node's split and the
+    /// agreements.
+    pub settings: Duration,
+    /// Step 3: the domain, and every point inside it.
+    pub domain: Duration,
+    /// Step 4: the octree with the leaf rule, and its box index.
+    pub octree: Duration,
+    /// Steps 5 and 6: the points to their owners.
+    pub routes: Duration,
+    /// Step 7 up to the plan: the largest leaf, the degrees and the M2L's agreed settings,
+    /// the points per box (an exchange) and the near rules' crossovers.
+    pub counts: Duration,
+    /// The plan with its rules (`Plan::with_rules_on`; the near rules' decisions inside).
+    pub plan: Duration,
+    /// Auto's level shapes and m* (two all-reduces), the budgets and the levels' boxes.
+    pub shapes: Duration,
+    /// The operator with its settings, its tables included ([`tables`](Self::tables)).
+    pub operator: Duration,
+    /// The operator's tables by part (within [`operator`](Self::operator)).
+    pub tables: TableTimings,
+    /// The evaluator: the stores and the exchanges.
+    pub evaluator: Duration,
+    /// Step 8: the leaf-scaled coordinates.
+    pub load: Duration,
+}
+
+impl HelmholtzBuildTimings {
+    /// The sum of the steps (the tables are part of the operator).
+    pub fn total(&self) -> Duration {
+        self.settings
+            + self.domain
+            + self.octree
+            + self.routes
+            + self.counts
+            + self.plan
+            + self.shapes
+            + self.operator
+            + self.evaluator
+            + self.load
     }
 }
 
@@ -1443,6 +1517,8 @@ where
     near_v: VNear,
     /// The W and X pairs' near rule as built (Helmholtz CH4.0d3).
     near_wx: WxNear,
+    /// The build's wall time by step (Helmholtz CH4.0h).
+    build_timings: HelmholtzBuildTimings,
 }
 
 impl<'o, T, C> HelmholtzFmm<'o, T, C>
@@ -1644,6 +1720,11 @@ where
     /// exponential M2L's waves budget ([`HelmholtzFmmBuilder::plane_wave_budget`]).
     pub fn ranks_per_node(&self) -> usize {
         self.ranks_per_node
+    }
+
+    /// The build's wall time on this rank by step (Helmholtz CH4.0h).
+    pub fn build_timings(&self) -> HelmholtzBuildTimings {
+        self.build_timings
     }
 
     /// Whether the plan has the empty-box rule ([`HelmholtzFmmBuilder::empty_boxes`]);
