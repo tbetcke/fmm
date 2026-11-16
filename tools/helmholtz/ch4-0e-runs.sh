@@ -15,8 +15,11 @@
 #          launch per case and split under mpirun), in the order of SPLITS and again
 #          reversed (launch names ...-a and ...-b)
 #   fmm3d  per case of CASES and variant of VARIANTS (default "default fastker"), the
-#          driver on every core over the eps grid GRID with REPEAT 2 (the best of two calls,
-#          FMM3D's setup included), launches a and b (the variants in order, then reversed);
+#          driver on every core over the eps grid GRID (default 1e-3, 3e-4, ..., 1e-9; looser
+#          eps cannot match our errors at 10⁻³, and FMM3D's default variant cannot allocate
+#          its plane-wave workspace on W1 at kD = 500 at 10⁻² on a 188 GB node) with REPEAT
+#          2 (the best of two calls, FMM3D's setup included), launches a and b (the
+#          variants in order, then reversed);
 #          then `helmholtz_fmm3d errors` on launch a's outputs into fmm3d-<case>.md
 #   t1     one core: ours (1 x 1) on T1_CASES at EPS, both FMM3D variants on T1_CASES over
 #          GRID (REPEAT 1), and ours on W1 at kD = 500 at 10⁻⁶ (the per-core part of the
@@ -33,7 +36,6 @@ set -u
 out=$1
 shift
 mkdir -p "$out/problems" "$out/fmm3d"
-export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 target=${CARGO_TARGET_DIR:-target}/release/examples
 A=$target/helmholtz_accuracy
 F=$target/helmholtz_fmm3d
@@ -50,8 +52,10 @@ if [ "$(uname)" = Darwin ]; then
     export HWLOC_COMPONENTS=${HWLOC_COMPONENTS--darwin}
     cores=$(sysctl -n hw.perflevel0.physicalcpu 2> /dev/null || echo 6)
 else
-    cores=$(nproc)
+    # GNU nproc honours OMP_NUM_THREADS: count the cores without it.
+    cores=$(env -u OMP_NUM_THREADS nproc)
 fi
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     slurm=1
     SPLITS=${SPLITS:-"1x40 2x20 4x10 8x5"}
@@ -62,7 +66,7 @@ fi
 T=${THREADS:-$cores}
 TIMEOUT=${TIMEOUT:-7200}
 EPS=1e-3,1e-6,1e-8
-GRID=${GRID:-1e-2,3e-3,1e-3,3e-4,1e-4,3e-5,1e-5,3e-6,1e-6,3e-7,1e-7,3e-8,1e-8,3e-9,1e-9}
+GRID=${GRID:-1e-3,3e-4,1e-4,3e-5,1e-5,3e-6,1e-6,3e-7,1e-7,3e-8,1e-8,3e-9,1e-9}
 VARIANTS=${VARIANTS:-"default fastker"}
 matrix="w1@10 w1@30 w1@100 w1@500 w3@10 w3@30 w3@100"
 for d in cube sphere plummer clusters; do

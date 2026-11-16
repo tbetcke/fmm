@@ -60,7 +60,9 @@ errors`.
     threads; Kathleen 1×40, 2×20, 4×10, 8×5 bound per socket; locust 1×72, 2×36, 4×18, 8×9),
     in the order of SPLITS and again reversed (ABBA);
   - `fmm3d`: per case and variant (`default`, `fastker`) the driver on every core over the
-    eps grid 1e-2, 3e-3, 1e-3, …, 3e-9, 1e-9 (1-3 per decade; it includes the requested ε),
+    eps grid 1e-3, 3e-4, …, 3e-9, 1e-9 (1-3 per decade; it includes the requested ε; looser
+    eps cannot match our errors at 10⁻³, and FMM3D's `default` cannot allocate its
+    plane-wave workspace on W1 at kD = 500 at 10⁻² on Kathleen, first round),
     REPEAT 2 (the best of two calls, setup included), launches a and b; `helmholtz_fmm3d
     errors` on launch a's outputs;
   - `t1`: one core: ours (1 × 1) and both FMM3D variants on W1 at kD = 100 (CH3.6's
