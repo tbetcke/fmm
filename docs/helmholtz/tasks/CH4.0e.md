@@ -155,8 +155,26 @@ The scripts are measurement tooling. Their correctness is checked by:
 
 ## Pending runs
 
-(filled in step 6)
+None. Every run is in the report (`fmm-validate/results/helmholtz-ch4-0e.md` §6): Kathleen jobs
+634358, 634359 (ours), 634367–634369 (FMM3D), 634370 (one core), 634373 (blocks), 634380
+(W1 at kD = 1000); locust the same stages on 2026-11-15/16. Jobs 634360–634363 ran FMM3D on one
+thread (GNU `nproc` honours `OMP_NUM_THREADS`; fixed in 1342417) and were cancelled, their
+outputs kept apart and unused.
+
+## Results
+
+- Ours under the defaults within ε on every run (at most 0.35 ε Kathleen, 0.40 ε locust), the
+  checksums equal over the splits and launches of each machine.
+- Against `fastker` at matched accuracy, geometric means 0.78, 0.69, 0.93 (Kathleen) and 0.30,
+  0.27, 0.38 (locust) at 10⁻³, 10⁻⁶, 10⁻⁸; where FMM3D is faster our build is 46–96 % of our
+  time.
+- H4 inside D1: only W1 at kD = 500 has RCR levels at k a ≥ 8; bound 14–31 %, prototype
+  estimate 6–14 % of build plus one evaluation; at kD = 1000 27–42 % and 9–17 %.
+- Found: the build barely uses the threads; level 2's Rotation M2L is split by box only (28–48 %
+  of linear) and forms its blocks per pair at p = 131 (storing them: net 0.92–1.03×).
+- Kathleen against locust: 1.9–2.4× per core times 1.8× the cores.
 
 ## Open questions
 
-(none yet)
+The report's §7: (1) H4's go-ahead and order (CH4.0h and CH4.0i proposed before H4); (2) the
+block budget's default.

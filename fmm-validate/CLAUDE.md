@@ -534,6 +534,18 @@ thread-nanoseconds per P2P, P2L and M2P interaction). `tests/helmholtz_accuracy.
 `tools/helmholtz/ch4-0d3-runs.sh` runs the task's sweeps and the W and X calibration,
 `ch4-0d3-tables.py` makes the report's tables and fits `WxCosts` (`wx`).
 
+Helmholtz CH4.0e (the comparison with FMM3D under the defaults, and H4's expected gain;
+docs/helmholtz/tasks/CH4.0e.md) added `helmholtz_accuracy::Case::block_budget`
+(`HelmholtzFmmBuilder::block_budget`; `None` the library's 512 MiB) and
+`Row::m2l_blocks_stored` (per level whether the M2L's rotation blocks are stored or formed per
+V pair), the example's `--block-budget MB` and a last column "blocks" of `--levels`.
+`tests/helmholtz_accuracy.rs` (`check_block_budget`) holds blocks formed per pair to the stored
+ones bit for bit on W1 at kD = 30. `tools/helmholtz/ch4-0e-runs.sh` runs our side at the
+defaults on every split and FMM3D over an eps grid (`helmholtz_fmm3d errors` against the same
+oracle), `ch4-0e-tables.py` makes the report's tables (best split, matched accuracy, the H4
+estimate). Its report is `results/helmholtz-ch4-0e.md`. The one-rank debug run of
+`tests/helmholtz_accuracy.rs` took 246 s on the M6 at load 2–3 (241 s without the new check).
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
