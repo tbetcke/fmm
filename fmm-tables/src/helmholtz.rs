@@ -803,6 +803,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
             (child, planes, self.levels[level + 1].q),
             (parent, planes, tables.q),
             vectors,
+            Step3::Add,
             scratch,
         );
     }
@@ -845,6 +846,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
             (parent, planes, tables.q),
             (child, planes, self.levels[level].q),
             vectors,
+            Step3::Add,
             scratch,
         );
     }
@@ -887,13 +889,69 @@ impl<T: RealScalar> HelmholtzTables<T> {
             (multipole, multipole_planes, tables.q),
             (local, 2, tables.q),
             vectors,
+            Step3::Add,
+            scratch,
+        );
+    }
+
+    /// The values of `vectors` locals at `level`'s [`m2l_degree`](Self::m2l_degree), two
+    /// planes each, that [`m2l_contribution`](Self::m2l_contribution) writes:
+    /// `vectors` · 2 (q_l + 1)².
+    pub fn m2l_contribution_len(&self, level: usize, vectors: usize) -> usize {
+        vectors * 2 * Layout::new(self.levels[level].q).len()
+    }
+
+    /// [`m2l`](Self::m2l) without its add (Helmholtz CH4.0i): writes the pair's contribution,
+    /// the terms that `m2l` adds to the local, into `contribution` (of
+    /// [`m2l_contribution_len`](Self::m2l_contribution_len) values, the local's layout),
+    /// overwriting what it held. [`add_m2l_contribution`] then adds it to a local:
+    /// the two in turn are `m2l` bit for bit, every value of the contribution computed by
+    /// the same operations and added by the same one rounding. So the contributions of a
+    /// level's pairs may be computed in any order, on any thread, and added to each local in
+    /// its V row's order, with the bits of `m2l` pair after pair.
+    ///
+    /// # Panics
+    ///
+    /// As [`m2l`](Self::m2l), with `contribution` in place of the local.
+    #[allow(clippy::too_many_arguments)]
+    pub fn m2l_contribution(
+        &self,
+        level: usize,
+        d: usize,
+        multipole: &[T],
+        multipole_planes: usize,
+        contribution: &mut [T],
+        vectors: usize,
+        scratch: &mut HelmholtzScratch<T>,
+    ) {
+        assert!(level >= 2, "no M2L on level {level}");
+        assert!(d < M2L_OFFSET_COUNT, "offset index {d}");
+        let tables = &self.levels[level];
+        assert!(
+            !tables.m2l.is_empty(),
+            "no M2L tables built on level {level}"
+        );
+        let keys = self.offsets[d];
+        let blocks = match &tables.m2l_blocks {
+            Some(blocks) => Blocks::Stored(&blocks[keys.angle]),
+            None => Blocks::PerCall(self.m2l_angles[keys.angle]),
+        };
+        self.translate(
+            &tables.m2l[keys.distance],
+            blocks,
+            keys.azimuth,
+            (multipole, multipole_planes, tables.q),
+            (contribution, 2, tables.q),
+            vectors,
+            Step3::Store,
             scratch,
         );
     }
 
     /// The three steps of the module documentation for `vectors` expansions, each plane of
     /// the input and the output an expansion of the degree given (at least the shift's), of
-    /// which the shift reads or fills the first degrees.
+    /// which the shift reads or fills the first degrees: step 3 adds to the output, or with
+    /// [`Step3::Store`] writes it.
     #[allow(clippy::too_many_arguments)]
     fn translate(
         &self,
@@ -903,6 +961,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
         (input, in_planes, in_degree): (&[T], usize, usize),
         (output, out_planes, out_degree): (&mut [T], usize, usize),
         vectors: usize,
+        step3: Step3,
         scratch: &mut HelmholtzScratch<T>,
     ) {
         let real = shift.im.is_empty();
@@ -1007,11 +1066,10 @@ impl<T: RealScalar> HelmholtzTables<T> {
                     y,
                 );
                 rotate_z(p_out, azimuth, T::one(), y);
-                for (o, &v) in output[plane * stride_out..plane * stride_out + len_out]
-                    .iter_mut()
-                    .zip(y.iter())
-                {
-                    *o = *o + v;
+                let output = &mut output[plane * stride_out..plane * stride_out + len_out];
+                match step3 {
+                    Step3::Add => add_m2l_contribution(y, output),
+                    Step3::Store => output.copy_from_slice(y),
                 }
             }
         }
@@ -1062,6 +1120,29 @@ impl<T: RealScalar> Shift<T> {
         let width = self.p_in + 1 - m;
         let start = self.starts[m] + (n_out - m) * width;
         start..start + width
+    }
+}
+
+/// The end of step 3 of an application: add the rotated-back expansion to the output, or
+/// write it there (Helmholtz CH4.0i).
+#[derive(Clone, Copy)]
+enum Step3 {
+    Add,
+    Store,
+}
+
+/// Adds an M2L contribution of [`HelmholtzTables::m2l_contribution`] to a local of the same
+/// length, value by value, `local[i] = local[i] + contribution[i]`: the add with which
+/// [`HelmholtzTables::m2l`] ends (Helmholtz CH4.0i).
+///
+/// # Panics
+///
+/// If the lengths differ.
+#[inline]
+pub fn add_m2l_contribution<T: RealScalar>(contribution: &[T], local: &mut [T]) {
+    assert_eq!(contribution.len(), local.len(), "contribution length");
+    for (o, &v) in local.iter_mut().zip(contribution) {
+        *o = *o + v;
     }
 }
 
