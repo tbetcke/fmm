@@ -8,13 +8,12 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0d3 are merged; CH4.0e
-compares the defaults with FMM3D on Kathleen and locust (ours 0.27–0.93× `fastker` at matched
-accuracy; FMM3D faster only where our build dominates) and bounds H4's gain inside D1 at
-14–31 % of build plus one evaluation on W1 at kD = 500 alone; signed off on 2026-11-16: H4 goes
-ahead after CH4.0h (the build) and CH4.0i (the coarse RCR levels), the block budget kept at
-512 MiB. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6.
-Next: CH4.0h.
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0e are merged, and CH4.0h
+builds the Helmholtz FMM's tables once and in parallel, bit for bit: W1 at kD = 500's build at
+the node's best split 0.15–0.23 of one core (0.15–0.33 of CH4.0e's), CH3.6's matrix's builds
+0.34–0.59 of CH4.0e's; what remains is the shared serial steps (CH4.0k) and the exponential
+M2L's tables within a level (CH4.0j), the order of the two for sign-off. HR, H0, H1 and H2 are
+still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0i.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -82,6 +81,7 @@ for H4 above is replaced by CH4.0e's report §3 (inside D1 the high-frequency RC
 10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
+CH4.0j and CH4.0k (added at CH4.0h, their order the PR's question 2);
 CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
 after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
@@ -602,15 +602,14 @@ task's full line is in its record or report and its progress entry
   pair buckets and Batched's columns per read checked), or the report shows it does not pay.
   *Needs:* CH4.0d1 (the rule). *Machines:* Kathleen, locust (the M6 with the user's go-ahead
   for timings). *Sign-off:* Laplace's default.
-- [ ] **CH4.0h The Helmholtz build by part, and parallel.** Added on 2026-11-16 at CH4.0e
-  (report §3.2, §7 question 1; signed off as recommended): the build barely uses the threads (W1 at kD = 500: 5.5 s
-  on one core, 4.6 s on 40) and grows with the degrees, and it is 46–96 % of our time where
-  FMM3D is faster. Time the build by part in the harness, then parallelise its serial parts
-  (most likely the per-level tables) over the threads, and stop forming rotation blocks for
-  levels whose M2L does not read them (the column "blocks" of `--levels` says "stored" on the
-  exponential M2L's levels too). *Done when:* W1 at kD = 500's build on
-  the node is at most half its one-core time, the output bit for bit; Laplace unchanged.
-  *Needs:* CH4.0e. *Machines:* Kathleen, locust.
+- [x] **CH4.0h The Helmholtz build by part, and parallel.** Report:
+  `fmm-validate/results/helmholtz-ch4-0h.md`; record `docs/helmholtz/tasks/CH4.0h.md`. The build
+  timed by part; the operator's tables built once (no second RCR set at 10⁻⁸, no f64 set of
+  every level for Batched), M2L blocks on RCR levels alone, every table and the scratch sets in
+  parts on the pool (`nd_fmm_tables::parts`), bit for bit: W1 at kD = 500 at the best split
+  0.15–0.23 of one core, at one rank per node 0.44–0.66 (the shared steps, CH4.0k); every
+  checksum CH4.0e's. *Sign-off:* the PR's questions 1–3 (the reading, CH4.0j and CH4.0k's
+  order, `nd-fmm-tables`' rule).
 - [ ] **CH4.0i The coarse RCR levels.** Added on 2026-11-16 at CH4.0e (report §3.2, §7
   question 1; signed off as recommended): Rotation splits a level by target box only, so level 2 (64 boxes, p = 131)
   runs at 28–48 % of linear, and per pair our RCR is 1.9–3.3× S6's scalar prototype on the
@@ -619,6 +618,24 @@ task's full line is in its record or report and its progress entry
   operator unless Laplace stays bit for bit (constraint 1), and compare the pair with S6's.
   *Done when:* level 2 of W1 at kD = 500 at ≥ 70 % of linear on the node, or the report says
   why not; deterministic and rank-invariant. *Needs:* CH4.0e. *Machines:* Kathleen, locust.
+- [ ] **CH4.0j The exponential M2L's tables within a level in parts.** Added on 2026-11-16 at
+  CH4.0h (report §4, §6): a level's `MergeLevel` (its quadrature, `PlaneWaveLevel` and the shift
+  factors of every source shift and child) is one part, so a tree with one or two levels with
+  waves builds them nearly serially; it is most of the build on CH3.6's small cases (locust,
+  W1 at kD = 100 at 10⁻³: 0.066 of 0.084 s), where CH4.0e found FMM3D faster because of our
+  build. Time a level's parts, then build them as parts of `nd_fmm_tables::parts`. *Done
+  when:* the tables bit for bit; on CH3.6's cases under 1 s the build at one rank per node at
+  most half CH4.0h's, or the report says why not. Helmholtz only. *Needs:* CH4.0h.
+  *Machines:* Kathleen, locust.
+- [ ] **CH4.0k The shared build steps on the node.** Added on 2026-11-16 at CH4.0h (report §3,
+  §6): the plan with its rules (`Plan::with_rules_on`), the routes (`Points::route`) and the
+  octree run serially in each rank: 2.0–2.4 s of W1 at kD = 500's build at one rank per node,
+  2.8–3.8 s of W3 at kD = 100's (4·10⁶ points); several ranks split them by points. Time them
+  by part, then thread what pays. Laplace's paths (`nd-fmm-plan`, `pipeline.rs`, `nd-octree`):
+  constraint 1, its outputs bit for bit, D9's benchmarks on the M6, locust and Kathleen.
+  *Done when:* W1 at kD = 500's build at 1 × 40 and 1 × 72 at most half its one-core time, the
+  output bit for bit; Laplace's builds no slower (D9). *Needs:* CH4.0h. *Machines:* Kathleen,
+  locust (the M6 with the user's go-ahead). *Sign-off:* the Laplace change.
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk

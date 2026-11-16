@@ -3204,3 +3204,51 @@ request, using this template:
 - Sign-off (the user on #220, 2026-11-16: "Both questions as recommended."): (1) H4 goes ahead
   after CH4.0h and CH4.0i, then CHA.1–CHA.3, CH1.3d, CH4.1–CH4.5; (2) `DEFAULT_BLOCK_BUDGET`
   stays 512 MiB. Next: CH4.0h.
+
+## 2026-11-16: CH4.0h The Helmholtz build by part, and parallel
+- Done:
+  - The build timed by part: `HelmholtzBuildTimings`, `HelmholtzFmm::build_timings`,
+    `TableTimings`, `HelmholtzOperator::table_timings`; `nd-fmm-validate`'s `Row::build_parts`
+    and the table "Build". The profile on locust (W1 at kD = 500): the build serial throughout
+    (4.2–5.9 s on one core and on 72 threads), the RCR tables 1.5–4.2 s of it and built twice at
+    10⁻⁸; the plan with its rules, the routes and the octree 1.4–2.4 s.
+  - `nd-fmm-tables`: `parts::{Parts, Serial}`; `HelmholtzTables::build_by` with a `TableChoice`
+    and `set_m2l_blocks`; `DenseM2l`, `BatchedM2l`, `ClassM2l::build_on` from M2L-only f64
+    tables of their own levels; `PlaneWaveM2l::build_with_reach_on`. `nd-fmm-exec`:
+    `HelmholtzOperator::{unbuilt, build_tables}` (the builder's tables built once, with every
+    setting and the pool named first), `select_tables` with each level's M2L first and the M2L
+    blocks on RCR levels alone, every table and the scratch sets on the pool (`PoolParts`).
+  - Runs (Kathleen job 634392; locust): W1 at kD = 500 at the node's best split 0.22–0.23 of one
+    core on Kathleen and 0.15–0.19 on locust, at one rank per node 0.44–0.50 and 0.46–0.66 (the
+    shared steps); 0.15–0.33 of CH4.0e's build at the best split; CH3.6's matrix's builds
+    0.34–0.59 of CH4.0e's (geometric means); every checksum (the build stage and 228 of the
+    matrix) CH4.0e's. A single build peaks lower than `main`'s; three builds in one process
+    1.9 GB higher (the worker threads' arenas). Report `fmm-validate/results/helmholtz-ch4-0h.md`;
+    raw outputs in `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0h/`;
+    `tools/helmholtz/ch4-0h-runs.sh`, `ch4-0h-tables.py`.
+- Self-review (subagent): no defect; it repeated the table hashes on a copy of `main`. Taken:
+  the build's check against a wall clock (it compared the total with its own definition), one
+  result per part asserted after every map, the harness's sums on one rank only, the run
+  script's comment, CH4.0e's one-core baseline in the tables script, the records.
+- Tests: `nd-fmm-tables` `tests/helmholtz/parts.rs` (every build on a reverse-order map of three
+  threads against the serial build through every application, the matrices and the plane-wave
+  tables; the restricted builds' M2L; the refusals; the blocks of named levels; the ignored
+  hashes, the same before and after); `nd-fmm-exec` `tests/helmholtz/build.rs` (the unbuilt
+  operator against the setters on a built one under every M2L, every pair body bit for bit);
+  `check_build_timings` in `tests/helmholtz_fmm.rs`; the build's parts in `check_block_budget`
+  of `nd-fmm-validate`'s `tests/helmholtz_accuracy.rs`; every 2-thread check now also holds the
+  pool's tables to one thread's serial ones.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and
+  workspace tests at opt-level 1 (1,270 and 1,384 passed), the MPI list at 2 and 4 ranks (24 of
+  24); the one-rank opt-level 0 runs `helmholtz_fmm` 510 s, `helmholtz_accuracy` 252 s,
+  `nd-fmm-exec`'s `tests/helmholtz/` 44 s, `nd-fmm-tables`' 35.9 s (`main` 35.5 s). Nothing
+  pending.
+- Decisions: questions for sign-off (the PR, report §8): (1) the acceptance read at the node's
+  best split; (2) CH4.0j on the priority list beside CH4.0i, CH4.0k off it; (3)
+  `nd-fmm-tables`' rule "Builds are serial" amended to "deterministic, in parts on a caller's
+  threads".
+- Laplace: not touched (`nd-fmm-tables`' Laplace tables, the drivers, the pipeline,
+  `nd-fmm-plan`, `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI list
+  pass).
+- Follow-ups: CH4.0j (the exponential M2L's tables within a level in parts) and CH4.0k (the
+  shared build steps on the node), roadmap lines added off the list until question 2.

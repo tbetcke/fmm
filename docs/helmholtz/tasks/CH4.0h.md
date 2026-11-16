@@ -110,12 +110,13 @@ untouched.
 - `nd-fmm-exec` `tests/helmholtz/`: the operator's new constructor against the old chain of
   setters: the same tables per level (degrees, `m2l_on`, bytes of the batched and plane-wave
   tables, blocks stored only where Rotation runs).
-- `nd-fmm-exec` `tests/helmholtz_fmm.rs`: a `check_build` scenario (the default builder at
-  10⁻⁶ and 10⁻⁸ on a tree with waves and an RCR level): the output bit for bit with the
-  tables built serially (a doc-hidden builder switch, `serial_tables`), at 1 and 2 threads;
-  `build_timings` parts all present, summing within the total; the one-rank FMM bit for bit
-  (as every check). The existing checks (`check_auto`, `check_plane_wave`, `check_defaults`,
-  `check_block_budget` in `nd-fmm-validate`) cover the outputs of every setting.
+- `nd-fmm-exec` `tests/helmholtz_fmm.rs`: as built, no `check_build` scenario and no
+  `serial_tables` switch: the builder makes no pool at one thread, so every check's 2-thread
+  run (tables built on the pool) against its 1-thread run (tables built serially) holds the
+  parallel tables to the serial ones bit for bit, under every setting the checks cover (Auto,
+  raised at 10⁻⁸, PlaneWave, Dense, Batched, Classes, the defaults); `check_build_timings` (in
+  `check_defaults`) builds once more under a wall clock: the parts timed, the tables within
+  the operator, the steps within the wall time, M2L blocks only on RCR levels, every rank.
 - `nd-fmm-validate` `tests/helmholtz_accuracy.rs`: the "Build" table's columns on W1 at kD = 30.
 - Machine runs (below): checksums equal to CH4.0e's on every case, split and machine.
 
@@ -154,10 +155,32 @@ manifest change).
   waves; the new constructor must give the same final tables as the setter chain under every
   setting the builder passes.
 
+## Results
+
+- The table hashes (`tests/helmholtz/parts.rs`, `print_the_hashes`, release, the M6) on `main`'s
+  tables (before any change) and the branch's, equal: RCR k̂₀ = 120 + 6i d99e3221b99a61e3,
+  120 71223dfc2b0eba4f, 6 + 0.5i 1520f647ee9b88bd; matrices 6 + 0.5i e8f14c144df269a6, 120
+  9218603869fc1abd; plane waves 40 at 10⁻⁶ bc43acd5206e0682 and 10⁻⁸ 2b62dea0a7d6d982, 20 + 2i
+  38d11660252af3c9 and b9419e1bdc4071ca. The self-review repeated them on a copy of `main`.
+- The machine runs: `fmm-validate/results/helmholtz-ch4-0h.md` (Kathleen job 634392; locust
+  2026-11-16). W1 at kD = 500 at the best split 0.15–0.23 of one core, at one rank per node
+  0.44–0.66; every checksum CH4.0e's.
+
+## Checks (run)
+
+`/verify` on the M6: fmt, Clippy (default, examples, workspace), docs; the default and
+workspace tests at opt-level 1 (1,270 and 1,384 passed); the MPI list at 2 and 4 ranks (24 of
+24; `helmholtz_fmm` 26.7 and 27.1 s); the one-rank opt-level 0 runs: `helmholtz_fmm` 510 s
+(load 2–26; CH4.0d3 666 s at 15–19), `nd-fmm-validate`'s `helmholtz_accuracy` 252 s (load
+2–4; CH4.0e 246 s at 2–3), `nd-fmm-exec`'s `tests/helmholtz/` 44 s (load 8; `build.rs` about
+9 s of it), `nd-fmm-tables`' `tests/helmholtz/` 35.9 s (`main` 35.5 s). After the
+self-review's fixes the four touched test executables again at opt-level 1 and Clippy.
+
 ## Pending runs
 
-(filled in step 6)
+None.
 
 ## Open questions
 
-(none yet)
+The PR's (report §8): the acceptance as read (at the node's best split), the follow-ups'
+order (CH4.0j, CH4.0k), and `nd-fmm-tables`' amended rule.
