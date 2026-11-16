@@ -663,6 +663,37 @@ fn helmholtz_accuracy_harness() {
     check_near_v(&world);
     check_leaves(&world);
     check_near_wx(&world);
+    check_block_budget(&world);
+}
+
+/// Helmholtz CH4.0e: the M2L's rotation blocks formed per V pair (a block budget of 0)
+/// against the stored ones (the library's budget), on Rotation: the same bits, and the
+/// stored levels reported.
+fn check_block_budget(world: &SimpleCommunicator) {
+    let stored = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-6));
+    assert_eq!(stored.block_budget, None, "Case::new's");
+    assert_eq!(stored.m2l, HelmholtzM2l::Rotation);
+    let per_pair = Case {
+        block_budget: Some(0),
+        ..stored.clone()
+    };
+    let problem = Problem::new(&stored);
+    let oracle = Oracle::sharded(complex_k(&stored), &problem, stored.gradients, 2, world);
+    let row_stored = run(&stored, &problem, &oracle, 2, world).expect("the FMM runs");
+    let row_per_pair = run(&per_pair, &problem, &oracle, 2, world).expect("the FMM runs");
+    let with_pairs: Vec<usize> = (0..row_stored.levels)
+        .filter(|&l| row_stored.v_pairs[l] > 0)
+        .collect();
+    assert!(!with_pairs.is_empty());
+    assert!(with_pairs.iter().all(|&l| row_stored.m2l_blocks_stored[l]));
+    assert!(
+        with_pairs
+            .iter()
+            .all(|&l| !row_per_pair.m2l_blocks_stored[l])
+    );
+    assert_eq!(row_stored.m2l_blocks_stored.len(), row_stored.levels);
+    assert_eq!(row_per_pair.checksum, row_stored.checksum);
+    assert_eq!(row_per_pair.errors, row_stored.errors);
 }
 
 /// The W and X pairs as near pairs (Helmholtz CH4.0d3) on W4's clusters (N = 2,000, kD = 10;

@@ -3158,3 +3158,49 @@ request, using this template:
   list pass).
 - Follow-ups: CH4.3 (roadmap: c_leaf re-decided with the per-level high-frequency rule);
   CH4.0e next (the comparison under the defaults).
+
+## 2026-11-16: CH4.0e The comparison under the default, and H4's expected gain
+- Done:
+  - CH3.6's matrix (19 cases × 10⁻³, 10⁻⁶, 10⁻⁸) under the defaults as they stand after
+    CH4.0d3 on four splits per machine (Kathleen 1 × 40 to 8 × 5, locust 1 × 72 to 8 × 9), ABBA,
+    beside FMM3D's `default` and `fastker` on every core over an eps grid 10⁻³–10⁻⁹, both against
+    the same sampled direct sum; the same requested ε and matched accuracy (the fastest grid eps
+    at least as accurate in φ and ∇φ). Kathleen jobs 634358, 634359, 634367–634370, 634373,
+    634380; locust on 2026-11-15/16. Report `fmm-validate/results/helmholtz-ch4-0e.md`; raw
+    outputs in `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0e/`;
+    `tools/helmholtz/ch4-0e-runs.sh`, `ch4-0e-tables.py`.
+  - Ours 0.69–0.93× `fastker` at matched accuracy on Kathleen and 0.27–0.38× on locust
+    (geometric means by ε); W1 at kD = 500 9.9–19.9 s on Kathleen against `fastker`'s
+    33.4–49.1 s (CH3.6: 32–100 s); FMM3D faster only on sub-second cases, where our build is
+    46–96 % of our time and our evaluation alone beats FMM3D's call.
+  - H4's gain bounded: inside D1 only W1 at kD = 500 has levels with k a ≥ 8 on RCR; bound
+    14–31 % of build plus one evaluation (36–61 % of the evaluation), S6's diagonal pairs alone
+    13–30 %, with S6's unoptimised conversions 6–14 %; W1 at kD = 1000 27–42 %, 27–41 % and
+    9–17 %; H4's transfer functions 0.2–0.6 s of build in parallel, 5.7–21 s serially.
+  - Found: the build barely uses the threads; level 2's Rotation M2L is split by box only
+    (28–48 % of linear) and forms its blocks per pair at p = 131 (`nd-fmm-validate`:
+    `Case::block_budget`, `Row::m2l_blocks_stored`, `--block-budget`; storing them net
+    0.92–1.03×); our RCR per pair 1.9–3.3× S6's prototype on the same core.
+  - B5: per core Grace runs the M2L levels 1.9–2.4× faster than Cascade Lake, × 1.8 cores, both
+    evaluations at 54 % of linear.
+  - A defect of the run script found and fixed before any reported run: GNU `nproc` honours
+    `OMP_NUM_THREADS`, so FMM3D's first round ran on one thread (Kathleen 634360–634363, locust's
+    first FMM3D stage); cancelled, kept apart, unused.
+- Self-review (subagent): no blocking defect; its method points taken into the report and the
+  tables script (the pairs-alone estimate, the bound by the admitted share, FMM3D's faster
+  variant, the launch spreads, the one-core table).
+- Tests: `check_block_budget` in `nd-fmm-validate`'s `tests/helmholtz_accuracy.rs` (blocks formed
+  per pair against stored ones, bit for bit, on W1 at kD = 30); the runs' checksums equal over
+  every split and launch per machine.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default
+  and workspace tests at opt-level 1 (1,261 and 1,375 passed); `helmholtz_accuracy`'s one-rank
+  opt-level 0 run 246 s at load 2–3 (241 s with `main`'s test file). No MPI list (no library
+  crate changed). Nothing pending.
+- Decisions: questions for sign-off (the PR, report §7): (1) H4's go-ahead and order, CH4.0h and
+  CH4.0i recommended before H4; (2) the block budget's default kept.
+- Laplace: not touched (no library crate changed).
+- Follow-ups: CH4.0h (the build by part, and parallel) and CH4.0i (the coarse RCR levels),
+  roadmap lines added and on the priority list.
+- Sign-off (the user on #220, 2026-11-16: "Both questions as recommended."): (1) H4 goes ahead
+  after CH4.0h and CH4.0i, then CHA.1–CHA.3, CH1.3d, CH4.1–CH4.5; (2) `DEFAULT_BLOCK_BUDGET`
+  stays 512 MiB. Next: CH4.0h.
