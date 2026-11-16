@@ -61,9 +61,11 @@ with p). Every node's counts and every shift table is independent of the others.
   3. every level's 104 source and 48 child shift tables, one part each (flattened).
   `PlaneWaveM2l::build_with_reach_on` runs it on its levels; `MergeLevel::with_reach` runs
   it on one level with `Serial`. No public API changes; no table, layout or value changes.
-- If the machine runs show `PlaneWaveLevel` (stage 2) as the critical path at 72 threads, its
-  per-node factors and the two frames' rotation blocks become parts too (the same functions);
-  decided by the timings, recorded in the report.
+- As built: `PlaneWaveLevel` (stage 2) in parts too, each node's values and each frame's
+  rotation blocks (`LevelLayout`): its per-node values are about 90 % of it and at p = 32 it
+  would have been the longest part at 72 threads (M6 probe); and the shift tables kept one
+  allocation each (`Shifts`, its `Debug` the flat list's text): their serial concatenation was
+  half the time in parts (7 of 14 ms at κ = 45 on the M6).
 - `fmm-tables/CLAUDE.md`: the parts list gains the exponential M2L's stages.
 
 `nd-fmm-validate` / tools: `tools/helmholtz/ch4-0j-runs.sh` (the `parts` stage: the ignored
@@ -87,8 +89,10 @@ No convention changes; no dependency changes; `nd-fmm-plan` untouched.
     2026-11-16: bc43acd5206e0682, 2b62dea0a7d6d982, 38d11660252af3c9, b9419e1bdc4071ca, the
     same as CH4.0h's), the RCR and matrix hashes unchanged.
   - new ignored `time_a_levels_parts` (prints, asserts no time): per (iprec, κ, p) over the
-    levels' range, one level's quadrature, `PlaneWaveLevel` and shifts on one thread, and
-    the staged build on one thread and on the threads of the test map; run on the machines.
+    levels' range, one level's quadrature, `PlaneWaveLevel` and shifts on one thread; run on
+    the machines. As first written it also timed the build on a map that started its threads
+    per call, which at 72 threads timed their start (7 ms whatever the level, locust): dropped;
+    the time on many threads is the FMM's, the harness's build part "plane-wave tables".
 - `tests/helmholtz/plane_wave_merge.rs` and `plane_wave_quadrature.rs` unchanged and passing
   (the counts, the shifts against the pair's, the rule).
 - `nd-fmm-exec` `tests/helmholtz_fmm.rs`: unchanged; every check's 2-thread run builds the
@@ -127,8 +131,23 @@ opt-level 1, the MPI list at 2 and 4 ranks); `cargo clippy -p nd-fmm-tables --al
 
 ## Pending runs
 
-(filled in step 6)
+None. Done: locust 2026-11-16 15:06–15:12 (`parts`, the matrix at 1 × 72, 76 launches);
+Kathleen job 634435 (node-c11b-047, 16 min; `parts`, the matrix at 1 × 40, 76 launches). Raw
+outputs `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0j/`.
+
+## Results
+
+Report `fmm-validate/results/helmholtz-ch4-0j.md`. Tables bit for bit (hashes `main`'s, every
+checksum CH4.0h's); the plane-wave tables part 0.05–0.29 of CH4.0h's on locust, 0.08–0.42 on
+Kathleen; the build at most half CH4.0h's on 8 of 51 case-ε pairs under 1 s (locust) and 12 of
+43 (Kathleen), the others above half even without plane-wave tables (39, 28) or within 0.06 of
+that floor (4, 3): the shared steps (CH4.0k) and Batched's matrices.
+
+`/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and workspace
+tests at opt-level 1 (1,275 and 1,389 passed), the MPI list at 2 and 4 ranks (24 of 24);
+`nd-fmm-tables`' `tests/helmholtz` at opt-level 0 37.8 s at load 12 (CH4.0i 36.7 s); the
+hashes in release. No Laplace path changed, so no D9 runs.
 
 ## Open questions
 
-(none yet)
+The report's §6: (1) the acceptance as read; (2) CH4.0k's place.
