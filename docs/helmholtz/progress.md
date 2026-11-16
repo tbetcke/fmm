@@ -3174,8 +3174,9 @@ request, using this template:
     33.4–49.1 s (CH3.6: 32–100 s); FMM3D faster only on sub-second cases, where our build is
     46–96 % of our time and our evaluation alone beats FMM3D's call.
   - H4's gain bounded: inside D1 only W1 at kD = 500 has levels with k a ≥ 8 on RCR; bound
-    14–31 %, S6-prototype estimate 6–14 % of build plus one evaluation; W1 at kD = 1000 27–42 %
-    and 9–17 %; H4's transfer functions 0.2–0.6 s of build in parallel, 5.7–21 s serially.
+    14–31 % of build plus one evaluation (36–61 % of the evaluation), S6's diagonal pairs alone
+    13–30 %, with S6's unoptimised conversions 6–14 %; W1 at kD = 1000 27–42 %, 27–41 % and
+    9–17 %; H4's transfer functions 0.2–0.6 s of build in parallel, 5.7–21 s serially.
   - Found: the build barely uses the threads; level 2's Rotation M2L is split by box only
     (28–48 % of linear) and forms its blocks per pair at p = 131 (`nd-fmm-validate`:
     `Case::block_budget`, `Row::m2l_blocks_stored`, `--block-budget`; storing them net
@@ -3185,6 +3186,9 @@ request, using this template:
   - A defect of the run script found and fixed before any reported run: GNU `nproc` honours
     `OMP_NUM_THREADS`, so FMM3D's first round ran on one thread (Kathleen 634360–634363, locust's
     first FMM3D stage); cancelled, kept apart, unused.
+- Self-review (subagent): no blocking defect; its method points taken into the report and the
+  tables script (the pairs-alone estimate, the bound by the admitted share, FMM3D's faster
+  variant, the launch spreads, the one-core table).
 - Tests: `check_block_budget` in `nd-fmm-validate`'s `tests/helmholtz_accuracy.rs` (blocks formed
   per pair against stored ones, bit for bit, on W1 at kD = 30); the runs' checksums equal over
   every split and launch per machine.

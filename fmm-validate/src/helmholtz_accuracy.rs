@@ -671,9 +671,9 @@ pub struct Row {
     /// Per level, the M2L level calls' seconds in the last evaluation, the slowest rank's
     /// (`HelmholtzOperator::m2l_times`; Helmholtz CH6.2b).
     pub m2l_seconds: Vec<f64>,
-    /// Per level, whether the M2L's rotation blocks are stored (`HelmholtzTables::
-    /// m2l_blocks_stored`, Helmholtz CH4.0e); else they are formed per V pair. The same on
-    /// every rank (the tables follow the global degrees and the budget).
+    /// Per level, whether the M2L's rotation blocks are stored
+    /// (`HelmholtzTables::m2l_blocks_stored`, Helmholtz CH4.0e); else they are formed per V
+    /// pair. The same on every rank (the tables follow the global degrees and the budget).
     pub m2l_blocks_stored: Vec<bool>,
     /// Per level, the exponential M2L's passes in the last evaluation, [waves, merge and
     /// shift] seconds, each the slowest rank's (`HelmholtzOperator::plane_wave_times`;

@@ -11,7 +11,7 @@ Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0d3 are merged; CH4.0e
 compares the defaults with FMM3D on Kathleen and locust (ours 0.27–0.93× `fastker` at matched
 accuracy; FMM3D faster only where our build dominates) and bounds H4's gain inside D1 at
-14–31 % on W1 at kD = 500 alone; it proposes CH4.0h (the build) and CH4.0i (the coarse RCR
+14–31 % of build plus one evaluation on W1 at kD = 500 alone; it proposes CH4.0h (the build) and CH4.0i (the coarse RCR
 levels) before H4, pending its sign-off. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are
 done, and of H0, CH0.4 and CH0.6. Next: CH4.0e's sign-off, then the list as it decides.
 The history of this line until H6.G is in `progress.md` and in this file's history
@@ -562,8 +562,8 @@ task's full line is in its record or report and its progress entry
   matrix under the defaults beside `hfmm3d` on Kathleen and locust, each at its best split: ours
   0.69–0.93× `fastker` at matched accuracy on Kathleen, 0.27–0.38× on locust (geometric means),
   slower only on sub-second cases where our build is 46–96 %; H4 inside D1 touches W1 at
-  kD = 500 alone (bound 14–31 %, prototype 6–14 % of build plus one evaluation; kD = 1000 27–42 %,
-  9–17 %); B5 measured (1.9–2.4× per core × 1.8 cores). *Sign-off:* H4's go-ahead and order and the block budget (the PR's
+  kD = 500 alone (bound 14–31 % of build plus one evaluation, S6's pairs alone 13–30 %;
+  kD = 1000 27–42 %); B5 measured (1.9–2.4× per core × 1.8 cores). *Sign-off:* H4's go-ahead and order and the block budget (the PR's
   questions 1–2), pending.
 - [ ] **CH4.0f Batched's split across the matrix's rows.** Added on 2026-11-12 at CH4.0
   (report §4, §8): with CH4.0's split by blocks, Batched on levels of 64–5,000 boxes at 40–72

@@ -78,7 +78,8 @@ errors`.
   best split (the smallest build plus one evaluation, the minimum over the two launches),
   ours build, evaluation and both beside FMM3D's whole call at the same ε; FMM3D at matched
   accuracy: per case, ε and variant the largest grid eps whose φ and ∇φ errors are both at
-  most ours (FMM3D at least as accurate in both fields; the tightest grid eps if none),
+  most ours, the fastest such (FMM3D at least as accurate in both fields; the tightest grid
+  eps if none; one-sided, so it favours ours at 10⁻³, report §1),
   and its time; the per-level tables of item 2 and 3; the estimate (below).
 - `fmm-validate/results/helmholtz-ch4-0e.md` (new): the report.
 - `docs/helmholtz/roadmap.md`, `docs/helmholtz/progress.md`, this file; any follow-up the
@@ -168,8 +169,14 @@ outputs kept apart and unused.
 - Against `fastker` at matched accuracy, geometric means 0.78, 0.69, 0.93 (Kathleen) and 0.30,
   0.27, 0.38 (locust) at 10⁻³, 10⁻⁶, 10⁻⁸; where FMM3D is faster our build is 46–96 % of our
   time.
-- H4 inside D1: only W1 at kD = 500 has RCR levels at k a ≥ 8; bound 14–31 %, prototype
-  estimate 6–14 % of build plus one evaluation; at kD = 1000 27–42 % and 9–17 %.
+- H4 inside D1: only W1 at kD = 500 has RCR levels at k a ≥ 8; bound 14–31 % of build plus one
+  evaluation (36–61 % of the evaluation), S6's diagonal pairs alone 13–30 %, with S6's
+  unoptimised conversions 6–14 %; at kD = 1000 27–42 %, 27–41 % and 9–17 %.
+- Self-review (a subagent on the branch, 2026-11-16): no blocking defect; its method points
+  taken into the report (the conversions-dominated prototype estimate, the bound against the
+  ceiling, the one-sided matched rule, locust's `fastker`, the launch spreads, the one-core
+  table) and the tables script (the bound by the admitted share, the pairs-alone column, `best`,
+  `spread`).
 - Found: the build barely uses the threads; level 2's Rotation M2L is split by box only (28–48 %
   of linear) and forms its blocks per pair at p = 131 (storing them: net 0.92–1.03×).
 - Kathleen against locust: 1.9–2.4× per core times 1.8× the cores.

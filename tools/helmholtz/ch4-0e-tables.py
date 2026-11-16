@@ -10,6 +10,7 @@
     python3 tools/helmholtz/ch4-0e-tables.py machines <dir A> <dir B> <case> <eps>
     python3 tools/helmholtz/ch4-0e-tables.py blocks <dir> [<dir> ...]
     python3 tools/helmholtz/ch4-0e-tables.py summary <dir> [<dir> ...]
+    python3 tools/helmholtz/ch4-0e-tables.py spread <dir> [<dir> ...]
 
 Several directories of one machine are read as one (the jobs of one machine). `compare`: per
 case and ε ours at its best split (build plus one evaluation, the smaller of launches a and
@@ -21,9 +22,10 @@ checksums' agreement over splits and launches. `levels`: one case's M2L per leve
 split. `estimate`: H4's bounded gain (the task's plan, "The estimate"). `t1`: the one-core
 runs. `machines`: one case's per-level times on two machines at their best splits and at one
 core. `blocks`: W1 at kD = 500 with every level's rotation blocks stored against the
-defaults, per split (the `blocks` stage). `summary`: per ε and variant our time over FMM3D's,
+defaults, per split (the `blocks` stage). `summary`: per ε and variant (and `best`, FMM3D's faster variant per case) our time over FMM3D's,
 at the same ε and at matched accuracy, the geometric mean, the range and the cases where ours
-is slower, over the matrix and over its two cases of N ≥ 10⁶. Python 3.9 standard library only.
+is slower, over the matrix and over its two cases of N ≥ 10⁶. `spread`: how far launches a and
+b disagree, ours and FMM3D's. Python 3.9 standard library only.
 """
 
 import glob
@@ -313,9 +315,10 @@ def is_rcr(ran):
 
 
 def level_estimate(r, kd, e):
-    """(M2L on RCR at k a ≥ 8, all M2L at k a ≥ 8, the prototype estimate's remaining time,
-    the levels counted) for one run."""
-    rcr = every = remain = 0.0
+    """For one run: the M2L on RCR at k a ≥ 8, its share the diagonal form admits (seconds),
+    all M2L at k a ≥ 8, the prototype estimate's remaining time with S6's conversions and
+    with the diagonal pairs alone (the conversions free), and the levels counted."""
+    rcr = admitted = every = remain = pairs_only = 0.0
     counted = []
     for x in r["levels"]:
         level, p = int(x["level"]), int(x["p"])
@@ -327,35 +330,37 @@ def level_estimate(r, kd, e):
             continue
         rcr += t
         share = 1.0 - rcr_share(ka(kd, level), e)
+        admitted += share * t
         diag, conv, rcr_pair = s6_at(p)
         scale = t / (pairs * rcr_pair) if pairs > 0 else 0.0
         remain += t * (1 - share) + share * scale * (pairs * diag + boxes * conv)
+        pairs_only += t * (1 - share) + share * scale * pairs * diag
         counted.append(f"{level}:{p}")
-    return rcr, every, remain, counted
+    return rcr, admitted, every, remain, pairs_only, counted
 
 
 def estimate(dirs):
     runs = ours(dirs)
     fm = fmm3d(dirs)
-    print("| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, prototype) |")
-    print("| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
+    print("| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype pairs alone: s | after H4, prototype with S6's conversions: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, pairs, conversions) |")
+    print("| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
     for case in cases_in_order(runs.keys()):
         kd = kd_of(case)
         for e in EPS:
             if (case, e) not in runs:
                 continue
             _, r = best(runs[(case, e)])
-            rcr, every, remain, counted = level_estimate(r, kd, e)
-            bound = r["total"] - rcr
+            rcr, admitted, every, remain, pairs_only, counted = level_estimate(r, kd, e)
+            bound = r["total"] - admitted
+            pairs = r["total"] - rcr + pairs_only
             proto = r["total"] - rcr + remain
             ceiling = r["total"] - every
             c = fm.get((case, "fastker"), {}).get(e)
-            ratio = f"{bound / c['s']:.2f}, {proto / c['s']:.2f}" if c else "–"
+            tail = (f"{c['s']:.3f} | {bound / c['s']:.2f}, {pairs / c['s']:.2f}, {proto / c['s']:.2f}"
+                    if c else "– | –")
             print(f"| {case} | {e} | {r['total']:.3f} | {', '.join(counted) or 'none'} | {rcr:.3f} | "
-                  f"{rcr / r['total']:.0%} | {bound:.3f} | {proto:.3f} | {ceiling:.3f} | "
-                  f"{c['s']:.3f} | {ratio} |" if c else
-                  f"| {case} | {e} | {r['total']:.3f} | {', '.join(counted) or 'none'} | {rcr:.3f} | "
-                  f"{rcr / r['total']:.0%} | {bound:.3f} | {proto:.3f} | {ceiling:.3f} | – | – |")
+                  f"{rcr / r['total']:.0%} | {bound:.3f} | {pairs:.3f} | {proto:.3f} | {ceiling:.3f} | "
+                  f"{tail} |")
 
 
 def levels(dirs, case, split=None):
@@ -447,20 +452,20 @@ def summary(dirs):
     print("| ε | variant | cases | same ε: geometric mean (range) | slower | matched: geometric mean (range) | slower | N ≥ 10⁶: same ε, matched |")
     print("| --- | --- | --- | --- | --- | --- | --- | --- |")
     for e in EPS:
-        for v in ("default", "fastker"):
+        for v in ("default", "fastker", "best"):
             same, match, large = [], [], []
             slow_same, slow_match = [], []
             for case in cases_in_order(runs.keys()):
                 if (case, e) not in runs or case == "w1-10":
                     continue
                 _, r = best(runs[(case, e)])
-                grid = fm.get((case, v), {})
-                c = grid.get(e)
-                if c is None:
+                variants = ("default", "fastker") if v == "best" else (v,)
+                times = [fm.get((case, w), {}).get(e) for w in variants]
+                if any(c is None for c in times):
                     continue
-                a = r["total"] / c["s"]
-                _, m, _ = matched(grid, r["phi"], r["grad"])
-                b = r["total"] / m["s"]
+                # FMM3D's faster variant: ours over the smaller time, so the larger ratio.
+                a = max(r["total"] / c["s"] for c in times)
+                b = max(r["total"] / matched(fm[(case, w)], r["phi"], r["grad"])[1]["s"] for w in variants)
                 same.append(a)
                 match.append(b)
                 if a > 1:
@@ -477,6 +482,41 @@ def summary(dirs):
                   f"{len(slow_match)} | {'; '.join(large)} |")
 
 
+def spread(dirs):
+    """The two launches' disagreement: ours at each case's best split (build plus one
+    evaluation), FMM3D per eps and variant (each launch's best of two calls); median and
+    largest relative difference, FMM3D's apart for calls under and over 1 s."""
+    runs = ours(dirs)
+    rows = []
+    for (case, e), per in runs.items():
+        split, _ = best(per)
+        rs = per[split]
+        if len(rs) == 2:
+            lo, hi = sorted(x["total"] for x in rs)
+            rows.append(((hi - lo) / lo, case, e, split))
+    rows.sort()
+    med = rows[len(rows) // 2][0]
+    print(f"ours: {len(rows)} case × ε, median {med:.1%}, largest {rows[-1][0]:.1%} {rows[-1][1:]}; "
+          f"without W1 at kD = 10 largest {max(r for r in rows if r[1] != 'w1-10')[0]:.1%} "
+          f"{max(r for r in rows if r[1] != 'w1-10')[1:]}")
+    calls = defaultdict(dict)
+    for d in dirs:
+        for path in glob.glob(os.path.join(d, "fmm3d", "fmm3d-*.log")):
+            m = re.match(r"fmm3d-(.+)-(default|fastker)-([ab])$", os.path.basename(path)[:-4])
+            if not m:
+                continue
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    t = re.match(r"helmholtz: token=(\S+) .*seconds=\s*(\S+)", line)
+                    if t:
+                        calls[(m.group(1), m.group(2), t.group(1))][m.group(3)] = float(t.group(2))
+    for name, keep in (("under 1 s", lambda s: s < 1), ("over 1 s", lambda s: s >= 1)):
+        diffs = sorted((max(v.values()) - min(v.values())) / min(v.values())
+                       for v in calls.values() if len(v) == 2 and keep(min(v.values())))
+        if diffs:
+            print(f"FMM3D calls {name}: {len(diffs)}, median {diffs[len(diffs) // 2]:.1%}, largest {diffs[-1]:.1%}")
+
+
 def main(argv):
     if len(argv) < 3:
         sys.exit(__doc__)
@@ -491,6 +531,8 @@ def main(argv):
         estimate(rest)
     elif step == "t1":
         t1(rest)
+    elif step == "spread":
+        spread(rest)
     elif step == "summary":
         summary(rest)
     elif step == "blocks":

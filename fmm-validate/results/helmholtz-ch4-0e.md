@@ -25,6 +25,13 @@ question 1 of #209). Proposal §9.1, §9.2, §3.6, §5.4, §7. Builds on CH3.6's
   | `default`, matched accuracy | 0.43 | 0.38 | 0.44 | 0.50 | 0.48 | 0.44 |
   | `fastker`, same ε | 1.16 | 0.61 | 0.90 | 0.72 | 0.26 | 0.38 |
   | `fastker`, matched accuracy | 0.78 | 0.69 | 0.93 | 0.30 | 0.27 | 0.38 |
+  | FMM3D's faster variant, same ε | 1.16 | 0.61 | 0.90 | 0.86 | 0.43 | 0.46 |
+  | FMM3D's faster variant, matched accuracy | 0.78 | 0.69 | 0.93 | 0.54 | 0.51 | 0.47 |
+
+  On Kathleen `fastker` is the faster variant on every case. On locust `fastker` is often 3–4×
+  slower than `default` (W1 at kD = 30: 0.22 against 0.06 s at 10⁻⁶), so its rows there flatter
+  ours; the last two rows take FMM3D's faster variant per case. The matched rule is one-sided
+  (§1): at 10⁻³ it favours ours.
 
   On the two cases of N ≥ 10⁶ ours is 0.18–0.50 of `fastker`'s time on Kathleen and 0.08–0.36
   on locust, at either measure: W1 at kD = 500 takes 9.9, 11.7 and 19.9 s on Kathleen (CH3.6:
@@ -37,15 +44,19 @@ question 1 of #209). Proposal §9.1, §9.2, §3.6, §5.4, §7. Builds on CH3.6's
   at kD = 100: 38.5 s against `default`'s 11.7 s at 10⁻⁶, both launches), ours is slower at
   matched accuracy only on W3 at kD = 10 (4,032 points, ≤ 0.06 s) and W1 at kD = 30 at 10⁻⁶
   against `default`.
-- **H4's expected gain is small inside D1** (§3). Of the 57 case × ε points only W1 at
+- **H4 inside D1 changes one case of the matrix** (§3). Of the 57 case × ε points only W1 at
   kD = 500 has levels with k a ≥ 8 on RCR (levels 2 and 3, p = 123–135 and 66–76); everywhere
   else `Auto` already runs those levels on the exponential M2L. On W1 at kD = 500 the bound
-  (those levels' M2L free) is 14–31 % of build plus one evaluation (36–61 % of the evaluation),
-  the estimate from S6's prototype times 6–14 % (15–28 % of the evaluation); H4's transfer
-  functions add 0.2 s to the build if built in parallel over the classes and about 5.7 s if
-  built serially. Ours is already 0.23–0.44× `fastker` there. At kD = 1000 (CH4.4, outside D1;
-  §3.3) the bound is 27–42 % and the prototype estimate 9–17 %, with about 21 s of serial
-  transfer-function build against it.
+  (those levels' M2L free) is 14–31 % of build plus one evaluation and 36–61 % of the
+  evaluation; S6's prototype diagonal pairs alone give 13–30 % and 34–58 %, close to the bound
+  (with S6's unoptimised conversions 6–14 %, a pessimistic floor). So on that case H4 is worth
+  up to about half an evaluation, a real gain, but on one case, where ours is already
+  0.23–0.44× `fastker`'s time (0.14–0.35× after H4 by the bound, at matched accuracy, either
+  variant, either machine). H4's transfer functions add 0.2 s to the build in parallel over
+  the classes, 5.7 s serially. At kD = 1000 (CH4.4, outside D1; §3.3) the bound is 27–42 % and
+  the pairs alone 27–41 % of build plus one evaluation, against about 21 s of serial
+  transfer-function build. If H4 also replaced the exponential M2L on levels with k a ≥ 8,
+  the ceiling adds 0.2–1.9 s at kD = 500.
 - **Two cheaper levers, found on the way** (§3.2): the **build**, which barely scales with
   threads (W1 at kD = 500: 5.5 s on one core, 4.6 s on 40; it grows with the degrees, not N:
   W3 at kD = 100 with 4·10⁶ points builds in 0.8–1.2 s) and is what FMM3D is faster on; and
@@ -53,7 +64,7 @@ question 1 of #209). Proposal §9.1, §9.2, §3.6, §5.4, §7. Builds on CH3.6's
   efficiency, its rotation blocks (601 MB at p = 131) formed per V pair under the 512 MiB
   default budget (storing them saves 18–22 % per pair and costs 0.1–1.3 s of build: net
   0.92–1.03×), and per pair 1.9–3.3× S6's scalar prototype on the same Grace core
-  (p = 72–131).
+  (p = 72–131). Fixing level 2's threading would also shrink what H4 can gain there.
 - **Kathleen against locust (review B5), measured** (§4): per core the Grace core runs every
   M2L level 1.9–2.4× faster than a Cascade Lake core (W1 at kD = 500, 10⁻⁶, one core each:
   level 2 50.9 against 26.5 s, level 3 27.1 against 13.2 s, level 4 10.5 against 4.4 s); times
@@ -61,7 +72,8 @@ question 1 of #209). Proposal §9.1, §9.2, §3.6, §5.4, §7. Builds on CH3.6's
   (54 %); the levels' own efficiencies spread it to the review's 3.3–5.4×. The evaluation is
   2.5× at the best splits, the build 1.7×.
 - **Questions for sign-off (§7)**: (1) H4's go-ahead and order: recommended, H4 stays, after
-  two new tasks for the build and the coarse RCR levels; (2) the block budget's default kept.
+  two new tasks for the build and the coarse RCR levels, which act on every case and on the
+  same levels H4 targets; (2) the block budget's default kept.
 
 ## 1. Method
 
@@ -95,7 +107,13 @@ question 1 of #209). Proposal §9.1, §9.2, §3.6, §5.4, §7. Builds on CH3.6's
 - **Matched accuracy.** Per case, ε and variant, the fastest grid eps whose φ and ∇φ errors
   are both at most ours (FMM3D at least as accurate in both fields); `>` marks a row where no
   grid eps is, and the most accurate grid eps is shown. The match moves in FMM3D's steps
-  (its order and quadrature tables), so it is as close as the grid allows.
+  (its order and quadrature tables), so it is as close as the grid allows. It is one-sided:
+  FMM3D moves to our errors, ours never to a looser ε. At 10⁻³ ours is 10–100× more accurate
+  than asked (W1 at kD = 500: 1.2e-5), and FMM3D's next step below 10⁻³ is often 10⁻⁷–10⁻⁸
+  (6.1e-8 at 3·10⁻⁴ there), so the matched figures at 10⁻³ favour ours; the same-ε figures are
+  given beside them. Checked by hand on three rows (W1 at kD = 500 at 10⁻³, W3 at kD = 30 at
+  10⁻⁶, W4's Plummer sphere at kD = 100 at 10⁻⁸: 3·10⁻⁴, 3·10⁻⁴ and 3·10⁻⁷ from the grid's
+  errors).
 - **One core** (`t1`): ours at 1 × 1 and both FMM3D variants on one thread on W1 at
   kD = 100 (CH3.6's one-thread case), and ours on W1 at kD = 500 at 10⁻⁶, for the per-core
   part of the comparison of the machines (§4).
@@ -109,12 +127,19 @@ question 1 of #209). Proposal §9.1, §9.2, §3.6, §5.4, §7. Builds on CH3.6's
   the share of V pairs the diagonal form admits, from S6's table for the calibrated p at the
   level's (k a, ε) (`spikes/diagonal/results/summary.md` §3, "real, calibrated"); then
   - **the bound**: that share of the level's M2L time removed entirely (diagonal pairs and
-    the conversions free), an upper bound of H4's gain on our trees;
-  - **the prototype estimate**: that share at the cost of S6's prototype diagonal pair plus
-    S → F and F → R per box (`spikes/diagonal/results/times.md`, run 1, interpolated in log p),
-    scaled by the level's measured RCR seconds over S6's prototype RCR pair on its pairs (so
-    the scale carries our vectorisation and threads);
-  - **the ceiling**: every level's M2L with k a_l ≥ 8 removed, the exponential M2L's included.
+    the conversions free), an upper bound of H4's gain on our trees as long as H4 leaves the
+    exponential M2L's levels alone;
+  - **the prototype estimates**: that share at the cost of S6's prototype diagonal pair, alone
+    ("pairs alone") and plus S → F and F → R per box ("with S6's conversions";
+    `spikes/diagonal/results/times.md`, run 1, interpolated in log p), scaled by the level's
+    measured RCR seconds over S6's prototype RCR pair on its pairs (so the scale carries our
+    vectorisation and threads, level 2's poor threading included). S6's conversions are a
+    Legendre step per ring and order and a DFT as a product, O(p³) per box, "not CH4.x's
+    transforms" (its §8); proposal §5.4 plans them as level-batched products. They make up
+    90–95 % of the second estimate's remaining time, so it leans pessimistic for H4 and the
+    pairs-alone estimate, within 0.1–1.4 s of the bound, is the likelier;
+  - **the ceiling**: every level's M2L with k a_l ≥ 8 removed, the exponential M2L's included
+    (the bound if H4 also replaced the exponential M2L on levels 4 and 5, k a 27 and 13.5).
   None includes H4's scratch traffic (proposal §7) or the class-permuted transfer functions'
   reads, which the prototypes do not have.
 
@@ -258,9 +283,10 @@ not investigated here.
 
 ### 2.3 The summary and where FMM3D is faster
 
-Our time over FMM3D's, per ε and variant, over the 18 cases other than W1 at kD = 10: the
-geometric mean, the range and the cases where ours is slower; the last column the two cases
-of N ≥ 10⁶ (W1 at kD = 500; W3 at kD = 100), same ε and matched.
+Our time over FMM3D's, per ε and variant (`best`: FMM3D's faster variant per case), over the
+18 cases other than W1 at kD = 10: the geometric mean, the range and the cases where ours is
+slower; the last column the two cases of N ≥ 10⁶ (W1 at kD = 500; W3 at kD = 100), same ε and
+matched.
 
 Kathleen:
 
@@ -268,10 +294,13 @@ Kathleen:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1e-3 | default | 18 | 0.59 (0.17–3.64) | 2 | 0.43 (0.12–3.64) | 2 | 0.20, 0.20; 0.17, 0.12 |
 | 1e-3 | fastker | 18 | 1.16 (0.29–6.75) | 11 | 0.78 (0.18–6.75) | 7 | 0.29, 0.29; 0.50, 0.18 |
+| 1e-3 | best | 18 | 1.16 (0.29–6.75) | 11 | 0.78 (0.18–6.75) | 7 | 0.29, 0.29; 0.50, 0.18 |
 | 1e-6 | default | 18 | 0.32 (0.16–1.45) | 1 | 0.38 (0.14–1.94) | 2 | 0.19, 0.24; 0.16, 0.14 |
 | 1e-6 | fastker | 18 | 0.61 (0.22–2.63) | 2 | 0.69 (0.20–2.89) | 4 | 0.27, 0.34; 0.22, 0.20 |
+| 1e-6 | best | 18 | 0.61 (0.22–2.63) | 2 | 0.69 (0.20–2.89) | 4 | 0.27, 0.34; 0.22, 0.20 |
 | 1e-8 | default | 18 | 0.42 (0.27–1.55) | 2 | 0.44 (0.27–1.43) | 2 | 0.28, 0.31; 0.31, 0.33 |
 | 1e-8 | fastker | 18 | 0.90 (0.41–4.42) | 9 | 0.93 (0.44–5.36) | 9 | 0.41, 0.44; 0.43, 0.47 |
+| 1e-8 | best | 18 | 0.90 (0.41–4.42) | 9 | 0.93 (0.44–5.36) | 9 | 0.41, 0.44; 0.43, 0.47 |
 
 locust:
 
@@ -279,10 +308,13 @@ locust:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1e-3 | default | 18 | 0.73 (0.23–3.88) | 4 | 0.50 (0.24–3.88) | 1 | 0.23, 0.24; 0.35, 0.27 |
 | 1e-3 | fastker | 18 | 0.72 (0.31–4.55) | 3 | 0.30 (0.08–4.55) | 1 | 0.31, 0.23; 0.36, 0.08 |
+| 1e-3 | best | 18 | 0.86 (0.31–4.55) | 6 | 0.54 (0.24–4.55) | 1 | 0.31, 0.24; 0.36, 0.27 |
 | 1e-6 | default | 18 | 0.39 (0.23–1.52) | 1 | 0.48 (0.27–2.24) | 2 | 0.23, 0.29; 0.30, 0.27 |
 | 1e-6 | fastker | 18 | 0.26 (0.09–0.59) | 0 | 0.27 (0.09–0.63) | 0 | 0.24, 0.29; 0.09, 0.09 |
+| 1e-6 | best | 18 | 0.43 (0.24–1.52) | 1 | 0.51 (0.27–2.24) | 2 | 0.24, 0.29; 0.30, 0.27 |
 | 1e-8 | default | 18 | 0.43 (0.27–1.61) | 1 | 0.44 (0.27–1.45) | 1 | 0.31, 0.34; 0.33, 0.36 |
 | 1e-8 | fastker | 18 | 0.38 (0.11–0.80) | 0 | 0.38 (0.12–0.82) | 0 | 0.34, 0.36; 0.11, 0.12 |
+| 1e-8 | best | 18 | 0.46 (0.27–1.61) | 1 | 0.47 (0.27–1.45) | 1 | 0.34, 0.36; 0.33, 0.36 |
 
 The cases slower than `fastker` at matched accuracy on Kathleen, with our build's share of
 our time:
@@ -447,12 +479,43 @@ locust:
 | w4-clusters-100 | 1e-6 | 0.369 | 0.309 | 0.273 | 0.263 | 8x9 | equal (8) |
 | w4-clusters-100 | 1e-8 | 0.593 | 0.519 | 0.477 | 0.474 | 8x9 | equal (8) |
 
-The best split is 4 × 10 (31 of 57 rows) or 2 × 20 (19) on Kathleen, 8 × 5 on W3 at kD = 100
-and three W4 cases at 10⁻³; 8 × 9 (43) or 4 × 18 (13) on locust; one rank over the node
+The best split is 4 × 10 (31 of 57 rows) or 2 × 20 (19) on Kathleen, 8 × 5 (7: W3 at kD = 100,
+three W4 cases at 10⁻³, W1 at kD = 10 at 10⁻⁸); 8 × 9 (43), 4 × 18 (13) or 2 × 36 (1) on locust;
+one rank over the node
 (1 × 40, 1 × 72) is never the best, and on the large cases the worst split takes up to 1.9×
-the best (W3 at kD = 100 at 10⁻³ on Kathleen: 7.0 s at 1 × 40 against 3.6 s at 8 × 5). The two launches of a split
-agree within a median 1.3 % (Kathleen) and 0.6 % (locust), at most 6 % (W3 at kD = 30); FMM3D's
-within 2 %.
+the best (W3 at kD = 100 at 10⁻³ on Kathleen: 7.0 s at 1 × 40 against 3.6 s at 8 × 5). The two
+launches agree at the best split within a median 1.3 % (Kathleen) and 0.7 % (locust), at most
+6.2 % and 5.9 % (W3 at kD = 30); over every split within a median 1.1 % and 0.7 %, at most
+9.7 % (W4's clusters at kD = 10, 8 × 5) and 8.9 % (W3 at kD = 10, 1 × 72), all of 0.5 s or less.
+W1 at kD = 10 (6 ms) is left out: one first launch took 83 ms. FMM3D's calls agree within a
+median 0.6 % and 0.2 % above 1 s (at most 4.1 % and 1.7 %), 0.9 % and 0.4 % below (at most 16.6 %
+on calls under 0.03 s). (The tables script's `spread` step.)
+
+### 2.5 One core
+
+W1 at kD = 100 (CH3.6's one-thread case), ours on 1 × 1 and both FMM3D variants on one thread
+(`t1`), the same columns as §2.1 (FMM3D one call per eps):
+
+Kathleen:
+
+| Case | ε | ours build s | ours evaluate s | ours s | φ, ∇φ | default s | fastker s | default matched: eps, s | fastker matched: eps, s |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- |
+| w1-100 | 1e-3 | 0.254 | 1.860 | 2.114 | 1.17e-05, 2.59e-05 | 11.049 | 4.937 | 3e-4, 11.304 | 3e-4, 5.410 |
+| w1-100 | 1e-6 | 0.289 | 2.725 | 3.014 | 7.89e-08, 2.27e-07 | 14.776 | 6.580 | 3e-7, 19.897 | 3e-7, 7.876 |
+| w1-100 | 1e-8 | 0.430 | 6.233 | 6.663 | 6.28e-10, 8.74e-10 | 22.955 | 8.955 | 3e-7, 19.897 | 3e-7, 7.876 |
+
+locust:
+
+| Case | ε | ours build s | ours evaluate s | ours s | φ, ∇φ | default s | fastker s | default matched: eps, s | fastker matched: eps, s |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- |
+| w1-100 | 1e-3 | 0.177 | 1.855 | 2.032 | 1.32e-05, 3.14e-05 | 7.834 | 6.846 | 3e-4, 8.826 | 3e-4, 12.532 |
+| w1-100 | 1e-6 | 0.198 | 2.229 | 2.427 | 8.99e-08, 2.55e-07 | 11.563 | 13.668 | 3e-7, 15.791 | 3e-7, 14.694 |
+| w1-100 | 1e-8 | 0.244 | 4.853 | 5.097 | 6.28e-10, 8.74e-10 | 18.157 | 15.558 | 3e-7, 15.791 | 3e-7, 14.694 |
+
+CH3.6 measured ours at 7.7, 19.8 and 57.9 s on one Kathleen core (RCR on every level, 64 points
+per leaf) against `fastker`'s 4.9, 6.6 and 8.9 s; under the defaults ours is 0.43, 0.46 and 0.74×
+`fastker` at the same ε (0.39, 0.38 and 0.85× matched). The evaluation dominates on one core
+(88–95 %): the build's poor threading (§3.2) is a whole-node effect.
 
 ## 3. H4's expected gain
 
@@ -460,7 +523,7 @@ within 2 %.
 
 The levels with k a ≥ 8 that run RCR: on the matrix only W1 at kD = 500's levels 2 and 3. W3
 at kD = 100 and W1 at kD = 100 have their levels with k a ≥ 8 (x = 21.7, 10.8) on the
-exponential M2L, and the other cases have none. W1 at kD = 500 per level at the best split
+exponential M2L, as do the four W4 cases at kD = 100; the other cases have none. W1 at kD = 500 per level at the best split
 ("ns per pair": the level's wall time over its V pairs, on the node):
 
 Kathleen (2 × 20):
@@ -510,22 +573,24 @@ row: no level, no gain):
 
 Kathleen:
 
-| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, prototype) |
-| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| w1-500 | 1e-3 | 9.851 | 2:123, 3:66 | 2.972 | 30% | 6.878 | 8.548 | 5.916 | 33.434 | 0.21, 0.26 |
-| w1-500 | 1e-6 | 11.714 | 2:131, 3:72 | 3.676 | 31% | 8.039 | 10.126 | 6.941 | 43.482 | 0.18, 0.23 |
-| w1-500 | 1e-8 | 19.886 | 2:135, 3:76 | 4.240 | 21% | 15.646 | 18.087 | 13.784 | 49.083 | 0.32, 0.37 |
+| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype pairs alone: s | after H4, prototype with S6's conversions: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, pairs, conversions) |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| w1-500 | 1e-3 | 9.851 | 2:123, 3:66 | 2.972 | 30% | 6.878 | 7.048 | 8.548 | 5.916 | 33.434 | 0.21, 0.21, 0.26 |
+| w1-500 | 1e-6 | 11.714 | 2:131, 3:72 | 3.676 | 31% | 8.039 | 8.237 | 10.126 | 6.941 | 43.482 | 0.18, 0.19, 0.23 |
+| w1-500 | 1e-8 | 19.886 | 2:135, 3:76 | 4.240 | 21% | 15.646 | 15.872 | 18.087 | 13.784 | 49.083 | 0.32, 0.32, 0.37 |
 
 locust:
 
-| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, prototype) |
-| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| w1-500 | 1e-3 | 4.479 | 2:123, 3:66 | 1.303 | 29% | 3.176 | 3.876 | 2.978 | 14.637 | 0.22, 0.26 |
-| w1-500 | 1e-6 | 5.548 | 2:131, 3:72 | 1.599 | 29% | 3.949 | 4.811 | 3.725 | 22.651 | 0.17, 0.21 |
-| w1-500 | 1e-8 | 8.337 | 2:135, 3:76 | 1.128 | 14% | 7.209 | 7.851 | 6.855 | 24.682 | 0.29, 0.32 |
+| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype pairs alone: s | after H4, prototype with S6's conversions: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, pairs, conversions) |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| w1-500 | 1e-3 | 4.479 | 2:123, 3:66 | 1.303 | 29% | 3.176 | 3.246 | 3.876 | 2.978 | 14.637 | 0.22, 0.22, 0.26 |
+| w1-500 | 1e-6 | 5.548 | 2:131, 3:72 | 1.599 | 29% | 3.949 | 4.029 | 4.811 | 3.725 | 22.651 | 0.17, 0.18, 0.21 |
+| w1-500 | 1e-8 | 8.337 | 2:135, 3:76 | 1.128 | 14% | 7.209 | 7.268 | 7.851 | 6.855 | 24.682 | 0.29, 0.29, 0.32 |
 
 On the evaluation alone the bound is 51, 51 and 37 % on Kathleen and 61, 56 and 36 % on locust
-at 10⁻³, 10⁻⁶ and 10⁻⁸; the prototype estimate 22, 22 and 16 % and 28, 26 and 15 %. The
+at 10⁻³, 10⁻⁶ and 10⁻⁸; S6's diagonal pairs alone 48, 49 and 35 % and 58, 53 and 34 %; with S6's
+conversions 22, 22 and 16 % and 28, 26 and 15 % (the conversions 90–91 % of that estimate's
+remaining time on these levels: the prototypes' O(p³) Legendre and DFT products, §1). The
 "ceiling" (every M2L at k a ≥ 8 free, the exponential M2L's levels 4 and 5 too) adds 1.0–1.9 s
 on Kathleen and 0.2–0.4 s on locust to the bound.
 
@@ -538,8 +603,10 @@ build would lose; a parallel one keeps most of the saving, and every further eva
 it again.
 
 **What remains to FMM3D after H4.** On W1 at kD = 500 ours would be 0.17–0.37× `fastker`'s time
-at the same ε (Kathleen 0.18–0.32 by the bound, 0.23–0.37 by the prototype; locust 0.17–0.29
-and 0.21–0.32), against 0.24–0.41× now: H4 does not decide the comparison inside D1. Where FMM3D is
+at the same ε (Kathleen 0.18–0.32 by the bound, 0.23–0.37 with S6's conversions; locust
+0.17–0.29 and 0.21–0.32), against 0.24–0.41× now; at matched accuracy 0.14–0.35× FMM3D's either
+variant, either machine, by the bound (now 0.23–0.44×): H4 does not decide the comparison
+inside D1. Where FMM3D is
 faster (§2.3) H4 changes nothing.
 
 ### 3.2 The cheaper levers
@@ -601,8 +668,8 @@ and saves 0.2–2.2 s of level 2's M2L: build plus one evaluation 0.92–1.03×.
 18–22 % of a pair, the rest the pair's own O(p³) work. Per pair on one core our Rotation takes
 20.3 ms at p = 131 and 2.2 ms at p = 72 on Kathleen, 10.6 and 1.08 ms on locust, where S6's
 scalar prototype took 3.0 ms at p = 128 and about 0.57 ms at p = 72 on a Grace core: on the
-same core ours is 1.9× the prototype at p = 72 and 3.3× at p = 131 (2.6× with the blocks
-stored, scaled by (131/128)³). (S6's prototype applied one complex expansion to one class;
+same core ours is 1.9× the prototype at p = 72 and 3.3× at p = 131 (2.5× with the blocks
+stored; S6's p = 128 scaled by (131/128)³). (S6's prototype applied one complex expansion to one class;
 whether the two differ in work, not only in speed, is not checked here.)
 
 ### 3.3 W1 at kD = 1000 (outside D1)
@@ -632,19 +699,19 @@ The estimate (levels 2–4 on RCR, p = 234–251, 123–135, 66–76):
 
 Kathleen:
 
-| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, prototype) |
-| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| w1-1000 | 1e-3 | 71.709 | 2:234, 3:123, 4:66 | 30.344 | 42% | 41.365 | 61.365 | 37.939 | – | – |
-| w1-1000 | 1e-6 | 85.345 | 2:245, 3:131, 4:72 | 36.180 | 42% | 49.165 | 73.502 | 44.933 | – | – |
-| w1-1000 | 1e-8 | 135.959 | 2:251, 3:135, 4:76 | 39.052 | 29% | 96.907 | 123.329 | 90.125 | – | – |
+| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype pairs alone: s | after H4, prototype with S6's conversions: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, pairs, conversions) |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| w1-1000 | 1e-3 | 71.709 | 2:234, 3:123, 4:66 | 30.344 | 42% | 41.365 | 42.474 | 61.365 | 37.939 | – | – |
+| w1-1000 | 1e-6 | 85.345 | 2:245, 3:131, 4:72 | 36.180 | 42% | 49.165 | 50.450 | 73.502 | 44.933 | – | – |
+| w1-1000 | 1e-8 | 135.959 | 2:251, 3:135, 4:76 | 39.052 | 29% | 96.907 | 98.269 | 123.329 | 90.125 | – | – |
 
 locust:
 
-| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, prototype) |
-| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| w1-1000 | 1e-3 | 32.900 | 2:234, 3:123, 4:66 | 13.007 | 40% | 19.893 | 27.425 | 19.283 | – | – |
-| w1-1000 | 1e-6 | 39.550 | 2:245, 3:131, 4:72 | 15.307 | 39% | 24.243 | 33.273 | 23.529 | – | – |
-| w1-1000 | 1e-8 | 61.803 | 2:251, 3:135, 4:76 | 16.884 | 27% | 44.919 | 54.945 | 43.712 | – | – |
+| Case | ε | ours s | levels on RCR at k a ≥ 8 (level:p) | their M2L s | share | after H4, bound: s | after H4, prototype pairs alone: s | after H4, prototype with S6's conversions: s | ceiling (all M2L at k a ≥ 8) s | fastker s | after H4 ÷ fastker (bound, pairs, conversions) |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| w1-1000 | 1e-3 | 32.900 | 2:234, 3:123, 4:66 | 13.007 | 40% | 19.893 | 20.279 | 27.425 | 19.283 | – | – |
+| w1-1000 | 1e-6 | 39.550 | 2:245, 3:131, 4:72 | 15.307 | 39% | 24.243 | 24.688 | 33.273 | 23.529 | – | – |
+| w1-1000 | 1e-8 | 61.803 | 2:251, 3:135, 4:76 | 16.884 | 27% | 44.919 | 45.403 | 54.945 | 43.712 | – | – |
 
 Per level at 10⁻⁶:
 
@@ -665,8 +732,9 @@ Per level at 10⁻⁶:
 | 1e-6 | 4x18 | 8 | 15 | 3.4 | planewave i2 | 5542930 | 282632 | 0.9798 | 177 |
 
 Here the bound is 29–42 % of build plus one evaluation on Kathleen and 27–40 % on locust
-(58–71 % and 70–82 % of the evaluation), the prototype estimate 9–14 % and 11–17 %
-(19–24 % and 29–34 % of the evaluation). H4's transfer functions at p = 245 (about 0.45 s per
+(58–71 % and 70–82 % of the evaluation), S6's diagonal pairs alone 28–41 % and 27–38 %, with
+S6's conversions 9–14 % and 11–17 % (19–24 % and 29–34 % of the evaluation; there the
+conversions are 94–95 % of the estimate's remaining time). H4's transfer functions at p = 245 (about 0.45 s per
 class by S6's interpolation) add about 21 s to the build for levels 2–4 serially, about 0.6 s
 over the node's threads. Level 2 (p = 245, 64 boxes) alone takes 20.1 s on Kathleen and 11.0 s
 on locust: the coarse RCR levels' parallelism (§3.2) matters more as kD grows, and the build
@@ -727,15 +795,19 @@ in `fmm3d-<case>.md` of each machine's archive.
   jobs 634358 (ours, W1 at kD = 500 and W3 at kD = 100; node-c11a-089), 634359 (ours, the
   matrix; node-c11b-008), 634367 (FMM3D, W1 at kD = 500; node-c11a-089), 634368 (FMM3D, W3 at
   kD = 100; node-c11b-008), 634369 (FMM3D, the matrix; node-c11b-008), 634370 (one core;
-  node-c11b-008), 634373 (blocks; node-c11a-089), 634380 (W1 at kD = 1000; node-c11a-089). Branch `tbetcke/h-ch4-0e`
+  node-c11b-008), 634373 (blocks; node-c11a-089), 634380 (W1 at kD = 1000; node-c11a-089); ours and FMM3D ran a case on
+  different nodes of the same type (W3 at kD = 100: ours node-c11a-089, FMM3D node-c11b-008).
+  Branch `tbetcke/h-ch4-0e`
   at 2f25bcd (ours), 1342417 (FMM3D, one core), 47c5aeb (blocks), 07c2ae7 (kD = 1000); release,
   rustc 1.99.0, BLAS threads 1. Jobs 634360–634363 ran FMM3D on one thread (GNU `nproc`
   honours `OMP_NUM_THREADS`, which the script had set to 1 first) and were cancelled; their
   outputs are kept apart as `invalid-fmm3d-1thread/` and not used.
 - locust (GH200, 72 Neoverse V2 cores, Open MPI 5.0.10): the same stages in sequence on
-  2026-11-15/16, the load 0.0 before the first launch and 0.1–1.2 between the stages (the
+  2026-11-15/16 from the same commits (ours 2f25bcd; FMM3D and one core 1342417; blocks 47c5aeb;
+  kD = 1000 07c2ae7), the load 0.0 before the first launch and 0.1–1.2 between the stages (the
   load averages logged before each launch are this run's own previous launch); no other
-  user's process at the checks.
+  user's process at the checks. Its first FMM3D stage had the same one-thread defect (and the
+  grid from 10⁻²); its outputs are kept apart as `invalid-fmm3d-1thread/`, unused.
 - Raw outputs: `~/projects/fmm-archive/{kathleen,locust}/logs/ch4-0e/`; the scripts
   `tools/helmholtz/ch4-0e-runs.sh` and `ch4-0e-tables.py` (the tables of §2–§4 are its
   `compare`, `summary`, `splits`, `levels`, `estimate`, `blocks`, `machines` and `t1` steps).
@@ -747,17 +819,22 @@ in `fmm3d-<case>.md` of each machine's archive.
    that the measurements point to inside D1, each small and each Helmholtz-only:
    - **CH4.0h The Helmholtz build by part, and parallel**: time the build by part in the
      harness, then parallelise its serial parts (most likely the per-level tables) over the
-     threads, bit for bit; *done when* W1 at kD = 500's build at the node is at most half its
-     one-core time, the output unchanged.
+     threads, bit for bit, and stop forming rotation blocks for levels whose M2L does not read
+     them (the column "blocks" says "stored" on the exponential M2L's levels too); *done when*
+     W1 at kD = 500's build at the node is at most half its one-core time, the output
+     unchanged.
    - **CH4.0i The coarse RCR levels**: split a level's Rotation work below one box where its
      boxes are fewer than the threads (by V-row segments with a fixed-order sum, or by
-     output degrees), and check our RCR per pair against S6's prototype (2–2.7× here); *done
+     output degrees), and check our RCR per pair against S6's prototype (1.9–3.3× here); *done
      when* level 2 of W1 at kD = 500 runs at ≥ 70 % of linear on the node or the report shows
      why not, deterministic and rank-invariant (the shared driver's split is Laplace's too:
      constraint 1, so the split lives in the Helmholtz operator or is bit for bit for
      Laplace).
 
-   Then CHA.1–CHA.3, CH1.3d and CH4.1–CH4.5 as listed. The priority list's reason for H4
+   Both act on every case, and CH4.0i on the very levels H4 targets (whose time it would
+   shrink, and H4's gain with it); H4's gain on W1 at kD = 500 is real (up to about half an
+   evaluation, §3.1) but on one case of D1. Then CHA.1–CHA.3, CH1.3d and CH4.1–CH4.5 as
+   listed. The priority list's reason for H4
    ("the far field at kD = 500 is mostly the high-frequency levels' RCR") is replaced by this
    report's §3. *Alternatives*: (a) the list as it stands (CHA.1–CHA.3, CH1.3d, H4), the two
    tasks off the list; (b) H4 off the priority list until a use beyond kD = 500 asks for it,
