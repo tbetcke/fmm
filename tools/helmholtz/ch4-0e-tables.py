@@ -9,6 +9,7 @@
     python3 tools/helmholtz/ch4-0e-tables.py t1 <dir> [<dir> ...]
     python3 tools/helmholtz/ch4-0e-tables.py machines <dir A> <dir B> <case> <eps>
     python3 tools/helmholtz/ch4-0e-tables.py blocks <dir> [<dir> ...]
+    python3 tools/helmholtz/ch4-0e-tables.py summary <dir> [<dir> ...]
 
 Several directories of one machine are read as one (the jobs of one machine). `compare`: per
 case and ε ours at its best split (build plus one evaluation, the smaller of launches a and
@@ -20,7 +21,9 @@ checksums' agreement over splits and launches. `levels`: one case's M2L per leve
 split. `estimate`: H4's bounded gain (the task's plan, "The estimate"). `t1`: the one-core
 runs. `machines`: one case's per-level times on two machines at their best splits and at one
 core. `blocks`: W1 at kD = 500 with every level's rotation blocks stored against the
-defaults, per split (the `blocks` stage). Python 3.9 standard library only.
+defaults, per split (the `blocks` stage). `summary`: per ε and variant our time over FMM3D's,
+at the same ε and at matched accuracy, the geometric mean, the range and the cases where ours
+is slower, over the matrix and over its two cases of N ≥ 10⁶. Python 3.9 standard library only.
 """
 
 import glob
@@ -438,6 +441,42 @@ def blocks(dirs):
                   f"{y['total'] / x['total']:.2f} | {'equal' if len(sums) == 1 else 'DIFFERENT'} |")
 
 
+def summary(dirs):
+    runs = ours(dirs)
+    fm = fmm3d(dirs)
+    print("| ε | variant | cases | same ε: geometric mean (range) | slower | matched: geometric mean (range) | slower | N ≥ 10⁶: same ε, matched |")
+    print("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    for e in EPS:
+        for v in ("default", "fastker"):
+            same, match, large = [], [], []
+            slow_same, slow_match = [], []
+            for case in cases_in_order(runs.keys()):
+                if (case, e) not in runs or case.startswith("w1-10"):
+                    continue
+                _, r = best(runs[(case, e)])
+                grid = fm.get((case, v), {})
+                c = grid.get(e)
+                if c is None:
+                    continue
+                a = r["total"] / c["s"]
+                _, m, _ = matched(grid, r["phi"], r["grad"])
+                b = r["total"] / m["s"]
+                same.append(a)
+                match.append(b)
+                if a > 1:
+                    slow_same.append(case)
+                if b > 1:
+                    slow_match.append(case)
+                if case in ("w1-500", "w3-100"):
+                    large.append(f"{a:.2f}, {b:.2f}")
+            if not same:
+                continue
+            g = lambda xs: math.exp(sum(math.log(x) for x in xs) / len(xs))
+            print(f"| {e} | {v} | {len(same)} | {g(same):.2f} ({min(same):.2f}–{max(same):.2f}) | "
+                  f"{len(slow_same)} | {g(match):.2f} ({min(match):.2f}–{max(match):.2f}) | "
+                  f"{len(slow_match)} | {'; '.join(large)} |")
+
+
 def main(argv):
     if len(argv) < 3:
         sys.exit(__doc__)
@@ -452,6 +491,8 @@ def main(argv):
         estimate(rest)
     elif step == "t1":
         t1(rest)
+    elif step == "summary":
+        summary(rest)
     elif step == "blocks":
         blocks(rest)
     elif step == "machines":
