@@ -621,7 +621,7 @@ task's full line is in its record or report and its progress entry
   0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at more; against CH4.0e's one
   core 0.75–0.78 of linear (locust 1 × 72), 0.68–0.80 (Kathleen 1 × 40), 0.89–0.91 (2 × 20),
   against this task's own one core 0.40–0.54 (§3: memory per pair at p = 131); the pair 1.8–2.4× S6's. *Sign-off:* the PR's questions
-  1–3 as recommended (the user on #222, 2026-11-16: "Sign off all three questions ay recommended."): the acceptance met
+  1–3 as recommended (the user on #222, 2026-11-16: "Sign off all three questions as recommended."): the acceptance met
   against CH4.0e's one core; `RcrSplit::Auto` by degree the default; CH4.0l off the list.
 - [ ] **CH4.0l The RCR pair: a class's pairs at once, and vectorised chains.** Added on
   2026-11-16 at CH4.0i (report §3, §4): by pairs, level 2 of W1 at kD = 500 runs at 0.40–0.54

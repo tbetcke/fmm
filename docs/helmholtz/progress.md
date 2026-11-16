@@ -3304,7 +3304,7 @@ request, using this template:
   (24 of 24); the one-rank opt-level 0 runs `helmholtz_fmm` 511 s (510 before), `helmholtz_accuracy`
   249 s (252), `nd-fmm-exec`'s `tests/helmholtz/` 42.6 s (44), `nd-fmm-tables`' 36.7 s (35.9).
 - Decisions: the PR's questions 1–3 (report §7) signed off 2026-11-16 as recommended (the
-  user on #222: "Sign off all three questions ay recommended."): (1) the acceptance met, read against CH4.0e's one
+  user on #222: "Sign off all three questions as recommended."): (1) the acceptance met, read against CH4.0e's one
   core; (2) `RcrSplit::Auto` by degree the default; (3) CH4.0l off the priority list.
 - Laplace: not touched (`driver.rs`, Laplace's operator and tables, `nd-fmm-plan`,
   `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI list pass).

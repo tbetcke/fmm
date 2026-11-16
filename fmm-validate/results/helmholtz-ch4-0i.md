@@ -565,6 +565,6 @@ over boxes:
      CH4.0l is worth it only for the classes left on RCR, which CH4.3 measures.
    - *Alternative*: on the list before CHA.1.
 
-Signed off 2026-11-16, the user on #222: "Sign off all three questions ay recommended."
+Signed off 2026-11-16, the user on #222: "Sign off all three questions as recommended."
 The acceptance is met as read against CH4.0e's one core, `RcrSplit::Auto` by degree is the
 default, and CH4.0l is off the priority list.
