@@ -177,7 +177,8 @@ CH4.0h's.
 None. Kathleen job 634421 (the matrix under the degree rule, `rotation`, `crossover`) finished
 and is in the report §4 and §5; W1 at kD = 1000 on locust (after the self-review) in §5.
 
-## Open questions
+## Sign-off
 
-The PR's questions for sign-off (report §7): (1) the acceptance read against CH4.0e's one
-core; (2) `RcrSplit::Auto` by degree as the default; (3) CH4.0l off the priority list.
+The PR's questions 1–3 (report §7) as recommended, the user on #222, 2026-11-16:
+"Sign off all three questions ay recommended." (1) the acceptance met, read against CH4.0e's one core;
+(2) `RcrSplit::Auto` by degree the default; (3) CH4.0l off the priority list.

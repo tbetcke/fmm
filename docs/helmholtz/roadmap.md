@@ -9,11 +9,10 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0h are merged, and CH4.0i
-runs the coarse RCR levels by pairs, bit for bit: level 2 of W1 at kD = 500 0.55–0.69× by boxes
-at one and two ranks per node and 0.23–0.40× at more; against CH4.0e's one core 0.75–0.78 of
-linear (locust 1 × 72), 0.68–0.80 (Kathleen 1 × 40), 0.89–0.91 (2 × 20), against its own
-0.40–0.54 (memory per pair; CH4.0l, recommended off the list); its PR waits for sign-off. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c
-are done, and of H0, CH0.4 and CH0.6. Next: CH4.0j, then CHA.1–CHA.3.
+(#222, signed off, waiting for the merge) runs the coarse RCR levels by pairs, bit for bit, by
+degree under `Auto`: level 2 of W1 at kD = 500 0.55–0.69× by boxes at one and two ranks per node
+and 0.23–0.40× at more; CH4.0l (the pair itself) off the list. HR, H0, H1 and H2 are still open;
+of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0j, then CHA.1–CHA.3.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -84,7 +83,8 @@ item 6, CH4.0k off the list.
 10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
-CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list);
+CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list); CH4.0l (added at CH4.0i;
+the user, 2026-11-16, on #222: off the list);
 CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
 after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
@@ -621,7 +621,8 @@ task's full line is in its record or report and its progress entry
   0.55–0.69× by boxes at one and two ranks per node, 0.23–0.40× at more; against CH4.0e's one
   core 0.75–0.78 of linear (locust 1 × 72), 0.68–0.80 (Kathleen 1 × 40), 0.89–0.91 (2 × 20),
   against this task's own one core 0.40–0.54 (§3: memory per pair at p = 131); the pair 1.8–2.4× S6's. *Sign-off:* the PR's questions
-  1–3 (pending).
+  1–3 as recommended (the user on #222, 2026-11-16: "Sign off all three questions ay recommended."): the acceptance met
+  against CH4.0e's one core; `RcrSplit::Auto` by degree the default; CH4.0l off the list.
 - [ ] **CH4.0l The RCR pair: a class's pairs at once, and vectorised chains.** Added on
   2026-11-16 at CH4.0i (report §3, §4): by pairs, level 2 of W1 at kD = 500 runs at 0.40–0.54
   of its own one core, each pair at p = 131 reading a 12 MB coaxial table and 12 MB of y-blocks
@@ -632,8 +633,9 @@ task's full line is in its record or report and its progress entry
   outputs change in their last bits). *Done when:* level 2 at ≥ 70 % of linear against its
   one core on the node, or the report says why not; the pair against S6's on the same core;
   the FMM's errors within 1.1× of before and every bit identity between the RCR paths kept.
-  Helmholtz only. *Needs:* CH4.0i. *Machines:* Kathleen, locust. Recommended off the priority
-  list (the PR's question 3): H4's diagonal form takes these levels' passing classes.
+  Helmholtz only. *Needs:* CH4.0i. *Machines:* Kathleen, locust. Off the priority list
+  (CH4.0i's question 3, the user, 2026-11-16, on #222): H4's diagonal form takes these levels'
+  passing classes.
 - [ ] **CH4.0j The exponential M2L's tables within a level in parts.** Added on 2026-11-16 at
   CH4.0h (report §4, §6): a level's `MergeLevel` (its quadrature, `PlaneWaveLevel` and the shift
   factors of every source shift and child) is one part, so a tree with one or two levels with
