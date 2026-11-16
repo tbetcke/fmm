@@ -256,6 +256,9 @@ FMMs in one process holds more memory than before; not addressed here.
 
 ## 8. Questions for sign-off
 
+Signed off on 2026-11-16 (the user on #221: "Please sign off questions as recommended."): all three as
+recommended below.
+
 1. **The acceptance as read.** *Recommended*: met. At the node's best split (CH4.0e's measure)
    the build is 0.15–0.23 of one core on both machines at every ε; at one rank per node
    0.44–0.66, the shared steps of CH4.0k the rest. *Alternative*: read it at one rank per

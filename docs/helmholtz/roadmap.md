@@ -12,8 +12,9 @@ Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11
 builds the Helmholtz FMM's tables once and in parallel, bit for bit: W1 at kD = 500's build at
 the node's best split 0.15–0.23 of one core (0.15–0.33 of CH4.0e's), CH3.6's matrix's builds
 0.34–0.59 of CH4.0e's; what remains is the shared serial steps (CH4.0k) and the exponential
-M2L's tables within a level (CH4.0j), the order of the two for sign-off. HR, H0, H1 and H2 are
-still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH4.0i.
+M2L's tables within a level (CH4.0j); signed off on #221: CH4.0j on the priority list beside
+CH4.0i, CH4.0k off it. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0,
+CH0.4 and CH0.6. Next: CH4.0i, then CH4.0j.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -59,7 +60,9 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d. Amended on 2026-11-16
 sign-off (#220's question 1, the user: "Both questions as recommended."): H4 goes ahead, for kD
 beyond D1 and the high-frequency classes CH4.3 calibrates, after CH4.0h and CH4.0i; the reason
 for H4 above is replaced by CH4.0e's report §3 (inside D1 the high-frequency RCR levels are
-14–31 % of build plus one evaluation, on W1 at kD = 500 alone).
+14–31 % of build plus one evaluation, on W1 at kD = 500 alone). Amended on 2026-11-16 by
+CH4.0h's sign-off (#221's question 2, the user: "Please sign off questions as recommended."): CH4.0j beside CH4.0i in
+item 6, CH4.0k off the list.
 
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
@@ -72,7 +75,8 @@ for H4 above is replaced by CH4.0e's report §3 (inside D1 the high-frequency RC
 5. CH4.0e The comparison under the default, and H4's expected gain (review A1 and B2; its
    sign-off is H4's go-ahead and order)
 6. CH4.0h The Helmholtz build by part, and parallel; CH4.0i The coarse RCR levels (added on
-   2026-11-16 by CH4.0e's sign-off)
+   2026-11-16 by CH4.0e's sign-off); CH4.0j The exponential M2L's tables within a level in
+   parts (added on 2026-11-16 by CH4.0h's sign-off)
 7. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
    configuration removed
 8. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
@@ -81,7 +85,7 @@ for H4 above is replaced by CH4.0e's report §3 (inside D1 the high-frequency RC
 10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
-CH4.0j and CH4.0k (added at CH4.0h, their order the PR's question 2);
+CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list);
 CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
 after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
@@ -608,8 +612,9 @@ task's full line is in its record or report and its progress entry
   every level for Batched), M2L blocks on RCR levels alone, every table and the scratch sets in
   parts on the pool (`nd_fmm_tables::parts`), bit for bit: W1 at kD = 500 at the best split
   0.15–0.23 of one core, at one rank per node 0.44–0.66 (the shared steps, CH4.0k); every
-  checksum CH4.0e's. *Sign-off:* the PR's questions 1–3 (the reading, CH4.0j and CH4.0k's
-  order, `nd-fmm-tables`' rule).
+  checksum CH4.0e's. *Sign-off:* the PR's questions 1–3 as recommended (the user on #221,
+  2026-11-16: "Please sign off questions as recommended."): the acceptance met at the node's best split;
+  CH4.0j on the list beside CH4.0i, CH4.0k off it; `nd-fmm-tables`' rule amended.
 - [ ] **CH4.0i The coarse RCR levels.** Added on 2026-11-16 at CH4.0e (report §3.2, §7
   question 1; signed off as recommended): Rotation splits a level by target box only, so level 2 (64 boxes, p = 131)
   runs at 28–48 % of linear, and per pair our RCR is 1.9–3.3× S6's scalar prototype on the

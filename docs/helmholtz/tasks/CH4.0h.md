@@ -182,5 +182,6 @@ None.
 
 ## Open questions
 
-The PR's (report §8): the acceptance as read (at the node's best split), the follow-ups'
-order (CH4.0j, CH4.0k), and `nd-fmm-tables`' amended rule.
+None. The PR's three questions (report §8) were signed off as recommended (the user on #221,
+2026-11-16: "Please sign off questions as recommended."): the acceptance met at the node's best split;
+CH4.0j on the priority list beside CH4.0i, CH4.0k off it; `nd-fmm-tables`' rule amended.

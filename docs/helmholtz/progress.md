@@ -3251,4 +3251,8 @@ request, using this template:
   `nd-fmm-plan`, `nd-octree`, `nd-fmm-simd` unchanged; every Laplace test and the MPI list
   pass).
 - Follow-ups: CH4.0j (the exponential M2L's tables within a level in parts) and CH4.0k (the
-  shared build steps on the node), roadmap lines added off the list until question 2.
+  shared build steps on the node), roadmap lines added.
+- Sign-off (the user on #221, 2026-11-16: "Please sign off questions as recommended."): (1) the acceptance met,
+  read at the node's best split; (2) CH4.0j on the priority list beside CH4.0i (item 6), CH4.0k
+  off it; (3) `nd-fmm-tables`' rule amended ("deterministic; a build's parts may run on a
+  caller's threads, the same bits; the crate runs no thread"). Next: CH4.0i.

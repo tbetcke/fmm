@@ -164,7 +164,8 @@ a caller's threads).
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are deterministic: the same inputs give bit-identical tables and cache files.
-  This crate runs no thread. Since Helmholtz CH4.0h (`parts`; amended from "serial") a
+  This crate runs no thread. Since Helmholtz CH4.0h (`parts`; amended from "serial", signed
+  off by the user on #221, 2026-11-16) a
   builder may cut its work into independent parts and hand them to a caller's
   `parts::Parts` (`Serial`, the calling thread, or `nd-fmm-exec`'s pool): each part a
   function of the build's inputs and its number alone, the results put together in part
