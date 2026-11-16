@@ -45,7 +45,7 @@ changed. In detail (the roadmap's three items):
 
 ## Changes
 
-No crate changes. The library's defaults are reached in the existing harness: the
+No library change. The library's defaults are reached in the existing harness: the
 `helmholtz_accuracy` example with `--m2l auto-pw --near-v cost --near-wx cost` and the leaf
 size and c_leaf left to the library (CH4.0d3's round 3 ran the defaults so;
 `nd-fmm-exec`'s `check_defaults` holds the named settings bit for bit to the builder's
@@ -68,6 +68,12 @@ errors`.
   - `t1`: one core: ours (1 × 1) and both FMM3D variants on W1 at kD = 100 (CH3.6's
     one-thread case) at the three ε and FMM3D's grid; ours on W1 at kD = 500 at 10⁻⁶ with
     `--levels` (the per-core part of item 3).
+- `nd-fmm-validate` (amended 2026-11-16, after round 1 found level 2 of W1 at kD = 500 forming
+  its rotation blocks per V pair; harness only): `helmholtz_accuracy::Case::block_budget`
+  (`HelmholtzFmmBuilder::block_budget`, `None` the library's) and `Row::m2l_blocks_stored`,
+  the example's `--block-budget MB` and a last column "blocks" of `--levels`; the runs
+  script's stage `blocks` (W1 at kD = 500 with every level's blocks stored, at every split
+  and on one core).
 - `tools/helmholtz/ch4-0e-tables.py` (new): reads the launches; per machine and case the
   best split (the smallest build plus one evaluation, the minimum over the two launches),
   ours build, evaluation and both beside FMM3D's whole call at the same ε; FMM3D at matched
@@ -102,7 +108,12 @@ functions, which the prototype times do not include; the report says so.
 
 ## Tests that prove it
 
-No code under test: the scripts are measurement tooling. Their correctness is checked by:
+- `check_block_budget` in `nd-fmm-validate`'s `tests/helmholtz_accuracy.rs`: W1 at kD = 30,
+  10⁻⁶, Rotation, 2 threads: a block budget of 0 (every level's blocks formed per V pair)
+  against the library's (every level's stored, as `Row::m2l_blocks_stored` reports): the
+  checksum and the errors bit for bit.
+
+The scripts are measurement tooling. Their correctness is checked by:
 
 - a DRY_RUN listing of every launch on each machine before the jobs;
 - the defaults: each launch's checksum at a split equal across the two launches (ABBA) and
