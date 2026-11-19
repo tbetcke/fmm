@@ -1,9 +1,12 @@
 [workspace]
 # Keep "2"; moving to "3" (MSRV-aware resolution) is a separate decision.
 resolver = "2"
-members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd", "fmm-kernels", "spikes/cubecl-gemm", "spikes/p2p-simd", "spikes/device-arith", "spikes/download-path", "spikes/plane-wave", "spikes/rotation-blocks", "spikes/coaxial", "spikes/radial", "spikes/census", "spikes/truncation", "spikes/pw-quadrature", "spikes/diagonal", "fmm-bench"]
-# Without default-members every member is built; spikes are added to members only,
-# so CI never builds them.
+members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd", "fmm-kernels", "fmm-bench"]
+# The spikes are a workspace of their own (spikes/Cargo.toml, with its own lock file; Helmholtz
+# CHA.1), built by hand from spikes/ and never by this workspace's checks.
+exclude = ["spikes"]
+# Without default-members every member is built; nd-fmm-kernels is a member only, so the
+# default checks build it without a backend.
 default-members = ["octree", "fmm-plan", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd", "fmm-bench"]
 
 # Every crate but octree/ inherits from this; octree/ keeps its own fields.
@@ -22,7 +25,8 @@ thiserror = "2"
 proptest = "1"
 approx = "0.5"
 serde_json = "1"
-# Pinned exactly; only nd-fmm-kernels and spikes/ may use CubeCL. 0.11.0 is a release
+# Pinned exactly; only nd-fmm-kernels and spikes/ may use CubeCL (spikes/Cargo.toml repeats
+# these three pins; move them together). 0.11.0 is a release
 # (2026-10-06), the first after the pre-release 0.11.0-pre.4 that Phase 4 T2 chose on
 # 2026-10-03 because it runs f64 on CUDA, which 0.10.0 disabled; moved in Phase 5S T1s.
 # cubek-matmul and cubek-std 0.3.0 are the releases built against it (their manifests
@@ -56,17 +60,3 @@ nd-fmm-validate = { path = "fmm-validate" }
 # Phase 4S T6: the one-command benchmark (tools/bench/run.sh); a binary, no crate
 # depends on it.
 nd-fmm-bench = { path = "fmm-bench" }
-# Pinned by commit; only spikes/ may use it (Phase 3S T2 baseline, spikes/p2p-simd).
-green-kernels = { git = "https://github.com/bempp/green-kernels", rev = "7d757c579f8633d58163cd5b2d011a9468541f17" }
-# The SIMD layer green-kernels dispatches through; spikes/p2p-simd names its backend.
-# Spikes only, like green-kernels.
-pulp = "0.22"
-
-# green-kernels asks for rlst from git main (0.4.0-dev), whose build dependency
-# `cc = "=1.2"` cannot be resolved beside the workspace's rlst and mpi-sys (cc 1.5). Point it
-# at the crates.io rlst 0.10.2, whose `simd` module has the same code (Phase 3S T2, design
-# simd-p2p.md §8.4; decided 2026-10-02; the `simd` module of 0.10.0 to 0.10.2 is 0.9.0's
-# unchanged). Only green-kernels uses that source, so only the spikes build it. It stays on
-# 0.10.2 while the workspace is on 0.12.0 (Helmholtz CHR.2): rlst 0.12 removed `simd`.
-[patch."https://github.com/linalg-rs/rlst.git"]
-rlst = "0.10.2"

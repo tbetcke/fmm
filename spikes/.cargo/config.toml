@@ -1,0 +1,5 @@
+# The spikes workspace (spikes/Cargo.toml) builds into the root's target directory, apart from
+# the product's builds: its lock file differs from the root's, so a shared directory would
+# rebuild the shared crates on every switch (Helmholtz CHA.1).
+[build]
+target-dir = "../target/spikes"
