@@ -3465,13 +3465,14 @@ request, using this template:
   `m2l` from a stored multipole to a stored local with RCR's factor 4π ik e^{2β − Im(k)|t|}, the
   bound E of proposal §3.6 (`bound`, `BoundConstants`, `THETA`), a private double-double port of
   S7's. No convention changed. Record `docs/helmholtz/tasks/CH1.3d1.md`.
-- Tests: `fmm-ref/tests/helmholtz/diagonal.rs` (17, 2 ignored) and 5 unit tests: against RCR
+- Tests: `fmm-ref/tests/helmholtz/diagonal.rs` (18, 2 ignored), 5 unit tests and 6 doctests: against RCR
   within 2E on the 34 classes at k a 2.83–54, p 7–82 (largest measured/E 1.23 to k a = 32, 1.99
   at k a = 54 at E's floor, where f64 RCR rounds 2.4× more than the diagonal form against the
   projection), weakly damped k, f32 (0.06 of 2E), the 316 offsets (0.48 of 2E); the direct sum;
   S → F → R; the signature of a charge; the permutations; the grid's quadrature.
 - Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and
-  workspace tests at opt-level 1 (1,301 and 1,345 passed, 26 new), `cargo clippy -p nd-fmm-ref
+  workspace tests at opt-level 1 (1,301 and 1,345 passed, 26 new; the self-review's one
+  test more passes on its own), `cargo clippy -p nd-fmm-ref
   --all-targets`, the ignored diagonal tests in release; the `helmholtz` executable's debug time
   unchanged (47 s). Not run: the MPI list (no MPI crate or code they call changed). Nothing
   pending.
