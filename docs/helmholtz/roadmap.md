@@ -8,11 +8,11 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
-`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–8 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2). Next is CHA.11, added at the H1 gate, then CH4.1, whose
-first step measures the product conversions against RCR and stops to ask (review 2026-11-19,
-A5). HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7, CH7.5a–c.
-The history of this line until H6.G is in `progress.md` and in this file's history
+`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
+(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11: the wave levels in one place, which also lets
+named precisions run with the V rule where they panicked). Next is CH4.1, whose first step
+measures the product conversions against RCR and stops to ask (review 2026-11-19, A5). HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of
+H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
@@ -1004,14 +1004,13 @@ item is removed only where the task names it.
   shared `tools/helmholtz/common.py` for new report scripts (the `*-tables.py` define `cells`
   11 times), the old ones left; `approx` dropped from `[workspace.dependencies]`, which no
   member uses, and from the two CLAUDE.md files that allow it.
-- [ ] **CHA.11 The Helmholtz wave levels in one place.** Review 2026-11-19, L1 (its new parts;
-  the user, 2026-11-19, on #230: on the priority list before CH4.1). One crate-private function of
-  `helmholtz/operator.rs` returns the levels with waves from the settings, called by
-  `HelmholtzFmmBuilder::build` (the V rule) and by the operator's `select_tables`, in place of
-  the builder's restatement (`helmholtz/fmm.rs:924-945`), its run-time `assert!` (`:1146-1153`)
-  and the second f64 gate. *Done when:* bit for bit (checksums of `helmholtz_accuracy`'s cases
-  and the MPI list); no Laplace file touched. H4 adds the diagonal form's choice per level to
-  the same builder, which reads it from the same place.
+- [x] **CHA.11 The Helmholtz wave levels in one place.** Review 2026-11-19, L1. Record:
+  `docs/helmholtz/tasks/CHA.11.md`. `operator::wave_levels` chooses the levels with waves for
+  `select_tables` and `HelmholtzFmmBuilder::build`; the restatement, its assert and the second
+  f64 gate gone. Bit for bit on 348 `helmholtz_accuracy` rows and the MPI list. It also makes
+  named precisions with the V rule run where a level lies outside the quadrature's tables, which
+  panicked on `main` (question 1 of its PR, for sign-off). H4's diagonal-form choice per level
+  goes in the same place.
 - [ ] **CHA.12 One entry-point macro set in nd-fmm-simd.** Review 2026-11-19, L5. The eleven
   macros that `arch/avx2.rs`, `avx512.rs` and `neon.rs` each define after their `Simd` impls
   (about 670 lines each, about 140 differing) once in `arch/mod.rs`, taking the token, the

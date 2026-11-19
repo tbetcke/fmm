@@ -3569,3 +3569,40 @@ request, using this template:
     - a decision that promises a task creates it;
     - a progress entry's follow-up that names a task becomes that task's "Also";
     - the gate checks the decision table for promised tasks.
+
+## 2026-11-19: CHA.11 The Helmholtz wave levels in one place
+- Done: review 2026-11-19, L1. `nd_fmm_exec::helmholtz::operator::wave_levels` (crate-private,
+  with `WaveSettings`) chooses each level's quadrature, or none, from the M2L setting, the
+  precisions, Auto's switch and smallest degree, the tolerance, k̂_0 and the degrees;
+  `select_tables` and `HelmholtzFmmBuilder::build` (the V rule) call it. The builder's
+  restatement, its run-time assert and the second f64 gate are gone, and `auto_plane_wave_levels`
+  is folded in. Found on the way: on `main` the restatement gave named precisions
+  (`PlaneWavePrecision::PerLevel`) to every level from 2, but the tables build none where κ_l lies
+  outside the quadrature's tables (`domain_of`). With the V rule on, `build` then panicked (W1 at
+  kD = 300, `planewave:2`, `--near-v cost`, every ε). `wave_levels` applies the tables' filter, so
+  that case now runs. Record `docs/helmholtz/tasks/CHA.11.md`.
+- Tests:
+  - `wave_levels_are_the_operators` (unit test, `operator.rs`): the operator's levels equal the
+    function's over PlaneWave (rule, named), Auto (on and off, two smallest degrees), Rotation,
+    five tolerances, real and damped k, f64 and f32, and κ₂ outside the tables by its real and by
+    its imaginary part. Removing the `domain_of` filter fails it.
+  - `helmholtz_accuracy` checksums on the M6: 348 rows (W1 at kD = 30, 100, 300; three ε; five
+    M2L settings; the V rule off and on; 1 and 2 ranks × 1 and 2 threads) equal line for line to
+    `main`'s (ca278a6).
+  - The case that panicked runs, rank- and thread-invariant, with φ at most the rule-off's.
+  - Raw outputs are in `~/projects/fmm-archive/m6/cha-11/`.
+- Checks: `/verify` on the M6:
+  - fmt;
+  - Clippy (default, examples, workspace all-targets);
+  - rustdoc with `-D warnings`;
+  - the default and workspace tests at opt-level 1 (1,303 and 1,347 passed);
+  - the MPI list at 2 and 4 ranks, all passed.
+  - The new test takes 14.6–16.8 s at opt-level 0 under load.
+  - Not run: Laplace's fixtures and benchmarks (no Laplace file), `cargo deny` (no manifest).
+  - Nothing pending.
+- Decisions: question 1 of the PR, for sign-off: accept that named precisions with the V rule
+  now run where a level lies outside the tables (recommended).
+- Laplace: not touched (nd-fmm-exec's `helmholtz/operator.rs`, `helmholtz/fmm.rs` and its
+  CLAUDE.md only).
+- Follow-ups: none new; CH4.1 next (roadmap); H4's diagonal-form choice per level reads the same
+  place (the roadmap's CHA.11 line).
