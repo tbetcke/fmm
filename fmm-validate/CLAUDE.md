@@ -96,7 +96,8 @@ any number of ranks. `tests/scaling.rs` covers the kind timings and the referenc
 another strategy.
 
 Phase 5N T4 (the strategy rule on the node) added `Settings::dense_node_budget`
-(`--budget MB`, the node budget of `Auto`), the reference of the resolved strategy by
+(`--budget MB`, the node budget of `Auto`; removed with `budget_mb` in Helmholtz CHA.3, since
+Phase 6 T11's rule does not read it), the reference of the resolved strategy by
 default (`Fmm::strategy`; under `Auto` a one-rank `Fmm` may resolve another), the
 summary's `requested`, `budget_mb`, `dense_rank_mb` and `dense_node_mb` (the reason is in
 the threading line), and in `tools/scaling/run.sh` the budget per machine class
