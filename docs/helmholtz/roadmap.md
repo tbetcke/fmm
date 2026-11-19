@@ -633,10 +633,8 @@ task's full line is in its record or report and its progress entry
   *Done when:* W1 at kD = 500's build at 1 × 40 and 1 × 72 at most half its one-core time, the
   output bit for bit; Laplace's builds no slower (D9). *Needs:* CH4.0h. *Machines:* Kathleen,
   locust (the M6 with the user's go-ahead). *Sign-off:* the Laplace change.
-- [ ] **CH4.1 S → F and F → R by the transform as a product.** Split on 2026-11-19 into CH4.1a
-  and CH4.1b (one reviewable PR each; review 2026-11-19, A5, asks for the measurement and a stop
-  first). *Done when:* both are ticked.
-- [ ] **CH4.1a The product conversions, measured.** In `nd-fmm-tables` (`helmholtz::diagonal`):
+- [ ] **CH4.1a The product conversions, measured.** CH4.1 "S → F and F → R by the transform
+  as a product", split on 2026-11-19 into CH4.1a and CH4.1b. In `nd-fmm-tables` (`helmholtz::diagonal`):
   S → F and F → R for a batch of boxes, the Legendre step halved by the rings' parity and the φ
   step by the grid's symmetries (×4, N_φ a multiple of 4), from `nd_fmm_ref`'s grid; a box's bits
   independent of its batch. *Done when:* round trips to the grid's bandwidth; against
@@ -666,7 +664,7 @@ task's full line is in its record or report and its progress entry
   (C₀ u) f64 RCR rounds up to 2.4× more than the diagonal form (CH1.3d1's record), so a
   comparison with RCR there needs 2E. Also (review 2026-11-19, M11): an ignored release test
   of the trusted path at k a = 108 and 216 on a few classes (CH4.4's degrees; S6 about 5 s per
-  class at p = 256). *Needs:* CH4.1, CH0.6.
+  class at p = 256). *Needs:* CH4.1b, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
@@ -698,7 +696,7 @@ task's full line is in its record or report and its progress entry
   round-off; per-box plans with bits the same across batch positions, sizes and threads, and
   fingerprints all-gathered; off by default, a default build linking no FFTW, cargo-deny, a CI
   job with the feature; the GPL warning in the crate documentation, the README, the builder
-  option and `Cargo.toml`. *Needs:* CH4.1, CHR.3, CH0.9, D7.
+  option and `Cargo.toml`. *Needs:* CH4.1b, CHR.3, CH0.9, D7.
 - [ ] **H4.G Gate.** `/milestone-gate H4`. *Needs:* every task above.
 
 ## H5: Complex wavenumber
