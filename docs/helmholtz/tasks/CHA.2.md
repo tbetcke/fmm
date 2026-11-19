@@ -85,18 +85,25 @@ opt-level 1, the MPI list at 2 and 4 ranks, `cargo check -p nd-fmm-exec --featur
   | the column's `iter_value()` zipped into `[f64; 3]` | 1.020–1.070 (1.047–1.071) | 1.013–1.030 (1.081–1.088) |
 
   At 10⁷ points the unchecked copy's medians are 24.6–26.3 ms; the safe forms' 0.4–1.8 ms more
-  (zip 0.4–0.8, `get_value` 1.7–1.8), 1–9 % of the function. That is measurably slower by the *Done when*, so the block is kept: `#[allow(unsafe_code)]`
-  on the statement, its `// SAFETY:` comment (the asserted `[3, n]` shape) and its reason. A safe
-  form without the checks (contiguous `chunks_exact(3)`) would need a raw-data bound on the
+  (zip 0.4–0.8, `get_value` 1.7–1.8), 1–9 % of the function. Measurably slower by the letter of
+  the *Done when*, so the PR first kept the block (`#[allow(unsafe_code)]`, a `// SAFETY:`
+  comment). On review the user called the cost very minor and, on the recommendation to make it
+  safe, said: "Please go ahead with forbid." So the reads are `get_value([i])` with an `expect`
+  (it fails loudly where a short column would; the zip would leave zeros), and nd-octree
+  `forbid`s `unsafe_code`, a step past the *Done when*'s `deny` that no exception now needs. A
+  safe form without the checks (contiguous `chunks_exact(3)`) would need a raw-data bound on the
   public signature; not in scope. Raw outputs: `~/projects/fmm-archive/m6/logs/cha-2/`.
 - **The lint's reach**, checked by hand and not committed: `unsafe {}` in a test of nd-fmm-math
   (`tests/convention_version.rs`) fails (`usage of an unsafe block`), an
   `#[allow(unsafe_code)]` there is E0453 (incompatible with the `forbid`), and `unsafe {}` in
-  nd-octree's library tests (`src/tools.rs`) fails under `deny`.
+  nd-octree's library tests (`src/tools.rs`) failed under `deny`, and after the move to `forbid` an
+  `#[allow(unsafe_code)]` there is E0453.
 
 ## Constraints and risks
-- Constraint 1: nd-octree and nd-fmm-plan are Laplace's paths. Neither crate's code changes:
-  the lint levels, the two allowances and comments only, so the generated code is `main`'s.
+- Constraint 1: nd-octree and nd-fmm-plan are Laplace's paths. nd-fmm-plan's code is `main`'s
+  (the lint level, the example's allowance and comments). nd-octree's one code change,
+  `points_to_morton`'s checked reads, reads the same `f64` values, so every key is `main`'s bit
+  for bit; it costs 1–2 ms per 10⁷ points in the tree build, which no Laplace benchmark times.
 - A future dependency's derive macro that expands to `unsafe` would trip `forbid` (rsmpi's
   `Equivalence` derive is not used in these crates today); `forbid` cannot be allowed locally,
   so such a crate would move to `deny`. Recorded, not expected.
@@ -110,3 +117,7 @@ Answered 2026-11-19 at the plan (the user, all three as recommended):
 2. "M6, now (Recommended)": the `points_to_morton` timing on the M6.
 3. "Skip D9 runs (Recommended)": no D9 benchmark run; Laplace bit for bit through the tests
    and the MPI list, the build-side timing in their place.
+
+Decided 2026-11-19 on the PR (#225), after the user asked whether to make `points_to_morton`
+safe ("The degradation with safe code in points_to_morton is very minor") and the
+recommendation to do so, with `forbid` for nd-octree: "Please go ahead with forbid."

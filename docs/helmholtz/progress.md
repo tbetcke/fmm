@@ -3381,32 +3381,40 @@ request, using this template:
 
 ## 2026-11-19: CHA.2 `unsafe` enforced
 - Done: `[lints.rust] unsafe_code` in each crate's `Cargo.toml`, so every target is checked
-  (lib, tests, examples, benches, bins, feature-gated code): `forbid` in nd-fmm-math, -ref,
-  -tables, -exec, -validate and -bench, `deny` in nd-fmm-plan and nd-octree. Their two
-  exceptions allowed in their files with reasons and `// SAFETY:` comments: the counting
-  allocator of `fmm-plan/examples/plan_build_cost.rs` (a comment per block now), and
-  `points_to_morton`'s three unchecked reads (`octree/src/octree.rs`), kept because the safe
-  forms measured 1–9 % slower on the M6 (`get_value().unwrap()` 1.064–1.072× by medians, the
-  column's value iterator 1.013–1.070×, three builds of the library against one unchecked copy;
-  within one binary the generic function's codegen moved 2.4× with a neighbour, so not compared
-  so). Root CLAUDE.md's rule names the lint and both exceptions; `octree/CLAUDE.md`,
-  `fmm-plan/CLAUDE.md`, `workspace-structure.md`. Record `docs/helmholtz/tasks/CHA.2.md`; raw
-  outputs `~/projects/fmm-archive/m6/logs/cha-2/`.
+  (lib, tests, examples, benches, bins, feature-gated code): `forbid` in nd-octree, nd-fmm-math,
+  -ref, -tables, -exec, -validate and -bench, `deny` in nd-fmm-plan, whose one exception, the
+  counting allocator of `fmm-plan/examples/plan_build_cost.rs`, is allowed in that file with its
+  reason (a `// SAFETY:` comment per block now). `points_to_morton` (`octree/src/octree.rs`)
+  reads with `get_value([i])` and an `expect` in place of its three unchecked reads: the safe
+  forms measured 1–9 % slower in that function on the M6 (`get_value().unwrap()` 1.064–1.072× by
+  medians, the column's value iterator 1.013–1.070×; three builds of the library against one
+  unchecked copy, since within one binary the generic function's codegen moved 2.4× with a
+  neighbour), 1–2 ms per 10⁷ points. The PR first kept the block by the letter of the *Done
+  when*; the user then chose safe code and `forbid` (below). Root CLAUDE.md's rule names the
+  lint and the exception; `octree/CLAUDE.md`, `fmm-plan/CLAUDE.md`, `workspace-structure.md`.
+  Record `docs/helmholtz/tasks/CHA.2.md`; raw outputs `~/projects/fmm-archive/m6/logs/cha-2/`.
 - Self-review (subagent): nothing blocking; the timing table matches the raw outputs. Taken: the
   plan's ms figures and call count, a `// SAFETY:` per block in the allocator, the wording of
   root CLAUDE.md and `workspace-structure.md`.
 - Tests: none new. Checked by hand, not committed: `unsafe {}` in a test of nd-fmm-math fails,
   `#[allow(unsafe_code)]` under its `forbid` is E0453, `unsafe {}` in nd-octree's library tests
-  fails under `deny`.
-- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs,
-  `cargo check --workspace --all-targets`, Clippy of nd-fmm-exec, -validate and -bench with
-  `cpu,metal` and their check with `cuda`, nd-fmm-kernels' Clippy with `cpu,metal`,
-  `cargo check -p nd-fmm-exec --features cuda`, `cargo deny --locked check licenses`, no
-  fftw-sys, the default and workspace tests at opt-level 1 (1,275 and 1,319 passed), the MPI
-  list at 2 and 4 ranks (24 of 24). Nothing pending.
+  failed under `deny` and with an allow is E0453 under `forbid`.
+- Checks: `/verify` on the M6, run in full twice (before and after the move to safe code and
+  `forbid`): fmt, Clippy (default, examples, workspace), docs, `cargo check --workspace
+  --all-targets`, `cargo deny --locked check licenses`, the default and workspace tests at
+  opt-level 1 (1,275 and 1,319 passed), the MPI list at 2 and 4 ranks (24 of 24); the first time
+  also Clippy of nd-fmm-exec, -validate and -bench with `cpu,metal`, their check with `cuda`,
+  nd-fmm-kernels' Clippy with `cpu,metal`, no fftw-sys. After the move, `#[allow(unsafe_code)]`
+  in nd-octree's tests is E0453. Nothing pending.
 - Decisions: signed off 2026-11-19 at the plan (the user, all three as recommended): "[lints.rust]
   per crate (Recommended)", "M6, now (Recommended)" (the timing), "Skip D9 runs (Recommended)".
-- Laplace: no generated code changed (lint levels, two allowances and comments only); every
-  Laplace test and the MPI list pass. No D9 run (signed off: the benchmarks time the evaluation).
-- Follow-ups: none. A safe `points_to_morton` without checks would need a contiguous-data bound
-  on its public signature; not proposed.
+  On #225, the same day, after the user asked whether to make `points_to_morton` safe ("The
+  degradation with safe code in points_to_morton is very minor") and the recommendation to do
+  so with `forbid` for nd-octree: "Please go ahead with forbid." (past the *Done when*, which
+  had `deny` for nd-octree and kept the block if measurably slower).
+- Laplace: nd-fmm-plan's generated code unchanged; nd-octree's `points_to_morton` reads the same
+  `f64` values with checks, so every key is `main`'s bit for bit (every Laplace test and the MPI
+  list pass), 1–2 ms per 10⁷ points in the build. No D9 run (signed off: the benchmarks time the
+  evaluation).
+- Follow-ups: none. A `points_to_morton` without checks and without `unsafe` would need a
+  contiguous-data bound on its public signature; not proposed.

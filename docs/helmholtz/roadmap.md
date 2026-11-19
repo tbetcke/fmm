@@ -10,8 +10,8 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j are merged (items 1–6),
 and of item 7 CHA.1 (the spikes a workspace of their own, #224). CHA.2 (the PR after #224) makes
-the `unsafe` rule a compiler lint in the eight crates it covers, with its two exceptions
-recorded and allowed in their files; no generated code changes. HR, H0, H1 and H2 are still open; of H7,
+the `unsafe` rule a compiler lint in the eight crates it covers (nd-octree now free of `unsafe`;
+one exception, an example's allocator in nd-fmm-plan). HR, H0, H1 and H2 are still open; of H7,
 CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CHA.3, then CH1.3d.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
@@ -920,11 +920,12 @@ item is removed only where the task names it.
   there); the root lock lost 30 packages, no version changed. Signed off 2026-11-19 (the user:
   "Keep all, none archived (Recommended)", "One spikes workspace (Recommended)").
 - [x] **CHA.2 `unsafe` enforced.** Review C1. Record: `docs/helmholtz/tasks/CHA.2.md`.
-  `[lints.rust] unsafe_code` in each `Cargo.toml` (every target): `forbid` in six crates, `deny`
-  in nd-fmm-plan and nd-octree, whose two exceptions are allowed in their files (the example's
-  counting allocator; `points_to_morton`'s unchecked reads, kept: the safe forms 1–9 % slower on
-  the M6); root CLAUDE.md names them. Signed off at the plan 2026-11-19 (the user: "[lints.rust]
-  per crate (Recommended)", "M6, now (Recommended)", "Skip D9 runs (Recommended)").
+  `[lints.rust] unsafe_code` in each `Cargo.toml` (every target): `forbid` in seven crates,
+  nd-octree included, `deny` in nd-fmm-plan, whose one exception (the example's counting
+  allocator) is allowed in its file, named in root CLAUDE.md. `points_to_morton` made safe (1–2 ms
+  per 10⁷ points). Signed off 2026-11-19 (the user: at the plan "[lints.rust] per crate
+  (Recommended)", "M6, now (Recommended)", "Skip D9 runs (Recommended)"; on #225 "Please go ahead
+  with forbid.").
 - [ ] **CHA.3 The superseded M2L configuration removed.** Review P1. *Done when:*
   `NodeContext`'s unused fields, `FmmBuilder::dense_node_budget`, the `AUTO_DENSE_*`
   constants, the deprecated `resolve(p)` and the harness's `--budget` are gone, with the

@@ -35,10 +35,9 @@ rlst = { version = "0.12.0", features = ["mpi"] }
 
 [build-dependencies]
 
-# No `unsafe` but where a file allows it with its reason: the unchecked reads of
-# `points_to_morton` (root CLAUDE.md, "Working rules"; Helmholtz CHA.2).
+# No `unsafe` in any target of this crate (root CLAUDE.md, "Working rules"; Helmholtz CHA.2).
 [lints.rust]
-unsafe_code = "deny"
+unsafe_code = "forbid"
 
 [lints.clippy]
 wildcard_imports = "forbid"
