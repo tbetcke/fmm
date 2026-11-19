@@ -124,16 +124,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "approx"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
-dependencies = [
- "num-complex",
- "num-traits",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -356,23 +346,6 @@ dependencies = [
  "rustc-hash 2.1.3",
  "shlex 1.3.0",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "bindgen"
-version = "0.73.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "787ef8ef523575546b106a58213d6e6b06198a05c2f757258c68a74273670cfa"
-dependencies = [
- "bitflags",
- "cexpr",
- "clang-sys",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash 2.1.3",
- "shlex 2.0.1",
- "syn 3.0.6",
 ]
 
 [[package]]
@@ -645,15 +618,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmake"
-version = "0.1.58"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -663,12 +627,6 @@ dependencies = [
  "termcolor",
  "unicode-width 0.2.2",
 ]
-
-[[package]]
-name = "coe-rs"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e8f1e641542c07631228b1e0dc04b69ae3c1d58ef65d5691a439711d805c698"
 
 [[package]]
 name = "combine"
@@ -1926,18 +1884,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
-name = "git2"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddddbf932745a6be37109b6112d3ee09696106f848449069d3a57bba937ab82e"
-dependencies = [
- "bitflags",
- "libc",
- "libgit2-sys",
- "log",
-]
-
-[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1987,26 +1933,6 @@ dependencies = [
  "presser",
  "thiserror 2.0.21",
  "windows",
-]
-
-[[package]]
-name = "green-kernels"
-version = "0.2.2-dev"
-source = "git+https://github.com/bempp/green-kernels?rev=7d757c579f8633d58163cd5b2d011a9468541f17#7d757c579f8633d58163cd5b2d011a9468541f17"
-dependencies = [
- "approx",
- "bytemuck",
- "coe-rs",
- "hexf",
- "itertools 0.14.0",
- "libc",
- "num",
- "num_cpus",
- "paste",
- "pulp",
- "rand 0.9.5",
- "rayon",
- "rlst 0.10.2",
 ]
 
 [[package]]
@@ -2075,22 +2001,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-
-[[package]]
-name = "hexf"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6618f4550dcd7d9ddb5126ab18d48dfa31aa952159cb832390bda464d3bc827e"
-dependencies = [
- "hexf-parse",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "hexf-parse"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hi_sparse_bitset"
@@ -2550,18 +2460,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libgit2-sys"
-version = "0.18.8+1.9.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7c568b25d7489bc3fb2988ed69ab111d2944d2f5fec3d5c987fe545ea97b50"
-dependencies = [
- "cc",
- "libc",
- "libz-sys",
- "pkg-config",
-]
-
-[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2615,18 +2513,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "libz-sys"
-version = "1.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
- "vcpkg",
 ]
 
 [[package]]
@@ -2898,7 +2784,7 @@ dependencies = [
  "nd-octree",
  "proptest",
  "rayon",
- "rlst 0.12.0",
+ "rlst",
  "thiserror 2.0.21",
 ]
 
@@ -2933,7 +2819,7 @@ dependencies = [
  "mpi",
  "nd-octree",
  "rand_chacha 0.10.0",
- "rlst 0.12.0",
+ "rlst",
 ]
 
 [[package]]
@@ -2954,119 +2840,6 @@ dependencies = [
  "nd-fmm-ref",
  "proptest",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "nd-fmm-spike-census"
-version = "0.0.0"
-dependencies = [
- "mpi",
- "nd-fmm-plan",
- "nd-fmm-validate",
- "nd-octree",
- "serde_json",
-]
-
-[[package]]
-name = "nd-fmm-spike-coaxial"
-version = "0.0.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "nd-fmm-spike-cubecl-gemm"
-version = "0.0.0"
-dependencies = [
- "cubecl",
- "cubek-matmul",
- "cubek-std",
-]
-
-[[package]]
-name = "nd-fmm-spike-device-arith"
-version = "0.0.0"
-dependencies = [
- "cubecl",
- "nd-fmm-kernels",
- "nd-fmm-math",
- "nd-fmm-ref",
- "nd-fmm-simd",
- "nd-fmm-tables",
- "nd-fmm-validate",
- "rayon",
-]
-
-[[package]]
-name = "nd-fmm-spike-diagonal"
-version = "0.0.0"
-dependencies = [
- "nd-fmm-spike-truncation",
-]
-
-[[package]]
-name = "nd-fmm-spike-download-path"
-version = "0.0.0"
-dependencies = [
- "cubecl",
- "nd-fmm-kernels",
- "nd-fmm-validate",
- "rayon",
-]
-
-[[package]]
-name = "nd-fmm-spike-p2p-simd"
-version = "0.0.0"
-dependencies = [
- "green-kernels",
- "nd-fmm-math",
- "nd-fmm-ref",
- "nd-fmm-simd",
- "nd-fmm-validate",
- "pulp",
-]
-
-[[package]]
-name = "nd-fmm-spike-plane-wave"
-version = "0.0.0"
-dependencies = [
- "nd-fmm-math",
- "nd-fmm-ref",
- "nd-fmm-simd",
- "nd-fmm-tables",
-]
-
-[[package]]
-name = "nd-fmm-spike-pw-quadrature"
-version = "0.0.0"
-dependencies = [
- "nd-fmm-ref",
- "nd-fmm-spike-plane-wave",
- "nd-fmm-tables",
- "num-complex",
- "rayon",
-]
-
-[[package]]
-name = "nd-fmm-spike-radial"
-version = "0.0.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "nd-fmm-spike-rotation-blocks"
-version = "0.0.0"
-dependencies = [
- "nd-fmm-math",
- "serde_json",
-]
-
-[[package]]
-name = "nd-fmm-spike-truncation"
-version = "0.0.0"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]
@@ -3102,7 +2875,7 @@ dependencies = [
  "mpi",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
- "rlst 0.12.0",
+ "rlst",
 ]
 
 [[package]]
@@ -3718,29 +3491,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pulp"
-version = "0.22.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "046aa45b989642ec2e4717c8e72d677b13edd831a4d3b6cf37d9a3e54912496a"
-dependencies = [
- "bytemuck",
- "cfg-if",
- "libm",
- "num-complex",
- "paste",
- "pulp-wasm-simd-flag",
- "raw-cpuid",
- "reborrow",
- "version_check",
-]
-
-[[package]]
-name = "pulp-wasm-simd-flag"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
-
-[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3903,15 +3653,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "raw-cpuid"
-version = "11.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
-dependencies = [
- "bitflags",
-]
-
-[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3948,12 +3689,6 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
 ]
-
-[[package]]
-name = "reborrow"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "recasting"
@@ -4037,35 +3772,6 @@ dependencies = [
 
 [[package]]
 name = "rlst"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2fef9950b7a098cbc904181c882818d07e84398fb3abc41946c562b9dc9018"
-dependencies = [
- "aligned-vec",
- "bindgen 0.73.2",
- "blas",
- "bytemuck",
- "cc",
- "cmake",
- "coe-rs",
- "git2",
- "itertools 0.15.0",
- "lapack",
- "num",
- "num_cpus",
- "paste",
- "pulp",
- "rand 0.10.3",
- "rand_chacha 0.10.0",
- "rand_distr",
- "rlst-proc-macro 0.10.2",
- "serde",
- "thiserror 2.0.21",
- "typenum",
-]
-
-[[package]]
-name = "rlst"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "533f8a38696f3d864717fcc2ccc97d36e3e09c9a59bc2c9f800dd647c21645e1"
@@ -4082,22 +3788,10 @@ dependencies = [
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "rand_distr",
- "rlst-proc-macro 0.12.0",
+ "rlst-proc-macro",
  "serde",
  "thiserror 2.0.21",
  "typenum",
-]
-
-[[package]]
-name = "rlst-proc-macro"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d07efe29544f5e6f6ae83ad15e9babee5d9f451c0a29e6ce7cddccdda600dca"
-dependencies = [
- "aligned-vec",
- "darling 0.24.1",
- "quote",
- "syn 3.0.6",
 ]
 
 [[package]]
@@ -4546,17 +4240,6 @@ name = "symlink"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
-
-[[package]]
-name = "syn"
-version = "1.0.109"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-ident",
-]
 
 [[package]]
 name = "syn"
@@ -5258,12 +4941,6 @@ dependencies = [
  "quote",
  "unsynn",
 ]
-
-[[package]]
-name = "vcpkg"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"

@@ -1176,6 +1176,9 @@ Each W1 and W2 cell is run with potential only and with gradients, in f32 and f6
 green-kernels is used only by the spike crate `spikes/p2p-simd`, a workspace member
 outside the default members, so CI never builds it. Its dependency is pinned by
 commit in `[workspace.dependencies]`, with a comment that only spikes may use it.
+*As of Helmholtz CHA.1 (2026-11-19)* the spikes are a workspace of their own
+(`spikes/Cargo.toml`, with `spikes/Cargo.lock`): the pin, pulp and the `[patch]` below moved
+there, and the root `Cargo.lock` holds one rlst.
 
 It brings rlst from git `main` and pulp 0.22 into the root `Cargo.lock`, beside the
 crates.io rlst 0.9.0 of the default members. rlst has a build script. T2 checks that the

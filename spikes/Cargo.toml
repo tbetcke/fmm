@@ -1,0 +1,65 @@
+# The spikes' own workspace (Helmholtz CHA.1, review 2026-11-12 K3 and U1; signed off by the
+# user on 2026-11-19: every spike kept, one spikes workspace with one lock file). The root
+# workspace excludes `spikes/`, so its checks, its `Cargo.lock` and its dependency table hold
+# the product crates alone; the spikes build here, by hand, from this directory
+# (`spikes/README.md`). Its lock file `spikes/Cargo.lock` is committed; it was seeded from the
+# root's, so the crates the two share resolve to the same versions. The target directory is
+# the root's `target/spikes` (`.cargo/config.toml` here).
+[workspace]
+# As the root's: keep "2".
+resolver = "2"
+members = [
+    "census",
+    "coaxial",
+    "cubecl-gemm",
+    "device-arith",
+    "diagonal",
+    "download-path",
+    "p2p-simd",
+    "plane-wave",
+    "pw-quadrature",
+    "radial",
+    "rotation-blocks",
+    "truncation",
+]
+
+# The root's [workspace.package].
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/tbetcke/fmm"
+repository = "https://github.com/tbetcke/fmm"
+
+[workspace.dependencies]
+# The product crates, by path; each builds with its own workspace's (the root's) settings.
+nd-octree = { path = "../octree" }
+nd-fmm-plan = { path = "../fmm-plan" }
+nd-fmm-math = { path = "../fmm-math" }
+nd-fmm-ref = { path = "../fmm-ref" }
+nd-fmm-tables = { path = "../fmm-tables" }
+nd-fmm-simd = { path = "../fmm-simd" }
+nd-fmm-kernels = { path = "../fmm-kernels" }
+nd-fmm-validate = { path = "../fmm-validate" }
+# The root's entries, repeated at the same requirements; keep them equal to the root's.
+num-complex = "0.4"
+serde_json = "1"
+rayon = "1"
+mpi = { version = "0.8.2", features = ["derive"] }
+# The root's CubeCL pins (root CLAUDE.md, "Working rules"), repeated: the spikes that use
+# CubeCL must build the version nd-fmm-kernels builds. Move them with the root's.
+cubecl = { version = "=0.11.0", default-features = false, features = ["std", "stdlib"] }
+cubek-matmul = { version = "=0.3.0", default-features = false, features = ["std", "multi-level"] }
+cubek-std = { version = "=0.3.0", default-features = false }
+# Pinned by commit; spikes/p2p-simd alone (Phase 3S T2 baseline). Moved from the root at CHA.1.
+green-kernels = { git = "https://github.com/bempp/green-kernels", rev = "7d757c579f8633d58163cd5b2d011a9468541f17" }
+# The SIMD layer green-kernels dispatches through; spikes/p2p-simd names its backend.
+pulp = "0.22"
+
+# green-kernels asks for rlst from git main (0.4.0-dev), whose build dependency
+# `cc = "=1.2"` cannot be resolved beside the product's rlst and mpi-sys (cc 1.5). Point it
+# at the crates.io rlst 0.10.2, whose `simd` module has the same code (Phase 3S T2, design
+# simd-p2p.md §8.4; decided 2026-10-02; the `simd` module of 0.10.0 to 0.10.2 is 0.9.0's
+# unchanged). Only green-kernels uses that source. It stays on 0.10.2 while the product is on
+# 0.12.0 (Helmholtz CHR.2): rlst 0.12 removed `simd`. Moved from the root at CHA.1.
+[patch."https://github.com/linalg-rs/rlst.git"]
+rlst = "0.10.2"

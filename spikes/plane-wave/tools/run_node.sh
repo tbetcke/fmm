@@ -6,12 +6,13 @@
 #   tools/run_node.sh K <level example arguments>
 #
 # Build first: cargo build --release -p nd-fmm-spike-plane-wave --example level
-# (from the workspace root; the binary is target/release/examples/level).
+# (from spikes/, the spikes' workspace since Helmholtz CHA.1; the binary is the root's
+# target/spikes/release/examples/level).
 set -eu
 k=$1
 shift
 root=$(cd "$(dirname "$0")/../../.." && pwd)
-bin=${LEVEL_BIN:-$root/target/release/examples/level}
+bin=${LEVEL_BIN:-$root/target/spikes/release/examples/level}
 out=$(mktemp -d "${TMPDIR:-/tmp}/pw-node.XXXXXX")
 i=0
 while [ "$i" -lt "$k" ]; do

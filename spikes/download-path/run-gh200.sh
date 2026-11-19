@@ -11,7 +11,9 @@ set -u
 
 out=${1:-/data/ucahtbe/logs/t11}
 mkdir -p "$out"
-bin=target/release/nd-fmm-spike-download-path
+# The spikes are a workspace of their own since Helmholtz CHA.1 (spikes/README.md): build
+# from spikes/, into the root's target/spikes.
+bin=target/spikes/release/nd-fmm-spike-download-path
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
     VECLIB_MAXIMUM_THREADS=1
 
@@ -25,7 +27,7 @@ load() {
 
 load > "$out/load-before.txt"
 nvidia-smi -q -d CLOCK > "$out/clocks-before.txt"
-cargo build --release -p nd-fmm-spike-download-path --features cuda > "$out/build.txt" 2>&1
+(cd spikes && cargo build --release -p nd-fmm-spike-download-path --features cuda) > "$out/build.txt" 2>&1
 
 # The download, upload, zeroing and Device sections, f32 and f64.
 timeout 1800 "$bin" --backends cuda --precisions f32,f64 \

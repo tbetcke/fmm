@@ -53,6 +53,8 @@ The only crates that depend on this one are the spikes `spikes/p2p-simd` (Phase 
 for the inputs of its green-kernels comparison (green-kernels itself never enters here),
 and `spikes/census` (Helmholtz CH0.8a), for W4's distributions and, since CH3.0b, the
 check that `helmholtz_workloads` equals its workloads.
+Both build in the spikes' own workspace (`spikes/Cargo.toml`, Helmholtz CHA.1), not in the
+root's: a change here that a spike cites is checked by hand from `spikes/` (`spikes/README.md`).
 
 Since Phase 5 T6, `fmm_accuracy::{run, measure}` and the `fmm_accuracy` and `calibrate`
 examples run on any number of ranks: each rank passes its share of the points

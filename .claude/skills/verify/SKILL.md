@@ -56,7 +56,8 @@ working MPI.
   beside the figure the crate's `CLAUDE.md` records, with the machine's load. Flag a run
   above the crate's budget (nd-fmm-exec: the debug run under a minute) or one that grew
   by more than about 20 %.
-- **Spikes**: their own tests (they are not default members), reported apart.
+- **Spikes**: their own tests, run from `spikes/` (their own workspace since CHA.1,
+  `spikes/README.md`; no root command builds them), reported apart.
 - **Manifests or pins**: `cargo tree -e normal` on the default members lists no `fftw-sys`;
   `cargo deny check licenses` once CI has it; `cargo check --workspace --all-targets`.
 

@@ -803,7 +803,7 @@ Laplace modules, with drivers shared where Section 6.2 allows.
 | `nd-octree` | only if missing: an optional maximum leaf width, defaulting to none (Section 3.7) | everything else |
 | `nd-fmm-validate`, `nd-fmm-bench` | the reference workloads of Section 9.1 and their calibrations; a problem-file version with k and complex charges | harness, distributions, reporting, `--write-problem` and `--check-output` |
 | `tools/fmm3d/`, `tools/fixtures/` (not crates) | `hfmm3d` in the driver; a fixture generator that runs it | T9's pinned build, driver, `run.sh` steps (`problems`, `sweep`, `match`, `time`, `crosscheck`) |
-| `spikes/` (workspace members outside `default-members`, so never in CI, but in the root `Cargo.lock`; S9 outside the workspace, with a `[workspace]` table of its own, CH0.9) | S1–S9 | — |
+| `spikes/` (a workspace of their own, `spikes/Cargo.toml` with `spikes/Cargo.lock`, outside the root's, so never in CI nor in the root `Cargo.lock` (amended at CHA.1); S9 outside both, with a `[workspace]` table of its own, CH0.9) | S1–S9 | — |
 
 Nothing in `nd-fmm-plan` changes. Proposal B (separate crates `fmm-helmholtz-*`) isolates
 more but duplicates the build and test plumbing; decision D2.
@@ -1871,6 +1871,10 @@ these.
   questions 1–4 as built, signed off by the user, "I agree with the recommendation"): Section 3.7, the
   builder's c_leaf 2 (D11's 1 the leaf rule's constant; CH4.3 re-decides it with the
   high-frequency rule) and the P2P's phase below 44 c_leaf with V pairs made near pairs.
+- **Amended at CHA.1, 2026-11-19** (`spikes/README.md`, `docs/helmholtz/tasks/CHA.1.md`;
+  review 2026-11-12, K3 and U1; signed off by the user at CHA.1's plan, "Keep all, none
+  archived (Recommended)" and "One spikes workspace (Recommended)"): Section 6.1's `spikes/`
+  row, the spikes a workspace of their own with their own lock file, out of the root's.
 
 ## Appendix B. The stability check behind Section 3.6
 
