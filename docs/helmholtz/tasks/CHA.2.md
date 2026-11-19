@@ -63,7 +63,7 @@ opt-level 1, the MPI list at 2 and 4 ranks, `cargo check -p nd-fmm-exec --featur
 
 ## Machine runs
 - `points_to_morton`, the safe form against the unchecked one: a throwaway, uncommitted release
-  example timing both at N = 10⁶ and 10⁷ uniform points, alternated, best and median of ten,
+  example timing both at N = 10⁶ and 10⁷ uniform points, alternated, best and median of twenty,
   BLAS threads at 1; it decides "measurably slower". Machine: question 2.
 - D9's Laplace benchmarks (`tools/bench/run.sh`) time the evaluation only; `points_to_morton`
   runs in the build (`fmm-exec/src/pipeline.rs`), and the lint attributes generate no code. So
@@ -72,7 +72,7 @@ opt-level 1, the MPI list at 2 and 4 ranks, `cargo check -p nd-fmm-exec --featur
 ## Results (2026-11-19)
 - **The timing (M6, load 1.6–3.2, one thread, release, no LTO).** A throwaway example (not
   committed) timed `points_to_morton` from the library against an unchecked copy in the
-  example, at N = 10⁶ and 10⁷ uniform points, 20 alternated calls each, three runs per build.
+  example, at N = 10⁶ and 10⁷ uniform points, 20 calls per form, alternated, three runs per build.
   `points_to_morton` is generic, so it is compiled into the calling crate: one build that also
   timed a local safe copy moved the library's own call from 26.6 to 59.5 ms at 10⁷ (codegen,
   not the reads), so the forms were compared as three builds of the library itself, each against
@@ -84,8 +84,8 @@ opt-level 1, the MPI list at 2 and 4 ranks, `cargo check -p nd-fmm-exec --featur
   | `get_value([i]).unwrap()` | 1.064–1.072 (1.022–1.044) | 1.068–1.072 (1.040–1.045) |
   | the column's `iter_value()` zipped into `[f64; 3]` | 1.020–1.070 (1.047–1.071) | 1.013–1.030 (1.081–1.088) |
 
-  At 10⁷ points the unchecked form takes 24.3–26.0 ms; the safe forms 1–2 ms more, 1–9 % of the
-  function. That is measurably slower by the *Done when*, so the block is kept: `#[allow(unsafe_code)]`
+  At 10⁷ points the unchecked copy's medians are 24.6–26.3 ms; the safe forms' 0.4–1.8 ms more
+  (zip 0.4–0.8, `get_value` 1.7–1.8), 1–9 % of the function. That is measurably slower by the *Done when*, so the block is kept: `#[allow(unsafe_code)]`
   on the statement, its `// SAFETY:` comment (the asserted `[3, n]` shape) and its reason. A safe
   form without the checks (contiguous `chunks_exact(3)`) would need a raw-data bound on the
   public signature; not in scope. Raw outputs: `~/projects/fmm-archive/m6/logs/cha-2/`.

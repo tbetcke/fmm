@@ -80,7 +80,7 @@ Slash commands in `.claude/skills/`, for the Helmholtz work:
 - `unsafe` only in nd-fmm-simd's `arch` modules and its ISA dispatch, in
   nd-fmm-kernels, and in spikes/. Every block carries a `// SAFETY:` comment and
   every public function stays safe; all other crates, nd-fmm-exec included, are free
-  of `unsafe` (docs/design/simd-p2p.md §5.4). The compiler enforces it (Helmholtz CHA.2):
+  of `unsafe` but for the two exceptions below (docs/design/simd-p2p.md §5.4). The compiler enforces it (Helmholtz CHA.2):
   `[lints.rust] unsafe_code = "forbid"` in the `Cargo.toml` of nd-fmm-math, -ref, -tables,
   -exec, -validate and -bench, `"deny"` in nd-fmm-plan's and nd-octree's, every target of
   the package. The two exceptions, each `#[allow(unsafe_code)]` in its file with its reason:

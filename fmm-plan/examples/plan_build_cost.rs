@@ -32,16 +32,19 @@ fn grow(bytes: usize) {
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         grow(layout.size());
+        // SAFETY: the caller's contract for `alloc`, passed on to `System` unchanged.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         CURRENT.fetch_sub(layout.size(), Ordering::Relaxed);
+        // SAFETY: `ptr` and `layout` come from `alloc` or `realloc` above, both `System`'s.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         grow(new_size);
+        // SAFETY: the caller's contract for `realloc`, passed on to `System` unchanged.
         let new = unsafe { System.realloc(ptr, layout, new_size) };
         CURRENT.fetch_sub(layout.size(), Ordering::Relaxed);
         new
