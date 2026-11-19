@@ -1,6 +1,6 @@
-//! The diagonal form of the M2L on high-frequency levels (proposal §5.4; Helmholtz
-//! CH1.3d1): S → F, the diagonal translation and F → R, with the transfer functions in
-//! extended precision, the trusted path of CH4.1 and CH4.2.
+//! The diagonal form of the M2L on high-frequency levels (proposal §5.4; CONVENTIONS §3.15
+//! "Signatures"; Helmholtz CH1.3d1): S → F, the diagonal translation and F → R, with the
+//! transfer functions in extended precision, the trusted path of CH4.1 and CH4.2.
 //!
 //! # The chain
 //!
