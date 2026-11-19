@@ -144,11 +144,13 @@ T10) runs exactly this for the default members:
 
 ```sh
 cargo fmt -- --check
-cargo clippy -- -D warnings
-cargo clippy --examples -- -D warnings
+cargo clippy --all-targets -- -D warnings
 RUST_MIN_STACK=8388608 cargo test
-cargo doc --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
+
+Clippy covers every target, the tests included, and rustdoc's warnings fail the docs, since
+the H1 gate (review 2026-11-19, U4 and U5).
 
 Since 2026-10-31 the test step builds at `CARGO_PROFILE_DEV_OPT_LEVEL=1`, and so does
 `run-tests-mpi` (below): the dev profile's debug assertions and overflow checks stay on and
@@ -177,8 +179,15 @@ installs MPI and libclang, and its tests still run without MPI:
 cargo clippy -p nd-fmm-kernels --all-targets --features cpu -- -D warnings
 cargo check -p nd-fmm-kernels --features cuda
 cargo check -p nd-fmm-exec --features cuda
+cargo test -p nd-fmm-exec --features cpu --release --no-run
 cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
+RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test operator device_
 ```
+
+The last two lines on nd-fmm-exec were added at the H1 gate (review 2026-11-19, T4). They
+build nd-fmm-exec's device-path tests on every pull request and run the device operator
+tests, which need no MPI initialisation. The other device tests stay checks by hand
+(`fmm-exec/CLAUDE.md`).
 
 Its one test run (since Phase 4S T10) sets `CUBECL_DEBUG_LOG`, and the next step prints
 the kernel compile times from that log with `fmm-kernels/tools/compile_times.awk`.
