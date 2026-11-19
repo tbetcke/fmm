@@ -182,7 +182,7 @@ impl<T: RealScalar> Grid<T> {
     /// let theta = grid.theta(2);
     /// assert_eq!(theta.len(), legendre::len(4));
     /// // Y₀⁰ = 1/√(4π) on every ring.
-    /// assert!((theta[legendre::index(0, 0)] - 0.25 / std::f64::consts::PI.sqrt()).abs() < 1e-16);
+    /// assert!((theta[legendre::index(0, 0)] - 0.5 / std::f64::consts::PI.sqrt()).abs() < 1e-16);
     /// ```
     pub fn theta(&self, i: usize) -> &[T] {
         let len = legendre::len(self.p);
