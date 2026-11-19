@@ -9,12 +9,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11: the wave levels in one place, which also lets
-named precisions run with the V rule where they panicked). Next is CH4.1, whose first step
-measures the product conversions against RCR and stops to ask (review 2026-11-19, A5). HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of
-H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
-`git show 8475009:docs/helmholtz/roadmap.md`.
+(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11). CH4.1 is split; CH4.1a (the product
+conversions, measured: per box 1–3 RCR pairs, W1 at kD = 500's RCR levels 5–16× faster on one
+core, an FFT worth about 1–2 % of the run) is signed off (A5's stop): H4 goes on with the
+product, CH4.1b next, then CH4.2; the FFT track stays item 11. HR, H0 and H2 are still open; of H0,
+CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
+`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
+H1.G in `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
 
@@ -64,6 +65,8 @@ item 6, CH4.0k off the list. Amended on 2026-11-19 at the H1 gate (`docs/helmhol
 §7, question 5; the user on #230: "CHA.11 + measure first (Recommended)"): CHA.11 as item 9,
 and CH4.1's first step a measurement of the product conversions with a stop to ask (review
 2026-11-19, A5: with the product φ step a high-frequency level gains about 2.3× at most).
+Confirmed on 2026-11-19 by CH4.1a's sign-off (#234's question 1, the user: "Q1-3 as recommended. Merge when green"):
+the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 keep their order.
 
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
@@ -84,8 +87,9 @@ and CH4.1's first step a measurement of the product conversions with a stop to a
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5 (CH4.1 first measures the product conversions against
-    RCR and stops to ask before CH4.2 whether item 11 moves ahead: review 2026-11-19, A5)
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2, CH4.3, CH4.4, CH4.5 (CH4.1a first
+    measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
+    moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
@@ -632,23 +636,32 @@ task's full line is in its record or report and its progress entry
   *Done when:* W1 at kD = 500's build at 1 × 40 and 1 × 72 at most half its one-core time, the
   output bit for bit; Laplace's builds no slower (D9). *Needs:* CH4.0h. *Machines:* Kathleen,
   locust (the M6 with the user's go-ahead). *Sign-off:* the Laplace change.
-- [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
+- [x] **CH4.1a The product conversions, measured.** Report:
+  `fmm-validate/results/helmholtz-ch4-1a.md`; record `docs/helmholtz/tasks/CH4.1a.md` (the first
+  half of CH4.1, split 2026-11-19). `nd_fmm_tables::helmholtz::diagonal::Conversions`: S → F and
+  F → R by parity and the azimuths' ×4, 10P³ real multiply-adds per conversion (§6.7: 68P³), the
+  reference to rounding, a box's bits in every batch. Per box 1–3 RCR pairs; W1 at kD = 500's
+  levels 2 and 3 modelled at 0.06–0.10 and 0.16–0.20 of RCR on one core (A5: 0.43); an FFT
+  about 1–2 % of the run. *Sign-off:* the PR's questions 1–3 as recommended (the user on #234,
+  2026-11-19: "Q1-3 as recommended. Merge when green"): H4 goes on with the product, the FFT track stays item 11; the
+  acceptance met as read; proposal §6.7 amended.
+- [ ] **CH4.1b The signature buffers and the level's scratch.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
-  budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
-  size; scratch within the budget on W1 at kD = 1000. Also, from the H3 gate (§5): the
-  resident memory of the RCR FMM on W1 at kD = 500 at the calibrated degrees, the baseline
-  the signature scratch is added to. Also (CH1.3d2, the user at its plan): the signature
-  buffers' layout in memory (interleaved or planes, alignment, chunks) is fixed here, in the
-  crate's documentation, not in CONVENTIONS (§3.15 "Signatures", "Not fixed here"); the
-  grid, sample order and stored form are §3.15's. Also, first (review 2026-11-19, A5; the user, 2026-11-19, on #230:
-  "CHA.11 + measure first"): the product conversion per box (S → F and F → R, with the ×4 the
-  φ grid's symmetries give, N_φ a multiple of 4) against the RCR pair at the high-frequency
-  levels' degrees, and a high-frequency level's time with the product conversions against
-  RCR's on W1; then a stop to ask before CH4.2 whether H4 goes on as listed or the FFT track
-  (CH0.9, CHR.3, CH4.6) moves ahead. With it the H4 gain stated for the product and for an FFT
-  apart. Also (review 2026-11-19, C5, C7): ref's `diagonal::Symmetry` mapped onto the tables'
+  budget. *Done when:* bits independent of the chunk size; scratch within the budget on W1 at
+  kD = 1000. Also, from the H3 gate (§5): the resident memory of the RCR FMM on W1 at kD = 500
+  at the calibrated degrees, the baseline the signature scratch is added to. Also (CH1.3d2, the
+  user at its plan): the signature buffers' layout in memory (interleaved or planes, alignment,
+  chunks) is fixed here, in the crate's documentation, not in CONVENTIONS (§3.15 "Signatures",
+  "Not fixed here"); the grid, sample order and stored form are §3.15's. Also (review
+  2026-11-19, C5, C7): ref's `diagonal::Symmetry` mapped onto the tables'
   `SignedPermutation`, with a test that ref's `offsets()` and the tables' V offsets are one
-  set; `diagonal::Workspace` renamed before its first user. *Needs:* CH3.1, D6, CHA.11.
+  set; `diagonal::Workspace` renamed before its first user. Also (CH4.1a's report §2): the
+  column kernel of `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core
+  (baseline SSE2 codegen, no fma) and 6–10 on a Grace core; measure the level's conversions
+  after CH4.2 and, if they matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1).
+  Also (CH4.1a's review): the Legendre tables hold (p + 1)²(p + 2) values per level (S → F and F
+  → R apart; 18.5 MB at p = 131, about 120 MB at p = 245 in f64), counted in the budget.
+  *Needs:* CH4.1a and its sign-off.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
   deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
@@ -656,7 +669,7 @@ task's full line is in its record or report and its progress entry
   (C₀ u) f64 RCR rounds up to 2.4× more than the diagonal form (CH1.3d1's record), so a
   comparison with RCR there needs 2E. Also (review 2026-11-19, M11): an ignored release test
   of the trusted path at k a = 108 and 216 on a few classes (CH4.4's degrees; S6 about 5 s per
-  class at p = 256). *Needs:* CH4.1, CH0.6.
+  class at p = 256). *Needs:* CH4.1b, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
@@ -688,7 +701,7 @@ task's full line is in its record or report and its progress entry
   round-off; per-box plans with bits the same across batch positions, sizes and threads, and
   fingerprints all-gathered; off by default, a default build linking no FFTW, cargo-deny, a CI
   job with the feature; the GPL warning in the crate documentation, the README, the builder
-  option and `Cargo.toml`. *Needs:* CH4.1, CHR.3, CH0.9, D7.
+  option and `Cargo.toml`. *Needs:* CH4.1b, CHR.3, CH0.9, D7.
 - [ ] **H4.G Gate.** `/milestone-gate H4`. *Needs:* every task above.
 
 ## H5: Complex wavenumber

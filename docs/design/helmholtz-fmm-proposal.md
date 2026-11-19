@@ -1026,7 +1026,18 @@ counted as one, before any measurement of efficiency:
 | 144 | 1.77× | 141 | 71 | 46 |
 | 261 | 1.95× | 749 | 286 | 185 |
 
-(Padding relative to the multiple of 4 above 4P − 3.) One measured point, indicative
+(Padding relative to the multiple of 4 above 4P − 3.) The column "DFT as a product" counts the
+φ step without the grid's symmetries in complex arithmetic. As built at CH4.1a (amended at
+CH4.1a; `fmm-validate/results/helmholtz-ch4-1a.md`) the product needs far less: the cos and
+sin are real, so the φ step is two real transforms of each ring's sums; the parity of the
+Gauss–Legendre nodes halves the Legendre step; and, N_φ being a multiple of 4, every azimuth
+is ±φⱼ + qπ/2 of a base azimuth j ≤ N_φ/8, which quarters the φ step. That is about 2P³ + 8P³
+real multiply-adds per conversion, against about 68P³ real ones in the count above. Measured on
+one core of locust and of Kathleen, a box's S → F and F → R cost 1.5–2.8 RCR pairs at p = 66–135
+and about one at p = 245. W1 at kD = 500's high-frequency levels run 5–16× faster than with RCR
+(modelled from measured times). An FFT, which replaces the φ step alone, then saves about 1–2 %
+of the whole run (kD = 1000: about 2 %), so the product stays the default and the FFT back end
+optional (CH4.6). One measured point, indicative
 (RLST's design, Section 10.2): one forward φ transform of one box at p = 144, 289
 transforms of length 588, took about 0.59 ms on one AVX2 core with Ubuntu's FFTW 3.3.10,
 and 1.23 ms with FFTW built without SIMD. The effect on a whole run is bounded:
@@ -1901,6 +1912,12 @@ these.
   off 2026-10-28, applied here); Section 4, items 1 and 3, the factor 4π ik on the crossing
   operators and S3's adopted Yukawa scaling (review 2026-11-19, M14); Section 9, item 2, the
   bound E read as measured ≤ 2E (CH1.3d1's sign-off on #228).
+
+- **Amended at CH4.1a, 2026-11-19** (`fmm-validate/results/helmholtz-ch4-1a.md` §1–§3; PR
+  #234, its question 3, signed off by the user, "Q1-3 as recommended. Merge when green"):
+  Section 6.7, the product's count as built (2P³ + 8P³ real multiply-adds per conversion,
+  against about 68P³ in the table's count), the measured per-box cost (1–3 RCR pairs) and the
+  FFT's bound (about 1–2 % of W1 at kD = 500's run).
 
 ## Appendix B. The stability check behind Section 3.6
 

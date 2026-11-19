@@ -150,13 +150,41 @@ impl<T: RealScalar> Grid<T> {
         ]
     }
 
-    /// cos φⱼ and sin φⱼ, j < N_φ.
-    pub(super) fn azimuth_tables(&self) -> (&[T], &[T]) {
+    /// cos φⱼ and sin φⱼ for j < N_φ, each from double-double rounded once to `T`
+    /// (CH4.1a: the tables of `nd_fmm_tables::helmholtz::diagonal` are built from them).
+    ///
+    /// ```
+    /// use nd_fmm_ref::helmholtz::diagonal::Grid;
+    ///
+    /// let grid = Grid::<f64>::new(3);
+    /// let (cos, sin) = grid.azimuth_tables();
+    /// assert_eq!((cos.len(), cos[0], sin[0]), (16, 1.0, 0.0));
+    /// assert_eq!(cos[8], -1.0);
+    /// ```
+    pub fn azimuth_tables(&self) -> (&[T], &[T]) {
         (&self.cos, &self.sin)
     }
 
-    /// Ring i's θ-factors of Yₙ^{±m} at [`legendre::index`]`(n, m)`, m ≥ 0.
-    pub(super) fn ring(&self, i: usize) -> &[T] {
+    /// Ring i's θ-factors of Yₙ^{±m}, √((2 − δ_{m0})(2n + 1)/(4π)) P̄ₙᵐ(uᵢ), at
+    /// [`legendre::index`]`(n, m)` for 0 ≤ m ≤ n ≤ p: the real factor that multiplies
+    /// cos mφ (coefficient +m) and sin mφ (coefficient −m) in Yₙ^{±m} on the ring (CH4.1a:
+    /// the tables of `nd_fmm_tables::helmholtz::diagonal` are built from them).
+    ///
+    /// # Panics
+    ///
+    /// If i is not a ring (i ≥ 2p + 1).
+    ///
+    /// ```
+    /// use nd_fmm_math::orthonormal::legendre;
+    /// use nd_fmm_ref::helmholtz::diagonal::Grid;
+    ///
+    /// let grid = Grid::<f64>::new(4);
+    /// let theta = grid.theta(2);
+    /// assert_eq!(theta.len(), legendre::len(4));
+    /// // Y₀⁰ = 1/√(4π) on every ring.
+    /// assert!((theta[legendre::index(0, 0)] - 0.5 / std::f64::consts::PI.sqrt()).abs() < 1e-16);
+    /// ```
+    pub fn theta(&self, i: usize) -> &[T] {
         let len = legendre::len(self.p);
         &self.theta[i * len..(i + 1) * len]
     }

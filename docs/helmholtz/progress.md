@@ -3607,3 +3607,43 @@ request, using this template:
   CLAUDE.md only).
 - Follow-ups: none new; CH4.1 next (roadmap); H4's diagonal-form choice per level reads the same
   place (the roadmap's CHA.11 line).
+
+## 2026-11-19: CH4.1a The product conversions, measured
+- Done: CH4.1 split into CH4.1a and CH4.1b. `nd_fmm_tables::helmholtz::diagonal`:
+  `Conversions` (tables from `nd_fmm_ref`'s grid times sⁿ, rounded once) and
+  `ConversionScratch`; S → F and F → R of a batch of boxes, the Legendre step halved by the
+  rings' parity, the φ step quartered by the azimuths' symmetries (base azimuths
+  0 ≤ j ≤ N_φ/8, residues μ mod 4), through one deterministic column kernel: 10P³ real
+  multiply-adds per conversion against about 68P³ in proposal §6.7's count. `nd_fmm_ref`'s `Grid::theta` and
+  `Grid::azimuth_tables` public. The example `helmholtz_conversions`. Report
+  `fmm-validate/results/helmholtz-ch4-1a.md`; record `docs/helmholtz/tasks/CH4.1a.md`.
+- Tests: `fmm-tables/tests/helmholtz/diagonal.rs` (8, 1 ignored) and 3 unit tests: against
+  `nd_fmm_ref::helmholtz::diagonal::{s2f, f2r}` within 256 u (p ≤ 24, s = 1 and below;
+  p = 41, 72, 131 in release), the round trip s²ⁿ M̂, a box bit for bit in every batch and
+  position (p = 17, two ring blocks), f32, the column kernel bit for bit a triple loop, the azimuth map. A changed sign
+  in either combination fails three tests.
+- Measurements (one core; locust core 5 at load 1.5–2.6; Kathleen job 644326, node-c11a-079):
+  S → F + F → R per box 1.5–2.4 RCR pairs (two planes) on locust and 1.6–2.8 on Kathleen at
+  p = 66–135, about 1 at p = 245; W1 at kD = 500's level 2 modelled at 0.063–0.072 (locust) and
+  0.082–0.097 (Kathleen) of RCR's time, level 3 at 0.156–0.162 and 0.195–0.203; with the φ step
+  free (an FFT's ceiling, by the φ step's share of the multiply-adds) about half of that. Scaled
+  to CH4.0e's runs: build plus one evaluation 0.72–0.81× (Kathleen) and 0.73–0.88× (locust) with
+  the product, an FFT about 1–2 % more.
+  Raw outputs in `~/projects/fmm-archive/{locust,kathleen}/runs/ch4-1a/`.
+- Checks: `/verify` on the M6: fmt; Clippy (default, examples, workspace all-targets); rustdoc
+  with `-D warnings`; the default and workspace tests at opt-level 1 (1,317 and 1,361 passed,
+  after fixing a wrong expected value in the new `Grid::theta` doctest); the new ignored tests
+  in release; the tables' Helmholtz test executable at opt-level 0, 38.4 s. Not run: the MPI
+  list (no MPI crate's code changed), `cargo deny` (no manifest), Laplace's benchmarks (no
+  Laplace path changed). Nothing pending.
+- Decisions: signed off 2026-11-19 by the user on #234, "Q1-3 as recommended. Merge when green": 1, the order
+  (H4 on with the product, the FFT track stays item 11; A5's stop); 2, the acceptance as read
+  (the level modelled, not timed in a level call); 3, proposal §6.7's count amended (inline
+  and Appendix A, in this PR).
+- Laplace: not touched (a new module of `nd-fmm-tables`, two accessors of `nd-fmm-ref`'s
+  Helmholtz grid, an example; no Laplace path, table or default).
+- Follow-ups: CH4.1b (roadmap), with an "Also" on the column kernel's rate on x86_64 and one on
+  the Legendre tables' memory in the budget; CH4.2 measures the real diagonal pair. The
+  self-review's fixes (a wrong scratch-size formula in the docs, two stray rows in the report,
+  units of the count, the FFT bound's wording, the scale in f64, the batch test across two ring
+  blocks, the tolerance 256 u) are in the branch.

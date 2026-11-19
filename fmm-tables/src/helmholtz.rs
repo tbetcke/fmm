@@ -173,6 +173,7 @@
 pub mod batched;
 pub mod classes;
 pub mod dense;
+pub mod diagonal;
 pub mod plane_wave;
 
 use nd_fmm_math::coaxial::CoaxialTable;
