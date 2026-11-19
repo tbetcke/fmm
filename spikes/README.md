@@ -18,8 +18,13 @@ the root's (`exclude = ["spikes"]` there):
   green-kernels' `[patch]` of rlst to 0.10.2 (`docs/design/simd-p2p.md` §8.4);
 - its target directory `target/spikes` at the root (`spikes/.cargo/config.toml`).
 
-No root check builds a spike, and CI never does. Run every spike command from this directory;
-the commands in the reports (`cargo run -p nd-fmm-spike-<name> …`) work as written from here.
+No root check builds a spike, and CI never does; `deny.toml`'s licence check covers the root
+alone, so the spikes' licence graphs are not checked. Run every spike command from this
+directory: the commands in the reports (`cargo run -p nd-fmm-spike-<name> …`) work as written
+from here, and their binaries are under the root's `target/spikes/`, not `target/` (the
+scripts in `download-path/` and `plane-wave/tools/` were changed for it at CHA.1). A set
+`CARGO_TARGET_DIR` (the opt-level 1 recipe of `/verify`) overrides `target/spikes`, and
+`cargo --manifest-path spikes/Cargo.toml` from the root ignores `.cargo/config.toml` here.
 
 ```sh
 cd spikes
@@ -39,7 +44,7 @@ recorded as broken in this file, never left silently broken.
 | `p2p-simd` | Phase 3S T2, T7; Helmholtz CH2.4b, CH3.4b: SIMD P2P, inverse square roots, against green-kernels | nd-fmm-math, -ref, -simd, -validate, green-kernels, pulp | **C3S.4's reference of D9** (`results-m6.md`, `tools/m6/machine.md`), `fmm-simd`'s rustdoc, the reports of CH2.4b, CH3.4b, CHR.2 and Phase 5N–6 | `cargo run --release -p nd-fmm-spike-p2p-simd --example compare` (also `yukawa`, `helmholtz`); `cargo test -p nd-fmm-spike-p2p-simd` runs the three examples' smoke tests |
 | `device-arith` | Phase 4 T3: device arithmetic per backend, the r² = 0 argument, P2P candidates | CubeCL, nd-fmm-kernels and the host crates | `docs/CONVENTIONS.md`, `fmm-kernels`' rustdoc and CLAUDE.md, `fmm-exec/tests/operator/device_leaf.rs` | `cargo run --release -p nd-fmm-spike-device-arith --features cpu,metal -- …` (`REPORT.md`); `cargo test -p nd-fmm-spike-device-arith --features cpu` |
 | `download-path` | Phase 4S T11: the device download and upload paths | CubeCL, nd-fmm-kernels, -validate | `fmm-kernels`' rustdoc and CLAUDE.md, `fmm-bench/results/phase4s-t11-download-path.md` | `cargo run --release -p nd-fmm-spike-download-path --features metal -- --backends metal --precisions f32` |
-| `plane-wave` | Phase 6 T10: the plane-wave M2L with merge and shift on one level | nd-fmm-math, -ref, -tables, -simd | `fmm-tables/src/plane_wave/` rustdoc, `tools/fixtures/plane_wave_quadrature.sh` (moved from here) | `cargo test -p nd-fmm-spike-plane-wave --release -- --ignored --nocapture`; `cargo run --release -p nd-fmm-spike-plane-wave --example model` |
+| `plane-wave` | Phase 6 T10: the plane-wave M2L with merge and shift on one level | nd-fmm-math, -ref, -tables, -simd | `fmm-tables/src/plane_wave/` rustdoc, `tools/fixtures/plane_wave_quadrature.sh` (moved from here) | `cargo test -p nd-fmm-spike-plane-wave --release -- --ignored --nocapture`; `cargo run --release -p nd-fmm-spike-plane-wave --example model`; `--example level` with `tools/sweep.sh` and `tools/run_node.sh` |
 | `rotation-blocks` | Helmholtz CH0.1, S1: rotation blocks of large degree | nd-fmm-math | `fmm-math`'s rustdoc, `tools/fixtures/gen_helmholtz_angular.py` (its method and `fixtures/reference.json`), `docs/CONVENTIONS.md` | `cargo test -p nd-fmm-spike-rotation-blocks --release -- --include-ignored` |
 | `coaxial` | Helmholtz CH0.2, S2: the coaxial translation coefficients | – | `fmm-math/src/coaxial/`, `tools/fixtures/gen_helmholtz_coaxial.py` (`tools/reference.py`, `fixtures/reference.json`), `docs/CONVENTIONS.md` | `cargo test -p nd-fmm-spike-coaxial --release -- --include-ignored` |
 | `radial` | Helmholtz CH0.3, S3: the radial functions | – | `fmm-math/src/radial.rs`, `tools/fixtures/gen_helmholtz_radial.py` (`tools/reference.py`, `fixtures/reference.json`) | `cargo test -p nd-fmm-spike-radial --release -- --include-ignored` |

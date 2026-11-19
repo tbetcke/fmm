@@ -7,14 +7,15 @@
 #
 # The plane waves run with the matched quadrature (the smallest s whose level error is at
 # most 0.1× the M2L truncation error: tests/accuracy.rs, level_3_every_p) and with the
-# model's β = 0.1 choice; the baselines once per p. Build first, from the workspace root:
+# model's β = 0.1 choice; the baselines once per p. Build first, from spikes/ (the spikes'
+# workspace since Helmholtz CHA.1; the binary is the root's target/spikes/release/examples/level):
 #   cargo build --release -p nd-fmm-spike-plane-wave --example level
 set -eu
 k=${1:?usage: sweep.sh K [LEVEL]}
 level=${2:-4}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
-bin=${LEVEL_BIN:-$root/target/release/examples/level}
+bin=${LEVEL_BIN:-$root/target/spikes/release/examples/level}
 reps=${REPS:-3}
 extra=${LEVEL_ARGS:-}
 # p, matched s, the model's β = 0.1 s

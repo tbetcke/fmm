@@ -7,12 +7,12 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
 `docs/helmholtz/gates/<milestone>.md`.
 
-Status (2026-11-16): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0i are merged, and CH4.0j
-(#223, signed off, waiting for the merge) builds the exponential M2L's tables within a level in parts,
-bit for bit: their build part 0.05–0.42 of CH4.0h's at one rank per node; the builds of CH3.6's
-small cases are now mostly the shared steps (CH4.0k, off the list). HR, H0, H1 and H2 are still
-open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CHA.1–CHA.3, then CH1.3d.
+Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j are merged (items 1–6).
+CHA.1 (the PR after #223) takes the twelve spikes out of the root workspace into one of their own,
+`spikes/Cargo.toml` with its own lock file, all kept; the root's lock lost rlst 0.10.2 and
+green-kernels, no version changed. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done,
+and of H0, CH0.4 and CH0.6. Next: CHA.2, CHA.3, then CH1.3d.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -914,17 +914,11 @@ outputs bit for bit, its benchmarks within D9's spread wherever a host or device
 moves, `/verify`'s Laplace protection run. No behaviour or default changes, and a public
 item is removed only where the task names it.
 
-- [ ] **CHA.1 The spikes out of the workspace.** Review K3, U1. The twelve spikes are
-  members, so the strict checks (`--workspace`) compile them, `Cargo.lock` carries two RLST
-  versions and a git dependency, and the root `[patch]` serves `spikes/p2p-simd` alone.
-  *Done when:* the finished spikes are outside `members` (excluded, each with what it needs
-  to build by hand, or archived to `../fmm-archive` with their reports kept in the tree);
-  `spikes/p2p-simd` still builds and runs as C3S.4's reference (D9), and every spike a test
-  or a report's reproduction names still builds by hand, each said in its README; the
-  `[patch]`, the second RLST and the spike-only entries of `[workspace.dependencies]` gone
-  from the root if no member needs them; `deny.toml` and the root CLAUDE.md's "Layout" (no
-  crate-level lock files) brought in line. *Sign-off:* which spikes are archived, and the
-  lock files of the kept ones.
+- [x] **CHA.1 The spikes out of the workspace.** Review K3, U1. Record: `spikes/README.md`,
+  `docs/helmholtz/tasks/CHA.1.md`. All twelve kept, a workspace of their own (`spikes/Cargo.toml`,
+  one `spikes/Cargo.lock`, the CubeCL pins repeated, green-kernels, pulp and the `[patch]` moved
+  there); the root lock lost 30 packages, no version changed. Signed off 2026-11-19 (the user:
+  "Keep all, none archived (Recommended)", "One spikes workspace (Recommended)").
 - [ ] **CHA.2 `unsafe` enforced.** Review C1. *Done when:* `#![forbid(unsafe_code)]` in
   nd-fmm-math, -ref, -tables, -exec, -validate and -bench, `#![deny(unsafe_code)]` in
   nd-fmm-plan and nd-octree; `octree/src/octree.rs:1411` made safe, or kept with its

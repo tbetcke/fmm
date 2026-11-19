@@ -166,8 +166,10 @@ Otherwise go on without asking.
   generic over `T: RealScalar`; no allocation in hot loops; `unsafe` only where allowed;
   every public item documented; crate `CLAUDE.md` tables updated.
 - Small steps that build, each committed as `Helmholtz <ID>: <what>`.
-- Spikes (H0) go in `spikes/<name>/` with a `SPIKE_REPORT.md`; S9 has a `[workspace]` table
-  of its own so nothing enters the root lock file.
+- Spikes (H0) go in `spikes/<name>/` with a `SPIKE_REPORT.md`, as members of the spikes'
+  workspace (`spikes/Cargo.toml`, `spikes/README.md`), never of the root's; S9 has a
+  `[workspace]` table of its own (listed in the spikes workspace's `exclude`) so FFTW enters
+  neither lock file.
 - Measurements: release builds, the BLAS thread variables at 1, the machine and ranks ×
   threads named (on Kathleen also the nodes, binding and job id), no timing asserted in a
   test; the report at the path the plan names (`fmm-validate/results/helmholtz-<id>.md`

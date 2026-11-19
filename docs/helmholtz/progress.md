@@ -3355,3 +3355,26 @@ request, using this template:
 - Follow-ups: none new; CH4.0k's line notes it is now most of the small cases' build.
 - Sign-off (the user on #223, 2026-11-16: "Yes to both questions"): (1) the acceptance met as read; (2)
   CH4.0k stays off the priority list. Next: CHA.1–CHA.3.
+
+## 2026-11-19: CHA.1 The spikes out of the workspace
+- Done: the twelve spikes a workspace of their own (`spikes/Cargo.toml`: the product crates by
+  path, the CubeCL pins repeated, green-kernels, pulp and its rlst `[patch]`; one
+  `spikes/Cargo.lock` seeded from the root's; target `target/spikes`); the root
+  `exclude = ["spikes"]`, its lock 30 packages smaller (rlst 0.10.2, green-kernels, pulp, the
+  spikes), no version changed; `deny.toml`'s spike exclusions gone; `spikes/README.md` (how to
+  build each, what cites it); root CLAUDE.md (Layout, the CubeCL pin, rlst), `/verify`,
+  `/next-task`, `fmm-validate/CLAUDE.md`, `workspace-structure.md`, `simd-p2p.md` §8.4; the
+  three spike scripts that built from the root. Record `docs/helmholtz/tasks/CHA.1.md`.
+- Tests: none new. The spikes' own: `cargo check --all-targets` and `cargo test` from
+  `spikes/` (70 passed, 0 failed); p2p-simd's main binary (C3S.4's reference) in release, its
+  error columns equal to `results-m6.md` on all 1,208 kernel rows, not timed.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs,
+  `cargo check --workspace --all-targets`, `cargo deny --locked check licenses`, no fftw-sys,
+  the default and workspace tests at opt-level 1 (1,275 and 1,319 passed: the 70 spike tests
+  left the root), the MPI list at 2 and 4 ranks (24 of 24). Nothing pending.
+- Decisions: signed off 2026-11-19 at the plan (the user): "Keep all, none archived
+  (Recommended)"; "One spikes workspace (Recommended)". Proposal §6.1 amended (Appendix A).
+- Laplace: not touched (no product source, dependency version or default-member feature
+  changed; `--workspace` builds no longer unify cubecl-gemm's `metal,cpu` into nd-fmm-kernels).
+- Follow-ups: none. `approx` in the root `[workspace.dependencies]` has no user (not
+  spike-only; left, CHA.10's housekeeping may take it).

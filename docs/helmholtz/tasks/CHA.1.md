@@ -100,6 +100,37 @@ are recorded in `tools/kathleen/README.md` and are not this task's.)
   library may break a spike unseen. `spikes/README.md` says to rebuild the spikes workspace
   when a task reruns one; the census check of `helmholtz_workloads` becomes by hand.
 
+## As built and run (2026-11-19, the M6)
+
+- The root lock lost 30 packages (rlst 0.10.2 and its proc macro, green-kernels, pulp, git2 and
+  its libraries, syn 1, approx 0.5.1 (green-kernels' only), the twelve spikes); none added, no
+  version changed (diffed by name and version). `spikes/Cargo.lock`: 569 packages, all at the
+  old root lock's versions (it drops nd-fmm-bench and the dev-dependencies of the path
+  crates). Neither lock changed under the builds below.
+- Feature unification: the default members' builds (`cargo build`, `cargo test`, `-p` of a
+  product crate) never selected a spike, so their packages and features are `main`'s. The
+  `--workspace` builds did: on `main` cubecl-gemm's default `metal,cpu` unified into `cubecl`
+  (and `rand`, `num-bigint`, `bytemuck`, `serde_json`, `libc` features); now `--workspace`
+  builds nd-fmm-kernels without a backend, as root CLAUDE.md says (the self-review's check).
+  The strict checks no longer compile kernels' backend code: their own commands (Clippy with
+  `cpu,metal`) still do.
+- Spikes: `cargo fmt --all -- --check`, `cargo check --all-targets` (all twelve, 43 s, no
+  warning), `cargo test --no-fail-fast` (70 passed, 21 ignored, 0 failed; census's
+  `ported_workloads_equal_the_spike_bit_for_bit` and p2p-simd's three smoke tests among them).
+  p2p-simd in release, not timed (the root tests ran beside it): the main binary (C3S.4's
+  reference) runs, its error columns (max and L2, φ and ∇, the check) equal `results-m6.md`'s
+  on all 1,208 kernel rows (the 64 summary rows are throughput); `--example compare` runs.
+- Root: `/verify` (below in the PR): fmt, Clippy (default, examples, workspace all targets),
+  docs, `cargo check --workspace --all-targets`, no fftw-sys in `cargo tree -e normal`,
+  `cargo deny --locked check licenses`, the tests at opt-level 1 (1,275 default; 1,319
+  workspace, CH4.0j's 1,389 less the 70 spike tests), the MPI list at 2 and 4 ranks (24 of 24).
+- Laplace: no product source and no product dependency or feature changes, so no D9 run
+  (the HA preamble asks for one where code moves).
+- Self-review (subagent): no blocking finding. Taken: the scripts that built from the root
+  (`download-path/run-gh200.sh`, `plane-wave/tools/{run_node,sweep}.sh`), `/verify`'s and
+  `/next-task`'s spike lines, the proposal's §6.1 row (amended under the sign-off, Appendix A),
+  the README's caveats (`CARGO_TARGET_DIR`, `--manifest-path`, the licence check).
+
 ## Pending runs
 
 None.
