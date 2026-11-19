@@ -9,7 +9,7 @@
 //! f2r(s2f(M̂)) = s²ⁿ M̂ in the same measure. A box converted in a batch against the box alone:
 //! bit for bit (`to_bits`).
 
-use nd_fmm_math::{Complex, RealScalar};
+use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::Level;
 use nd_fmm_ref::helmholtz::diagonal::{self, Grid, Workspace};
 use nd_fmm_tables::helmholtz::diagonal::{BLOCK_BOXES, ConversionScratch, Conversions};
