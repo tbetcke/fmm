@@ -41,6 +41,14 @@ crate's RCR at degree p, on a contour longer than the kernel's; `Quadrature::deg
 in `degree.rs`'s unit tests (the expansions, RCR's normalisation) and in
 `tests/helmholtz/plane_wave.rs` against RCR at points it did not fit
 (fmm-validate/results/helmholtz-ch6-1f.md).
+Helmholtz CH1.3d1: `helmholtz::diagonal`, the diagonal form of the M2L on high-frequency levels
+(proposal §5.4): S6's signature grid (`Grid`), `s2f` and `f2r`, the transfer function in
+double-double rounded once (`Transfer`, with the class permutations of `class_of`,
+`classes` and `Symmetry`), `m2l` from a stored multipole to a stored local, and the rounding
+bound E of proposal §3.6 (`bound`, `BoundConstants`, `THETA`); a private double-double
+scalar (`diagonal/dd.rs`, ported from S7's). Checked in `tests/helmholtz/diagonal.rs`
+against RCR within 2E on the 34 classes and the 316 offsets, the direct sum and the
+projection (`direct::m2l`); the large degrees are ignored tests, run in release.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -57,6 +65,9 @@ in `degree.rs`'s unit tests (the expansions, RCR's normalisation) and in
   vector exactly the single-vector operator's operations in its order; the single-vector
   operators are their m = 1 case with their own panic messages. Vector v of the result is
   the single-vector operator on vector v bit for bit (`tests/leaf/many.rs`).
+- `helmholtz::diagonal` (Helmholtz CH1.3d1) computes every transfer-function sample in
+  double-double and rounds it once (proposal §3.6), never in the working precision; its
+  transforms are the O(p³) reference, not CH4.1's fast ones.
 - `helmholtz::plane_wave` (Helmholtz CH6.1b) is a builder of quadratures, not an
   operator: f64 only, allocating, slow (its tests' 35 κ and ε take 14 s in release on the
   M6). It keeps the
