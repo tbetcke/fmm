@@ -30,7 +30,10 @@ concurrency:
 #   downloads once per image before its runs hit.
 # A failed or timed-out package install is a mirror problem; the next step says to re-run.
 # timeout-minutes (T10, from the measured times): about twice a job's warm time and above
-# its worst cold time with a slow mirror (an install step stops at 5 minutes). run-tests
+# its worst cold time with a slow mirror (an install step stops at 10 minutes; 5 until
+# 2026-11-19, when two cache misses after a runner image change hit it on a trickling
+# mirror connection, and apt-install.sh started retrying a download that runs past 120 s
+# on new connections). run-tests
 # rose from 15 to 30 on 2026-10-31: its warm runs had grown to 8–14 minutes, and runs
 # were cancelled at 15 (main on 2026-10-30; Helmholtz CH2.0, no test failed).
 # run-tests-simd rose from 5 to 10 on 2026-11-02 (the H3 gate): its x86_64 warm runs had
@@ -89,12 +92,12 @@ jobs:
 
       - name: Install libclang, FFTW, BLAS and MPI
         id: apt
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
 
       - name: Explain a failed package install
         if: failure() && steps.apt.outcome == 'failure'
-        run: echo "::error title=Package install failed::apt-get failed or timed out (5 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
+        run: echo "::error title=Package install failed::apt-get failed or timed out (10 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
 
       - name: Format
         run: cargo fmt -- --check
@@ -242,12 +245,12 @@ jobs:
 
       - name: Install MPI and libclang (for nd-fmm-exec)
         id: apt
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
 
       - name: Explain a failed package install
         if: failure() && steps.apt.outcome == 'failure'
-        run: echo "::error title=Package install failed::apt-get failed or timed out (5 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
+        run: echo "::error title=Package install failed::apt-get failed or timed out (10 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
 
       - name: Type-check nd-fmm-exec with CUDA
         run: cargo check -p nd-fmm-exec --features cuda
@@ -346,12 +349,12 @@ jobs:
 
       - name: Install libclang, FFTW, BLAS and MPI
         id: apt
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
 
       - name: Explain a failed package install
         if: failure() && steps.apt.outcome == 'failure'
-        run: echo "::error title=Package install failed::apt-get failed or timed out (5 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
+        run: echo "::error title=Package install failed::apt-get failed or timed out (10 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
 
       # What Open MPI makes of the runner: 4 ranks without oversubscription show whether
       # it refuses them for lack of slots (reported, never failing the step).
