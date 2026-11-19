@@ -7,7 +7,8 @@
 //! multiply-add). The exponent range is f64's. Ported from S7's double-double scalar
 //! (`spikes/truncation/src/real.rs`, `complex.rs`, `radial.rs` and `coaxial.rs`'s
 //! Gauss–Legendre rule), which S6 used for its transfer functions (CH0.6), with the same
-//! order of operations.
+//! order of operations; the one change is the middle node of an odd Gauss–Legendre rule,
+//! set to 0 exactly so that the nodes are symmetric bit for bit.
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
 

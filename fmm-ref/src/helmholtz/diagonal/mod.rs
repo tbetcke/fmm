@@ -71,8 +71,7 @@
 //!
 //! # Panics
 //!
-//! The operators panic if the grid, transfer function or workspace has another degree
-//! (the workspace a smaller one), if a coefficient or signature slice has the wrong length,
+//! The operators panic if the grid, transfer function or workspace has another degree, if a coefficient or signature slice has the wrong length,
 //! if a frame's radius is not the level's half-width, and if the transfer function's shift
 //! is not the frames' (to √ε of the half-width).
 //!

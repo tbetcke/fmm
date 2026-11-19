@@ -24,6 +24,10 @@ use crate::helmholtz::leaf::check_frame;
 /// precision (proposal §3.6: a T summed in f64 exceeds the bound by up to 47×).
 ///
 /// A transfer function records its shift; [`m2l`](super::m2l) checks it against the frames.
+/// It does not record k: one built for another wavenumber gives a wrong result without a
+/// panic. Where hₗ(k|t|) leaves the f64 range (k|t| small against the bandwidth 2p, far
+/// outside the diagonal form's regime, proposal §3.6), the samples are not finite; the
+/// bound E ([`bound`](super::bound)) is then +∞ or far above any tolerance.
 #[derive(Clone, Debug)]
 pub struct Transfer<T> {
     p: usize,

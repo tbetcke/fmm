@@ -286,6 +286,55 @@ fn permuted_transfer_functions_are_direct_ones() {
     }
 }
 
+/// Where nothing cancels (|t| = 3w on the axis, k a = 3, p = 8: the terms (2l + 1)|hₗ| stay
+/// below 10⁶), T̂ from double-double agrees with the same sum in f64 (nd-fmm-math's hₗ,
+/// Pₗ by the recurrence, μ from the rounded directions) to 10⁻¹³ of its largest sample.
+#[test]
+fn the_transfer_function_against_an_f64_sum() {
+    let (ka, p) = (3.0, 8);
+    let k = wavenumber(ka, 0.0);
+    let level = Level::new(k, HALF);
+    let grid = Grid::new(p);
+    for o in [[0, 0, 3], [0, 0, -3], [3, 0, 0]] {
+        let transfer = Transfer::new(&grid, &level, &source(), &target(o));
+        let t = distance(o);
+        let that = o.map(|x| x as f64 / t);
+        let mut h = vec![C::new(0.0, 0.0); 2 * p + 1];
+        nd_fmm_math::radial::hankel_h(k * t, 1.0, &mut h, None);
+        let i_pow = |l: usize| {
+            [
+                C::new(1.0, 0.0),
+                C::new(0.0, 1.0),
+                C::new(-1.0, 0.0),
+                C::new(0.0, -1.0),
+            ][l % 4]
+        };
+        let mut worst: f64 = 0.0;
+        let mut scale: f64 = 0.0;
+        for i in 0..grid.rings() {
+            for j in 0..grid.azimuths() {
+                let s = grid.direction(i, j);
+                let mu = s[0] * that[0] + s[1] * that[1] + s[2] * that[2];
+                let (mut p0, mut p1) = (1.0, mu);
+                let mut sum = h[0];
+                for (l, &hl) in h.iter().enumerate().skip(1) {
+                    sum += i_pow(l) * hl * ((2 * l + 1) as f64 * p1);
+                    let p2 = ((2 * l + 1) as f64 * mu * p1 - l as f64 * p0) / (l + 1) as f64;
+                    p0 = p1;
+                    p1 = p2;
+                }
+                let got = transfer.samples()[i * grid.azimuths() + j];
+                worst = worst.max((got - sum).norm());
+                scale = scale.max(got.norm());
+            }
+        }
+        assert!(
+            worst < 1e-13 * scale,
+            "offset {o:?}: {worst:e} of {scale:e}"
+        );
+    }
+}
+
 /// One (k a, η, p) of the acceptance: the 34 class representatives against RCR within
 /// 2E; returns the largest ratio measured/E and the number of classes with E < 10⁻⁶.
 /// With `DIAGONAL_DETAIL` set it prints every class.
