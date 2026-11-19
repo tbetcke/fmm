@@ -16,7 +16,8 @@ translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1
 (`helmholtz::plane_wave::merge`, the merge's shifts and each level's quadrature), the
 rule of which Helmholtz CH6.1e measured; Helmholtz CH4.0h (`parts`, the parts of a build on
 a caller's threads); Helmholtz CH4.0j (the exponential M2L's tables in parts within a
-level).
+level); Helmholtz CH4.1a (`helmholtz::diagonal`, S → F and F → R of the diagonal form as
+products over a batch of boxes).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -170,6 +171,22 @@ level).
   shift on every direction, slot and child within 1e-12 relative (7.5e-14 measured on the
   M6), the shared tables bit for bit each slot's own, and the rule. Not cached
   (about 50 ms a level in debug builds).
+- The third exception, `helmholtz::diagonal` (Helmholtz CH4.1a; its module docs):
+  `Conversions`, the tables of S → F and F → R of a level's degree and power scale, built in
+  f64 from `nd_fmm_ref::helmholtz::diagonal::Grid`'s θ-factors, weights and azimuth tables
+  (`Grid::theta`, `Grid::weight`, `Grid::azimuth_tables`) times sⁿ (and the weight for F → R),
+  rounded once to T; nothing derived that the reference does not hold. The transforms are not
+  the reference's order of operations (the Legendre step by the rings' parity, the φ step per
+  residue μ mod 4 at the base azimuths 0 ≤ j ≤ N_φ/8 and the others by signs), so they agree
+  with `nd_fmm_ref::helmholtz::diagonal::{s2f, f2r}` to rounding: `tests/helmholtz/diagonal.rs`
+  checks 64 u (p + 1) of the largest value (p ≤ 24; p = 41, 72, 131 ignored, in release), the
+  round trip s²ⁿ M̂, f32, and every box of a batch bit for bit the box alone. Every product is
+  one column kernel (`gemm_acc`: each element its chain over the inner index ascending, product
+  and sum rounded apart, from its own row and column), so a box's bits never depend on its
+  batch, position, `BLOCK_BOXES` or `RING_BLOCK`; keep it so (no `mul_add`, no reassociation,
+  no sum across boxes). Matrices here are row-major (the products' natural form); the
+  expansions are §3.15's two planes, the signatures §3.15's samples, interleaved complex, box
+  after box (the level's buffers are CH4.1b's). Not cached.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are deterministic: the same inputs give bit-identical tables and cache files.

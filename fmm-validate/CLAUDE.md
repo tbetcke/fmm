@@ -576,6 +576,15 @@ node, `main` and the branch in turn (`matrix`, `MAIN`), and `ch4-0j-tables.py` c
 builds, their plane-wave tables and the checksums with CH4.0h's launches. Its report is
 `results/helmholtz-ch4-0j.md`.
 
+Helmholtz CH4.1a (the product conversions, measured; docs/helmholtz/tasks/CH4.1a.md) added the
+`helmholtz_conversions` example (MPI-free, not registered; it times): per `p@k̂:boxes:pairs`
+on one core, `nd_fmm_tables::helmholtz::diagonal::Conversions`' S → F and F → R per box over a
+batch (checked against `nd_fmm_ref`'s first), the RCR pair of `helmholtz_rcr_pair`'s "pairs"
+(one and two multipole planes), a stand-in of CH4.2's diagonal pair (the transfer function read
+through a class permutation), and the level modelled from them: RCR against the diagonal form
+with every pair diagonal, and with the φ step free (an FFT's ceiling). Its report is
+`results/helmholtz-ch4-1a.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

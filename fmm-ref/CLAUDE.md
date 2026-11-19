@@ -49,6 +49,8 @@ bound E of proposal §3.6 (`bound`, `BoundConstants`, `THETA`); a private double
 scalar (`diagonal/dd.rs`, ported from S7's). Checked in `tests/helmholtz/diagonal.rs`
 against RCR within 2E on the 34 classes and the 316 offsets, the direct sum and the
 projection (`direct::m2l`); the large degrees are ignored tests, run in release.
+Helmholtz CH4.1a: `diagonal::Grid::theta` and `Grid::azimuth_tables` public, the values
+`nd_fmm_tables::helmholtz::diagonal`'s tables are built from (no value changed).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
