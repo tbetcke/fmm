@@ -9,10 +9,10 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j are merged (items 1–6),
-and of item 7 CHA.1 (the spikes a workspace of their own, #224). CHA.2 (the PR after #224) makes
-the `unsafe` rule a compiler lint in the eight crates it covers (nd-octree now free of `unsafe`;
-one exception, an example's allocator in nd-fmm-plan). HR, H0, H1 and H2 are still open; of H7,
-CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CHA.3, then CH1.3d.
+and of item 7 CHA.1 and CHA.2 (#224, #225). CHA.3 (the PR after #225) removes the M2L
+configuration Phase 6 T11's rule left unused (Phase 5N's node budget, constants and
+`resolve(p)`), `Auto`'s choices unchanged; it closes item 7. HR, H0, H1 and H2 are still open;
+of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH1.3d.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -926,12 +926,12 @@ item is removed only where the task names it.
   per 10⁷ points). Signed off 2026-11-19 (the user: at the plan "[lints.rust] per crate
   (Recommended)", "M6, now (Recommended)", "Skip D9 runs (Recommended)"; on #225 "Please go ahead
   with forbid.").
-- [ ] **CHA.3 The superseded M2L configuration removed.** Review P1. *Done when:*
-  `NodeContext`'s unused fields, `FmmBuilder::dense_node_budget`, the `AUTO_DENSE_*`
-  constants, the deprecated `resolve(p)` and the harness's `--budget` are gone, with the
-  tests that only they serve; the history of the Phase 5N rule in
-  `docs/design/node-m2l.md`, not in rustdoc; `M2lStrategy::Auto`'s choices unchanged on
-  every case of `tests/operator/strategy.rs`. A public API change, named in the PR.
+- [x] **CHA.3 The superseded M2L configuration removed.** Review P1. Record:
+  `docs/helmholtz/tasks/CHA.3.md`, `docs/design/node-m2l.md` §11. `NodeContext` keeps p and the
+  value's bytes; `FmmBuilder::dense_node_budget`, `AUTO_DENSE_*`, `resolve(p)` and `scaling
+  --budget` gone; `Auto` the same on all 42 (precision, p) cells. Signed off 2026-11-19 at the
+  plan (the user, all four as recommended: "Go ahead", keep `one_rank`, "Drop budget_mb only",
+  "Skip D9 runs").
 - [ ] **CHA.4 A test-support crate.** Review T1, C3. A small crate without workspace
   dependencies (the generator, the point sets, the error norms, the machine facts) that
   every crate may dev-depend on and nd-fmm-bench depends on in place of nd-fmm-validate

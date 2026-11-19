@@ -3418,3 +3418,40 @@ request, using this template:
   evaluation).
 - Follow-ups: none. A `points_to_morton` without checks and without `unsafe` would need a
   contiguous-data bound on its public signature; not proposed.
+
+## 2026-11-19: CHA.3 The superseded M2L configuration removed
+- Done: Phase 5N's node rule, unused since Phase 6 T11, removed (review 2026-11-12 P1):
+  `M2lStrategy::{AUTO_DENSE_MAX_P, AUTO_DENSE_RANK_BYTES, AUTO_DENSE_NODE_BYTES, resolve}`,
+  `NodeContext::{ranks_per_node, node_budget, dense_node_bytes}` (`NodeContext::new(p,
+  value_bytes)`; `one_rank` and `dense_rank_bytes` kept), `FmmBuilder::dense_node_budget`; in
+  `FmmBuilder::build` step 2's all-reduce carries the point count alone (the ranks per node fed
+  only the removed field; step 7 still agrees them for `ThreadingReport::ranks_per_node`). The
+  harness: `scaling --budget`, `Settings::dense_node_budget` and the summary's `budget_mb` gone
+  (`dense_rank_mb`, `dense_node_mb` kept); `tools/scaling/run.sh` no longer passes `--budget`,
+  `BUDGET` kept for `auto_resolves`. The rule's history from `resolve_on_node`'s rustdoc in
+  `docs/design/node-m2l.md` §11; the stale sentences that `Auto` depends on the ranks per node
+  restated (`fmm.rs`, `threading.rs`, three test files, `scaling.rs`, `fmm-exec/CLAUDE.md`,
+  `fmm-validate/CLAUDE.md`, `workspace-structure.md`). Record `docs/helmholtz/tasks/CHA.3.md`.
+- Self-review (subagent): no code defect; blocking: `fmm.rs`'s module docs still described step
+  2's two-value all-reduce and the cost model's ranks per node; fixed, with its non-blocking
+  stale sentences, two long lines, `run.sh`'s comment and a sentence of the old rustdoc §11 lacked.
+- Tests: `tests/operator/strategy.rs` over both precisions and p = 0–20 (the ranks × budgets
+  loops, the constants and the deprecated `resolve` block gone); `tests/mpi_exec.rs`'s
+  **the strategy rule on the node** with `Auto`, `Dense` and `Rotation` named. `Auto`'s choice and
+  reason on `main` over the old grid (1–128 ranks × six budgets, one per cell) and on the branch:
+  the 42 (precision, p) lines identical.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace; nd-fmm-exec with
+  `cpu,metal`), docs (also nd-fmm-exec with `cpu`), `cargo check --workspace --all-targets`,
+  `cargo check -p nd-fmm-exec --features cuda`, `cargo check -p nd-fmm-validate --examples
+  --features cpu`, the default and workspace tests at opt-level 1 (1,275 and 1,319 passed), the
+  MPI list at 2 and 4 ranks (24 of 24); `scaling` at one rank without `--budget`, `run.sh`'s dry
+  run. No manifest changed (no `cargo deny`). Nothing pending.
+- Decisions: signed off 2026-11-19 at the plan (the user, all four as recommended): "Go ahead
+  (Recommended)"; "Keep the name (Recommended)" (`one_rank`); "Drop budget_mb only
+  (Recommended)"; "Skip D9 runs (Recommended)".
+- Laplace: no evaluation code changed; `Auto`'s choice is the same function of (p, precision),
+  so every output is `main`'s (every Laplace test and the MPI list pass). Public API removed, named
+  in the PR. No D9 run (signed off).
+- Follow-ups: none. Recorded commands of past phases that pass `--budget`
+  (`docs/design/optimisation.md`, Phase 6 T1) reproduce at their commits; CHA.10 separates
+  `run.sh`'s task-named cases, `auto_resolves` among them.

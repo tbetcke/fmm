@@ -106,3 +106,20 @@ None.
 None. Signed off 2026-11-19 at the plan (the user, all four as recommended): (1) "Go ahead
 (Recommended)"; (2) `one_rank`: "Keep the name (Recommended)"; (3) the summary: "Drop budget_mb
 only (Recommended)"; (4) "Skip D9 runs (Recommended)".
+
+## Results
+- Removed as planned (commits `90aebee`, `0d8994a`); the self-review's findings in `e2775ae`
+  (stale module docs of step 2's all-reduce and of the cost model's strategy in `fmm.rs`, and
+  older sentences that `Auto` depends on the ranks per node, in `fmm.rs`, three test files,
+  `scaling.rs`, `fmm-exec/CLAUDE.md`; `workspace-structure.md`'s `tables` line).
+- `Auto`'s choices: a throwaway example (not committed) printed `M2lStrategy::Auto.choose`, its
+  strategy and its `Display`, for f32 and f64 at p = 0–20: on `main` (3468950) over the old grid
+  of 1–128 ranks per node × the six budgets of `tests/operator/strategy.rs` (one line per
+  (precision, p), asserted), on the branch with `NodeContext::new(p, value_bytes)`. The 42 lines
+  are identical (`diff`), e.g. `Auto → Batched: f32 p = 7 < 8`, `Auto → PlaneWave: f64 p = 7 ≥ 7`.
+- The harness: `scaling` at one rank (debug, N = 3000, f64 p = 4, no `--budget`) ran, its summary
+  without `budget_mb` and with `dense_rank_mb=1.7 dense_node_mb=1.7`; `scaling --budget 96`
+  refused ("unknown option --budget"); `DRY_RUN=1 tools/scaling/run.sh strong-small` printed 24
+  launches, none with `--budget`; `node-rule` still names its strategies through `auto_resolves`.
+- Debug test time: no executable gained work (`strategy_on_the_node` builds three `Fmm`s where it
+  built four), so no opt-level 0 timing was run.
