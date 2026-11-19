@@ -112,7 +112,7 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::plan::{Plan, PlanRules};
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
-use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, select};
+use nd_fmm_tables::helmholtz::plane_wave::merge::plane_wave_degree;
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
 use nd_octree::octree::KeyType;
@@ -128,7 +128,7 @@ use super::{
 };
 use crate::fmm::{FmmError, PointSet, SettingsError};
 use crate::geometry::{Domain, radius};
-use crate::helmholtz::operator::auto_plane_wave_levels;
+use crate::helmholtz::operator::{WaveSettings, wave_levels};
 use crate::operator::{Isa, MulAdd, P2pChoice, SimdScalar};
 use crate::pipeline::{
     self, Points, check_finite, gather_output, load_source_charges, pack_charges,
@@ -913,34 +913,27 @@ impl HelmholtzFmmBuilder {
             as u64;
         let mut plane_wave_min_degree = 0u64;
         comm.all_reduce_into(&local, &mut plane_wave_min_degree, SystemOperation::min());
-        // The levels whose M2L is the exponential one, from the settings and the degrees as
-        // the operator chooses them (`build` checks the two agree below): there merge and
-        // shift serves a parent's sources to its children by geometric masks, so the V rule
-        // decides per parent and source (`v_group`).
+        // The levels whose M2L is the exponential one: the operator's choice from the same
+        // settings and degrees (`wave_levels`, Helmholtz CHA.11). There merge and shift serves a
+        // parent's sources to its children by geometric masks, so the V rule decides per parent
+        // and source (`v_group`).
         let k_root = Complex::new(
             self.k.re() * radius(0, &domain),
             self.k.im() * radius(0, &domain),
         );
-        let waves: Vec<bool> = match (self.m2l, &self.plane_wave_precision) {
-            (HelmholtzM2l::PlaneWave, PlaneWavePrecision::Rule) => {
-                select(k_root, &degrees, tolerance)
-                    .iter()
-                    .map(Option::is_some)
-                    .collect()
-            }
-            (HelmholtzM2l::PlaneWave, PlaneWavePrecision::PerLevel(named)) => (0..degrees.len())
-                .map(|l| l >= 2 && named.get(l).copied().flatten().is_some())
-                .collect(),
-            (HelmholtzM2l::Auto, _)
-                if self.auto_plane_wave
-                    && std::mem::size_of::<T>() == std::mem::size_of::<f64>() =>
-            {
-                auto_plane_wave_levels(k_root, &degrees, tolerance, plane_wave_min_degree as usize)
-                    .iter()
-                    .map(Option::is_some)
-                    .collect()
-            }
-            _ => vec![false; degrees.len()],
+        let waves: Vec<bool> = match wave_levels::<T>(
+            &WaveSettings {
+                m2l: self.m2l,
+                precision: &self.plane_wave_precision,
+                auto_plane_wave: self.auto_plane_wave,
+                min_degree: usize::try_from(plane_wave_min_degree).unwrap_or(usize::MAX),
+                tolerance,
+            },
+            k_root,
+            &degrees,
+        ) {
+            Some(levels) => levels.iter().map(Option::is_some).collect(),
+            None => vec![false; degrees.len()],
         };
         // The plan, once, on the index: with the empty-box rule and the V pairs' near rule
         // (Helmholtz CH4.0d2) from the routes' points per local leaf. Every plan of the
@@ -1143,15 +1136,6 @@ impl HelmholtzFmmBuilder {
             operator = operator.with_pool(Arc::clone(pool));
         }
         let operator = operator.build_tables();
-        // The V rule's levels with waves are the operator's (Helmholtz CH4.0d2): on another
-        // level a grouped decision would be needlessly coarse, and on a level with waves a
-        // pair's decision would count its source twice.
-        assert!(
-            self.near_v == VNear::Off
-                || (0..degrees.len())
-                    .all(|l| operator.plane_wave_precision(l).is_some() == waves[l]),
-            "the V rule's levels with waves {waves:?} are the operator's"
-        );
         // The degrees the operator runs at (raised on the levels with waves below 10⁻⁶).
         let degrees: Vec<usize> = (0..degrees.len()).map(|l| operator.degree(l)).collect();
         timings.tables = operator.table_timings();
