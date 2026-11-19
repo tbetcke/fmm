@@ -77,8 +77,8 @@ item 6, CH4.0k off the list.
    parts (added on 2026-11-16 by CH4.0h's sign-off)
 7. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
    configuration removed
-8. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
-   trusted path)
+8. CH1.3d1, CH1.3d2 The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures",
+   CH4.2's trusted path; split on 2026-11-19)
 9. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
 10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
@@ -288,7 +288,7 @@ family, checked against FMM3D's fixtures.
   P2M → M2L → L2P against the direct sum within the truncation; RCR against direct to
   round-off); the k → 0 limit against Laplace's translations with the tolerances of §9;
   Yukawa two ways. *Needs:* CH1.3b.
-- [ ] **CH1.3d The diagonal form in extended precision.** The S → F, diagonal and F → R
+- CH1.3d The diagonal form in extended precision. The S → F, diagonal and F → R
   chain of §5.4 on the signatures CH0.6 fixes, its transfer functions in extended
   precision, as the reference of CH4.x; it writes CONVENTIONS §3.15 "Signatures" as S6's
   report proposes (its question 5). *Done when:* against CH1.3c's RCR on the same
@@ -300,7 +300,22 @@ family, checked against FMM3D's fixtures.
   (M10). Proposed in the PR description first, as every change to CONVENTIONS. With it the
   proposal's §3.4 (the level scale on the half-width, where §3.15 has the circumradius) and
   §3.1 ("no operator carries ik") corrected to CONVENTIONS, with their Appendix A line (M2;
-  question 5 of #209, the user, 2026-11-12, on #209: "I agree": left to this task). *Needs:* CH0.6, CH1.3c.
+  question 5 of #209, the user, 2026-11-12, on #209: "I agree": left to this task). *Needs:* CH0.6, CH1.3c. Split on 2026-11-19 into two
+  sub-tasks (`docs/helmholtz/tasks/CH1.3d1.md`, "Split"): the code, then the convention,
+  which needs the user's sign-off:
+- [ ] **CH1.3d1 The diagonal form in nd-fmm-ref.** `nd_fmm_ref::helmholtz::diagonal`: S6's grid,
+  S → F and F → R, the transfer function in double-double rounded once, the 34 classes and
+  their sample permutations, `m2l` from a stored multipole to a stored local, the bound E.
+  *Done when:* against CH1.3c's RCR on all 34 classes (and the 316 offsets through their
+  permutations) within the bound E of §3.6 (measured ≤ 2E, CH0.6's reading); S → F → R the
+  identity to round-off; the f32 chain within 2E in u = 2⁻²⁴. No convention changed.
+  *Needs:* CH0.6, CH1.3c.
+- [ ] **CH1.3d2 CONVENTIONS §3.15 revised.** "Signatures" as CH1.3d1 built it (S6's proposal,
+  CH0.6's question 5), with the rest of CH1.3d's text above (M1, M3, M4, M10's §3.9; the
+  proposal's §3.4 and §3.1, M2), one `CONVENTION_VERSION` bump; `tools/fixtures/check_3_15.py`
+  extended to the signature identities. *Done when:* the text proposed in the PR and signed
+  off; the version in `nd-fmm-math` and the file agree. *Needs:* CH1.3d1. *Sign-off:* the
+  convention.
 - [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
 
 ## H2: Yukawa on the host
