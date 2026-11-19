@@ -589,8 +589,10 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   near pairs through `nd_fmm_plan`'s `NearRule::with_v_pairs` on the counts the empty-box rule
   reads (counted even with that rule off), in the one plan build; W and X pairs never convert
   here. On a level whose M2L is the exponential one (under `PlaneWave` or Auto's levels with
-  waves, `operator::auto_plane_wave_levels`, known before the plan; `build` asserts they are
-  the operator's) the decision is per parent P and source s (`v_group`): merge and shift
+  waves, known before the plan from `operator::wave_levels`, the operator's own choice since
+  Helmholtz CHA.11, which replaced the builder's restatement and its assert; named precisions
+  take no waves on a level whose κ_l lies outside the tables, where the restatement assumed
+  them and the assert failed) the decision is per parent P and source s (`v_group`): merge and shift
   serves s to every child of P whose V list holds it by geometric masks, so a pair converted
   alone counts its source twice (W1 at kD = 500 erred 4·10⁵× before; the user, 2026-11-13:
   "Group per (parent, source)"); all those children convert if all are leaves and

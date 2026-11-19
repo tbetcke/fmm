@@ -319,7 +319,7 @@ use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{
     PlaneWaveM2l, RESOLVING_STEP_TOLERANCE, plane_wave_degree, select,
 };
-use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach, domain_of};
 use nd_fmm_tables::helmholtz::{
     DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables, TableChoice,
 };
@@ -513,27 +513,78 @@ pub fn auto_plane_wave_min_degree(isa: Isa, planes: usize) -> usize {
 /// such levels run Batched or RCR.
 pub const AUTO_PLANE_WAVE_MAX_IM_KAPPA: f64 = 5.0 * std::f64::consts::PI;
 
-/// The levels on which [`HelmholtzM2l::Auto`] with the exponential M2L takes it (Helmholtz
-/// CH6.2h, D8), each with its precision: the rule's quadratures (`merge::select` of k̂_0 =
-/// k r_0, the degrees `base` the levels were given and the tolerance) on the levels of degree
-/// at least `min_degree` with Im κ_l < [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`], κ_l = 2 k̂_0 / 2^l.
-/// A function of the settings and the degrees alone, so the builder knows the levels before
-/// the plan (Helmholtz CH4.0d2's cost model); the operator's choice is this one.
-pub(crate) fn auto_plane_wave_levels(
+/// The settings that choose the levels whose M2L is the exponential one ([`wave_levels`]):
+/// those of [`HelmholtzOperator`] and `HelmholtzFmmBuilder` alike, the builder's agreed over
+/// the ranks (Helmholtz CHA.11).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WaveSettings<'a> {
+    /// The M2L setting ([`HelmholtzOperator::with_m2l`]).
+    pub(crate) m2l: HelmholtzM2l,
+    /// The precisions under [`HelmholtzM2l::PlaneWave`]
+    /// ([`HelmholtzOperator::with_plane_wave_precision`]).
+    pub(crate) precision: &'a PlaneWavePrecision,
+    /// Whether [`HelmholtzM2l::Auto`] may take the exponential M2L
+    /// ([`HelmholtzOperator::with_auto_plane_wave`]).
+    pub(crate) auto_plane_wave: bool,
+    /// The smallest degree at which [`HelmholtzM2l::Auto`] takes it
+    /// ([`HelmholtzOperator::plane_wave_min_degree`]).
+    pub(crate) min_degree: usize,
+    /// The FMM's tolerance, if it has one
+    /// ([`HelmholtzOperator::with_plane_wave_tolerance`]).
+    pub(crate) tolerance: Option<f64>,
+}
+
+/// The levels whose M2L is the exponential one, each with its quadrature's precision (`None`
+/// on the others), or `None` where the setting runs no exponential M2L on any level (Helmholtz
+/// CHA.11): under [`HelmholtzM2l::PlaneWave`] the rule's (`merge::select` of k̂_0 = k r_0, the
+/// degrees `base` the levels were given and the tolerance) or the named precisions on the
+/// levels from 2 whose κ_l = 2 k̂_0 / 2^l lies in the tables (`domain_of`; the tables build
+/// none elsewhere); under [`HelmholtzM2l::Auto`] with waves, in f64 only, the rule's on the
+/// levels of degree at least the smallest with Im κ_l < [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`]
+/// (Helmholtz CH6.2h, D8). A function of the settings and the degrees alone: the operator
+/// builds these levels' tables, and `HelmholtzFmmBuilder` reads them before the plan for the
+/// V rule (Helmholtz CH4.0d2), so the two cannot differ.
+pub(crate) fn wave_levels<T>(
+    settings: &WaveSettings<'_>,
     k_root: Complex<f64>,
     base: &[usize],
-    tolerance: Option<f64>,
-    min_degree: usize,
-) -> Vec<Option<Precision>> {
-    select(k_root, base, tolerance)
-        .into_iter()
-        .enumerate()
-        .map(|(l, precision)| {
-            // `HelmholtzTables`' k̂_l, doubled.
-            let kappa = k_root * (0.5f64).powi(l as i32) * 2.0;
-            precision.filter(|_| base[l] >= min_degree && kappa.im < AUTO_PLANE_WAVE_MAX_IM_KAPPA)
-        })
-        .collect()
+) -> Option<Vec<Option<Precision>>> {
+    // `HelmholtzTables`' k̂_l, doubled, as `PlaneWaveM2l` forms it.
+    let kappa = |l: usize| k_root * (0.5f64).powi(l as i32) * 2.0;
+    match settings.m2l {
+        HelmholtzM2l::PlaneWave => Some(match settings.precision {
+            PlaneWavePrecision::Rule => select(k_root, base, settings.tolerance),
+            PlaneWavePrecision::PerLevel(named) => (0..base.len())
+                .map(|l| {
+                    named
+                        .get(l)
+                        .copied()
+                        .flatten()
+                        .filter(|_| l >= 2 && domain_of(kappa(l)).is_some())
+                })
+                .collect(),
+        }),
+        m2l if auto_takes_plane_waves::<T>(m2l, settings.auto_plane_wave) => Some(
+            select(k_root, base, settings.tolerance)
+                .into_iter()
+                .enumerate()
+                .map(|(l, precision)| {
+                    precision.filter(|_| {
+                        base[l] >= settings.min_degree && kappa(l).im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
+                    })
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Whether the setting is [`HelmholtzM2l::Auto`] with the exponential M2L, which runs in f64
+/// only (CONVENTIONS §3.15, "Precision and range").
+fn auto_takes_plane_waves<T>(m2l: HelmholtzM2l, auto_plane_wave: bool) -> bool {
+    m2l == HelmholtzM2l::Auto
+        && auto_plane_wave
+        && std::mem::size_of::<T>() == std::mem::size_of::<f64>()
 }
 
 /// The column kernel's mode of [`HelmholtzM2l::Auto`] on `isa` unless one is named
@@ -1369,24 +1420,20 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let base = kernel.base_degrees.clone();
         let k_root = kernel.tables.k_hat(0);
         let tolerance = kernel.plane_wave_tolerance;
-        let precisions: Option<Vec<Option<Precision>>> = match choice {
-            HelmholtzM2l::PlaneWave => Some(match &kernel.plane_wave_precision {
-                PlaneWavePrecision::Rule => select(k_root, &base, tolerance),
-                PlaneWavePrecision::PerLevel(named) => (0..base.len())
-                    .map(|l| named.get(l).copied().flatten().filter(|_| l >= 2))
-                    .collect(),
-            }),
-            // Auto's levels with waves (Helmholtz CH6.2h): the rule's quadratures from the
-            // smallest degree on, below the bound on Im κ_l (since CH6.1h's sign-off,
-            // 2026-11-11, at every tolerance with a quadrature).
-            HelmholtzM2l::Auto if kernel.auto_takes_plane_waves() => Some(auto_plane_wave_levels(
-                k_root,
-                &base,
+        // The levels with waves (Helmholtz CHA.11, the builder's V rule reads the same): Auto's
+        // the rule's quadratures from the smallest degree on, below the bound on Im κ_l (since
+        // CH6.1h's sign-off, 2026-11-11, at every tolerance with a quadrature).
+        let precisions = wave_levels::<T>(
+            &WaveSettings {
+                m2l: choice,
+                precision: &kernel.plane_wave_precision,
+                auto_plane_wave: kernel.auto_plane_wave,
+                min_degree: kernel.auto_plane_wave_min_degree(),
                 tolerance,
-                kernel.auto_plane_wave_min_degree(),
-            )),
-            _ => None,
-        };
+            },
+            k_root,
+            &base,
+        );
         // The rule's resolving degree on the levels with waves (Helmholtz CH6.1g), under
         // PlaneWave's rule and under Auto: the level's stores, its M2L and its leaves at
         // p_w = max(p_l, d), and its translations to and from its parent too unless
@@ -1838,9 +1885,7 @@ impl<T: SimdScalar> Kernel<T> {
     /// Whether the setting is [`HelmholtzM2l::Auto`] with the exponential M2L, which runs in
     /// f64 only (CONVENTIONS §3.15, "Precision and range").
     fn auto_takes_plane_waves(&self) -> bool {
-        self.m2l == HelmholtzM2l::Auto
-            && self.auto_plane_wave
-            && std::mem::size_of::<T>() == std::mem::size_of::<f64>()
+        auto_takes_plane_waves::<T>(self.m2l, self.auto_plane_wave)
     }
 
     /// The degree of `level`'s expansions and M2L.
@@ -2593,5 +2638,144 @@ impl<T: SimdScalar + Equivalence + Default> PairOperator for HelmholtzOperator<T
             target_output,
             self.execution.first(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nd_fmm_math::Complex;
+    use nd_fmm_tables::helmholtz::plane_wave::Precision;
+    use nd_octree::PhysicalBox;
+
+    use super::{
+        DEFAULT_BLOCK_BUDGET, HelmholtzM2l, HelmholtzOperator, PlaneWavePrecision, WaveSettings,
+        wave_levels,
+    };
+    use crate::geometry::{Domain, radius};
+    use crate::helmholtz::{ChargeKind, Densities, Wavenumber};
+    use crate::operator::SimdScalar;
+
+    /// Small degrees (the tables dominate the test's time), each with waves under the rule.
+    const DEGREES: [usize; 6] = [0, 0, 3, 4, 6, 8];
+
+    /// Every level's quadrature in the operator built with `settings` at k, and in
+    /// `wave_levels` of the same settings (Helmholtz CHA.11): the builder's V rule reads the
+    /// second, so the two must be one choice.
+    fn check<T: SimdScalar>(k: Wavenumber, settings: &WaveSettings<'_>) {
+        let domain = Domain::new(&PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])).unwrap();
+        let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+        // The settings first and the tables once, as `HelmholtzFmmBuilder::build` does.
+        let op = HelmholtzOperator::<T>::unbuilt(
+            k,
+            densities,
+            &domain,
+            &DEGREES,
+            false,
+            8,
+            DEFAULT_BLOCK_BUDGET,
+        )
+        .unwrap()
+        .with_plane_wave_tolerance(settings.tolerance)
+        .with_m2l_plane_wave_min_degree(Some(settings.min_degree))
+        .with_auto_plane_wave(settings.auto_plane_wave)
+        .with_plane_wave_precision(settings.precision.clone())
+        .with_m2l(settings.m2l, 0)
+        .build_tables();
+        let r0 = radius(0, &domain);
+        let k_root = Complex::new(k.re() * r0, k.im() * r0);
+        let levels = wave_levels::<T>(settings, k_root, &DEGREES);
+        let operator: Vec<Option<Precision>> = (0..DEGREES.len())
+            .map(|l| op.plane_wave_precision(l))
+            .collect();
+        let chosen: Vec<Option<Precision>> = match &levels {
+            Some(levels) => levels.clone(),
+            None => vec![None; DEGREES.len()],
+        };
+        let case = format!("k {k:?}, {settings:?}, {}", std::any::type_name::<T>());
+        assert_eq!(chosen, operator, "{case}");
+        // `None` exactly where the setting runs no exponential M2L.
+        let runs = settings.m2l == HelmholtzM2l::PlaneWave
+            || (settings.m2l == HelmholtzM2l::Auto
+                && settings.auto_plane_wave
+                && std::mem::size_of::<T>() == std::mem::size_of::<f64>());
+        assert_eq!(levels.is_some(), runs, "{case}");
+    }
+
+    /// The settings of one k and tolerance: PlaneWave's rule and named precisions, Auto with
+    /// waves on at two smallest degrees and off, and another M2L.
+    fn settings<'a>(
+        tolerance: Option<f64>,
+        precisions: [&'a PlaneWavePrecision; 3],
+    ) -> Vec<WaveSettings<'a>> {
+        let [rule, ..] = precisions;
+        let plane_wave = precisions.map(|precision| WaveSettings {
+            m2l: HelmholtzM2l::PlaneWave,
+            precision,
+            auto_plane_wave: false,
+            min_degree: 0,
+            tolerance,
+        });
+        let auto =
+            [(true, 0), (true, 6), (false, 0)].map(|(auto_plane_wave, min_degree)| WaveSettings {
+                m2l: HelmholtzM2l::Auto,
+                precision: rule,
+                auto_plane_wave,
+                min_degree,
+                tolerance,
+            });
+        let rotation = WaveSettings {
+            m2l: HelmholtzM2l::Rotation,
+            precision: precisions[1],
+            auto_plane_wave: true,
+            min_degree: 0,
+            tolerance,
+        };
+        plane_wave
+            .into_iter()
+            .chain(auto)
+            .chain([rotation])
+            .collect()
+    }
+
+    /// The levels with waves under every setting that chooses them (Helmholtz CHA.11), at no
+    /// tolerance and four, for real k and, under Auto, damped k (Im κ₂ = 25 ≥ 5π), f64 and (where the gate
+    /// reads it) f32; and at k = 400, where κ₂ = 100 lies outside the tables, so that named
+    /// precisions take no waves there (the builder assumed they did before CHA.11).
+    #[test]
+    fn wave_levels_are_the_operators() {
+        use Precision::{Iprec1, Iprec2, Iprec3};
+        let rule = PlaneWavePrecision::Rule;
+        let named = PlaneWavePrecision::PerLevel(vec![Some(Iprec2); 64]);
+        let mixed = PlaneWavePrecision::PerLevel(vec![
+            Some(Iprec3),
+            None,
+            Some(Iprec1),
+            None,
+            Some(Iprec2),
+        ]);
+        for k in [
+            Wavenumber::new(20.0, 0.0).unwrap(),
+            Wavenumber::new(20.0, 100.0).unwrap(),
+        ] {
+            for tolerance in [None, Some(1e-3), Some(1e-6), Some(1e-8), Some(1e-9)] {
+                for settings in settings(tolerance, [&rule, &named, &mixed]) {
+                    // The damping bound is Auto's alone.
+                    if k.im() > 0.0 && settings.m2l == HelmholtzM2l::PlaneWave {
+                        continue;
+                    }
+                    check::<f64>(k, &settings);
+                    if settings.m2l != HelmholtzM2l::PlaneWave {
+                        check::<f32>(k, &settings);
+                    }
+                }
+            }
+        }
+        // κ_l = 400 · 2⁻ˡ: level 2 outside the tables, levels 3–5 inside.
+        let k = Wavenumber::new(400.0, 0.0).unwrap();
+        for tolerance in [None, Some(1e-6)] {
+            for settings in &settings(tolerance, [&rule, &named, &mixed])[..4] {
+                check::<f64>(k, settings);
+            }
+        }
     }
 }
