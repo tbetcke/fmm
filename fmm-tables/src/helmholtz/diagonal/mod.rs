@@ -108,12 +108,14 @@ use nd_fmm_ref::helmholtz::diagonal::{Grid, azimuth_count};
 
 pub mod level;
 mod symmetry;
+pub mod transfer;
 
 pub use level::{
     DEFAULT_SIGNATURE_NODE_BUDGET, LevelBuffers, SIGNATURE_ALIGN, ScratchShape, Signatures,
     m2l_level, scratch_shape,
 };
 pub use symmetry::signed_permutation;
+pub use transfer::{CLASS_COUNT, DiagonalM2l, OffsetMap, class_bounds};
 
 /// The number of boxes converted together: the columns of the Legendre product are the four
 /// real planes of this many boxes. A box's bits do not depend on it.
