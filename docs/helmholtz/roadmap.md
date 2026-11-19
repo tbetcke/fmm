@@ -1009,8 +1009,8 @@ item is removed only where the task names it.
   `select_tables` and `HelmholtzFmmBuilder::build`; the restatement, its assert and the second
   f64 gate gone. Bit for bit on 348 `helmholtz_accuracy` rows and the MPI list. It also makes
   named precisions with the V rule run where a level lies outside the quadrature's tables, which
-  panicked on `main` (question 1 of its PR, for sign-off). H4's diagonal-form choice per level
-  goes in the same place.
+  panicked on `main` (#233's question 1; the user, 2026-11-19: "Accept as recommended"). H4's
+  diagonal-form choice per level goes in the same place.
 - [ ] **CHA.12 One entry-point macro set in nd-fmm-simd.** Review 2026-11-19, L5. The eleven
   macros that `arch/avx2.rs`, `avx512.rs` and `neon.rs` each define after their `Simd` impls
   (about 670 lines each, about 140 differing) once in `arch/mod.rs`, taking the token, the

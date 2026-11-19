@@ -3600,8 +3600,9 @@ request, using this template:
   - The new test takes 14.6–16.8 s at opt-level 0 under load.
   - Not run: Laplace's fixtures and benchmarks (no Laplace file), `cargo deny` (no manifest).
   - Nothing pending.
-- Decisions: question 1 of the PR, for sign-off: accept that named precisions with the V rule
-  now run where a level lies outside the tables (recommended).
+- Decisions: #233's question 1, accept that named precisions with the V rule now run where a
+  level lies outside the tables: signed off 2026-11-19 by the user on #233, "Accept as
+  recommended".
 - Laplace: not touched (nd-fmm-exec's `helmholtz/operator.rs`, `helmholtz/fmm.rs` and its
   CLAUDE.md only).
 - Follow-ups: none new; CH4.1 next (roadmap); H4's diagonal-form choice per level reads the same

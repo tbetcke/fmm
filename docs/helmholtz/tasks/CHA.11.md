@@ -95,7 +95,8 @@ None.
    builder's levels are the operator's and the case runs. Named precisions are a measurement
    setting; the V rule's cost model is the default since CH4.0d3. Every run that completed on
    `main` keeps its bits. For sign-off: accept that this case now runs (recommended), the one
-   behaviour change of this HA task.
+   behaviour change of this HA task. Signed off 2026-11-19 by the user on #233: "Accept as
+   recommended".
 
 ## Results (2026-11-19, the M6)
 - Checksums (`helmholtz_accuracy`, release, W1, ε 10⁻³, 10⁻⁶, 10⁻⁸, 1 and 2 ranks × 1 and 2
