@@ -33,6 +33,11 @@ The one named, else the first whose tasks are all ticked on `main` while its gat
   that a later task ran it once a default reached it. If none did, run it on the gate branch
   before closing, or ask (the H6 gate's §2 and §8: Kathleen job 633000).
 - Every inline "amended at <ID>" of the proposal has its Appendix A line.
+- Nothing signed off is left without an owner (the H1 gate's G1–G3):
+  - every change to the proposal that a task's sign-off asked for is in the proposal;
+  - every decision signed off with "a later task" has that task in the roadmap;
+  - every follow-up in the milestone's progress entries that names another task is on that
+    task's line.
 - `main`'s CI jobs over the milestone: failures, cancellations (the cause from the job's
   log) and each job's time against its `timeout-minutes`.
 
