@@ -102,7 +102,7 @@ opt-level 1, the MPI list at 2 and 4 ranks, `cargo check -p nd-fmm-exec --featur
   so such a crate would move to `deny`. Recorded, not expected.
 
 ## Pending runs
-None.
+None. `/verify` ran in full on the M6 (the progress entry lists it).
 
 ## Open questions
 Answered 2026-11-19 at the plan (the user, all three as recommended):

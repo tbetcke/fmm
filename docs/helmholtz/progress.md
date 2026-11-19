@@ -3378,3 +3378,35 @@ request, using this template:
   changed; `--workspace` builds no longer unify cubecl-gemm's `metal,cpu` into nd-fmm-kernels).
 - Follow-ups: none. `approx` in the root `[workspace.dependencies]` has no user (not
   spike-only; left, CHA.10's housekeeping may take it).
+
+## 2026-11-19: CHA.2 `unsafe` enforced
+- Done: `[lints.rust] unsafe_code` in each crate's `Cargo.toml`, so every target is checked
+  (lib, tests, examples, benches, bins, feature-gated code): `forbid` in nd-fmm-math, -ref,
+  -tables, -exec, -validate and -bench, `deny` in nd-fmm-plan and nd-octree. Their two
+  exceptions allowed in their files with reasons and `// SAFETY:` comments: the counting
+  allocator of `fmm-plan/examples/plan_build_cost.rs` (a comment per block now), and
+  `points_to_morton`'s three unchecked reads (`octree/src/octree.rs`), kept because the safe
+  forms measured 1–9 % slower on the M6 (`get_value().unwrap()` 1.064–1.072× by medians, the
+  column's value iterator 1.013–1.070×, three builds of the library against one unchecked copy;
+  within one binary the generic function's codegen moved 2.4× with a neighbour, so not compared
+  so). Root CLAUDE.md's rule names the lint and both exceptions; `octree/CLAUDE.md`,
+  `fmm-plan/CLAUDE.md`, `workspace-structure.md`. Record `docs/helmholtz/tasks/CHA.2.md`; raw
+  outputs `~/projects/fmm-archive/m6/logs/cha-2/`.
+- Self-review (subagent): nothing blocking; the timing table matches the raw outputs. Taken: the
+  plan's ms figures and call count, a `// SAFETY:` per block in the allocator, the wording of
+  root CLAUDE.md and `workspace-structure.md`.
+- Tests: none new. Checked by hand, not committed: `unsafe {}` in a test of nd-fmm-math fails,
+  `#[allow(unsafe_code)]` under its `forbid` is E0453, `unsafe {}` in nd-octree's library tests
+  fails under `deny`.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs,
+  `cargo check --workspace --all-targets`, Clippy of nd-fmm-exec, -validate and -bench with
+  `cpu,metal` and their check with `cuda`, nd-fmm-kernels' Clippy with `cpu,metal`,
+  `cargo check -p nd-fmm-exec --features cuda`, `cargo deny --locked check licenses`, no
+  fftw-sys, the default and workspace tests at opt-level 1 (1,275 and 1,319 passed), the MPI
+  list at 2 and 4 ranks (24 of 24). Nothing pending.
+- Decisions: signed off 2026-11-19 at the plan (the user, all three as recommended): "[lints.rust]
+  per crate (Recommended)", "M6, now (Recommended)" (the timing), "Skip D9 runs (Recommended)".
+- Laplace: no generated code changed (lint levels, two allowances and comments only); every
+  Laplace test and the MPI list pass. No D9 run (signed off: the benchmarks time the evaluation).
+- Follow-ups: none. A safe `points_to_morton` without checks would need a contiguous-data bound
+  on its public signature; not proposed.
