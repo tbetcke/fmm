@@ -179,14 +179,15 @@ products over a batch of boxes).
   the reference's order of operations (the Legendre step by the rings' parity, the φ step per
   residue μ mod 4 at the base azimuths 0 ≤ j ≤ N_φ/8 and the others by signs), so they agree
   with `nd_fmm_ref::helmholtz::diagonal::{s2f, f2r}` to rounding: `tests/helmholtz/diagonal.rs`
-  checks 64 u (p + 1) of the largest value (p ≤ 24; p = 41, 72, 131 ignored, in release), the
+  checks 256 u of the largest value (p ≤ 24; p = 41, 72, 131 ignored, in release), the
   round trip s²ⁿ M̂, f32, and every box of a batch bit for bit the box alone. Every product is
   one column kernel (`gemm_acc`: each element its chain over the inner index ascending, product
   and sum rounded apart, from its own row and column), so a box's bits never depend on its
   batch, position, `BLOCK_BOXES` or `RING_BLOCK`; keep it so (no `mul_add`, no reassociation,
   no sum across boxes). Matrices here are row-major (the products' natural form); the
   expansions are §3.15's two planes, the signatures §3.15's samples, interleaved complex, box
-  after box (the level's buffers are CH4.1b's). Not cached.
+  after box (the level's buffers are CH4.1b's). `s2f` overwrites its signatures, as the
+  reference does (the one exception to "every application accumulates"); `f2r` adds. Not cached.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are deterministic: the same inputs give bit-identical tables and cache files.

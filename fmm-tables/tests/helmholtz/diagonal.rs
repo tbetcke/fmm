@@ -4,7 +4,8 @@
 //! batch.
 //!
 //! Error measure: the largest absolute difference of a value over the largest absolute value
-//! of the reference's result, within 64 u (p + 1) of the precision; the round trip
+//! of the reference's result, within 256 u of the precision (measured at most 16 u in f64, at
+//! p = 245 in `helmholtz_conversions`); the round trip
 //! f2r(s2f(M̂)) = s²ⁿ M̂ in the same measure. A box converted in a batch against the box alone:
 //! bit for bit (`to_bits`).
 
@@ -77,7 +78,7 @@ fn check_s2f(p: usize, s_below_one: bool, boxes: usize) {
                 .zip(&expected)
                 .map(|(a, e)| (a - e).norm()),
         );
-        let bound = 64.0 * f64::EPSILON * (p + 1) as f64 * scale;
+        let bound = 256.0 * f64::EPSILON * scale;
         assert!(
             error <= bound,
             "S → F, p {p}, s {}: box {b} errs {error:e} > {bound:e}",
@@ -116,7 +117,7 @@ fn check_f2r(p: usize, s_below_one: bool, boxes: usize) {
                 .zip(&expected)
                 .map(|(a, e)| (a - e).abs()),
         );
-        let bound = 64.0 * f64::EPSILON * (p + 1) as f64 * scale;
+        let bound = 256.0 * f64::EPSILON * scale;
         assert!(
             error <= bound,
             "F → R, p {p}, s {}: box {b} errs {error:e} > {bound:e}",
@@ -185,10 +186,11 @@ fn the_round_trip() {
 }
 
 /// Every box of a batch, at every position and batch size, is the box converted alone, bit
-/// for bit, both ways.
+/// for bit, both ways; at p = 17 the rings make two blocks, so F → R's chains also cross a
+/// block.
 #[test]
 fn a_box_has_the_same_bits_in_every_batch() {
-    let p = 9;
+    let p = 17;
     let level = level(false);
     let conversions = Conversions::<f64>::new(p, level.scale());
     let mut scratch = ConversionScratch::new(&conversions);
@@ -243,12 +245,12 @@ fn a_box_has_the_same_bits_in_every_batch() {
     }
 }
 
-/// f32 tables and transforms against the f64 reference, within 64 u₃₂ (p + 1).
+/// f32 tables and transforms against the f64 reference, within 256 u₃₂.
 #[test]
 fn f32_against_the_reference() {
     for p in [3, 12, 30] {
         let level = level(false);
-        let conversions = Conversions::<f32>::new(p, f32::from_f64(level.scale()));
+        let conversions = Conversions::<f32>::new(p, level.scale());
         let mut scratch = ConversionScratch::new(&conversions);
         let (len, samples) = (conversions.expansion_len(), conversions.samples());
         let multipoles = values(len, 41);
@@ -261,7 +263,7 @@ fn f32_against_the_reference() {
         let rounded: Vec<f64> = narrow.iter().map(|&v| v as f64).collect();
         diagonal::s2f(&grid, &level, &rounded, &mut ws, &mut expected);
         let scale = largest(expected.iter().map(|z| z.norm()));
-        let bound = 64.0 * f32::EPSILON as f64 * (p + 1) as f64 * scale;
+        let bound = 256.0 * f32::EPSILON as f64 * scale;
         for (a, e) in signature.iter().zip(&expected) {
             let a = Complex::new(a.re as f64, a.im as f64);
             assert!((a - e).norm() <= bound, "S → F f32, p {p}");
@@ -276,7 +278,7 @@ fn f32_against_the_reference() {
         let mut expected = vec![0.0; len];
         diagonal::f2r(&grid, &level, &wide, &mut ws, &mut expected);
         let scale = largest(expected.iter().map(|v| v.abs()));
-        let bound = 64.0 * f32::EPSILON as f64 * (p + 1) as f64 * scale;
+        let bound = 256.0 * f32::EPSILON as f64 * scale;
         for (&a, &e) in local.iter().zip(&expected) {
             assert!((a as f64 - e).abs() <= bound, "F → R f32, p {p}");
         }

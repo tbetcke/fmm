@@ -34,8 +34,9 @@
 //!   transposed Legendre product with the quadrature weights folded into its table.
 //!
 //! Per box and conversion this is about 2P³ real multiply-adds for the Legendre step and 8P³
-//! for the φ step ([`Conversions::multiply_adds`]): 2.5P³ complex ones, against the 18P³ of
-//! proposal §6.7's count.
+//! for the φ step ([`Conversions::multiply_adds`]), 10P³ in all, against about 68P³ real ones in
+//! proposal §6.7's count (2P³ complex-by-real for the Legendre step, 16P³ complex for the φ
+//! step).
 //!
 //! # Tables
 //!
@@ -144,15 +145,15 @@ struct Azimuth {
 }
 
 impl<T: RealScalar> Conversions<T> {
-    /// The tables for degree p and the level's power scale s (`Level::scale` of
+    /// The tables for degree p and the level's power scale s in f64 (`Level::<f64>::scale` of
     /// `nd_fmm_ref::helmholtz`, 1 on every high-frequency level), built in f64 and rounded
     /// once to `T` (module documentation, "Tables").
     ///
     /// # Panics
     ///
     /// If s is not finite and positive.
-    pub fn new(p: usize, scale: T) -> Self {
-        let s = scale.to_f64();
+    pub fn new(p: usize, scale: f64) -> Self {
+        let s = scale;
         assert!(
             s.is_finite() && s > 0.0,
             "the power scale must be finite and positive, not {s}"
@@ -703,9 +704,10 @@ impl<T: RealScalar> Conversions<T> {
 }
 
 /// The scratch of [`Conversions::s2f`] and [`Conversions::f2r`] for one degree, sized at
-/// construction for [`BLOCK_BOXES`] boxes and [`RING_BLOCK`] rings: about
-/// 8 (p + 1)² (p + 2) + 64 (p + 1)(N_φ/4 + 2 + p) · `size_of::<T>()` · [`BLOCK_BOXES`] / 4
-/// bytes (2.3 MB at p = 131 in f64). One per thread.
+/// construction for [`BLOCK_BOXES`] boxes and [`RING_BLOCK`] rings: with W = 4 · BLOCK_BOXES
+/// and C = 2 · RING_BLOCK · W, (p + 1)(p + 2)/2 · W + 2 · RING_BLOCK · W + (p + 1) C +
+/// 2 (⌊N_φ/8⌋ + 1) C values, 2.2 MB at p = 131 in f64 ([`bytes`](Self::bytes)). One per
+/// thread.
 #[derive(Clone, Debug)]
 pub struct ConversionScratch<T> {
     p: usize,

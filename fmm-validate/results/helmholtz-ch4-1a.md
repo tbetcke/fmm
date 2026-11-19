@@ -15,8 +15,8 @@ ask before CH4.2.
   quartered by the azimuths' symmetries (N_φ a multiple of 4: every azimuth is ±φⱼ + qπ/2 of a
   base azimuth 0 ≤ j ≤ N_φ/8, so per residue μ mod 4 four sums at the base azimuths give all of
   them by signs). Per box and conversion that is 2P³ real multiply-adds for the Legendre step
-  and 8P³ for the φ step, 2.5P³ complex ones, against the 18P³ of proposal §6.7's count, which
-  A5 used. Against `nd_fmm_ref`'s reference to rounding (≤ 3.6·10⁻¹⁵ of the largest value at
+  and 8P³ for the φ step, 10P³ in all, against about 68P³ real ones in proposal §6.7's count
+  (2P³ complex-by-real plus 16P³ complex), which A5 used. Against `nd_fmm_ref`'s reference to rounding (≤ 3.6·10⁻¹⁵ of the largest value at
   p = 245); the round trip to the grid's bandwidth; a box's bits the same in every batch.
 - **Per box against the RCR pair** (§2), one core: S → F plus F → R cost 1.5–2.4 RCR pairs
   (two planes) on locust and 1.6–2.8 on Kathleen at p = 66–135, about one at p = 245. A5
@@ -27,14 +27,16 @@ ask before CH4.2.
   on locust and 0.082–0.097 on Kathleen; level 3 (512 boxes, 12,216 pairs) at 0.156–0.162 and
   0.195–0.203. A5 expected about 0.43. At kD = 1000, levels 2–4 at 0.041, 0.089, 0.224
   (locust) and 0.039, 0.109, 0.281 (Kathleen).
-- **An FFT** (§3): its gain is bounded by the φ step, 80 % of the conversions' multiply-adds.
-  With the φ step free, those levels drop to 0.032–0.035 and 0.079–0.084 of RCR (locust),
-  0.049–0.058 and 0.106–0.110 (Kathleen): the FFT's whole gain is at most about half of what
-  remains after the product, i.e. at most 0.03–0.09 of the RCR level.
+- **An FFT** (§3): its gain is bounded by the φ step, taken here as 80 % of the conversions,
+  its share of their multiply-adds (the azimuths' combination and fold, which an FFT also
+  replaces, are not counted, so the share is somewhat larger). With the φ step free, those
+  levels drop to 0.032–0.035 and 0.079–0.084 of RCR (locust), 0.049–0.058 and 0.106–0.110
+  (Kathleen): the FFT's whole gain is about half of what remains after the product, about
+  0.03–0.09 of the RCR level.
 - **H4's gain on W1 at kD = 500** (§3), scaling CH4.0e's measured level times at the best split by
   these one-core ratios: build plus one evaluation 0.72–0.74× of today at 10⁻³ and 10⁻⁶ and
   0.81× at 10⁻⁸ on Kathleen with the product (0.73, 0.73, 0.88× on locust); with the φ step free,
-  0.71–0.72× and 0.80× (0.72, 0.72, 0.87×). The FFT adds at most 1–2 % of the run. At kD = 1000
+  0.71–0.72× and 0.80× (0.72, 0.72, 0.87×). The FFT adds about 1–2 % of the run. At kD = 1000
   (outside D1) 0.62× with the product and 0.60× with φ free on Kathleen at 10⁻⁶ (locust 0.65×,
   0.63×).
 - **Recommendation** (§5, question 1): H4 goes on as listed with the product (CH4.1b, CH4.2, …);
@@ -64,11 +66,12 @@ ask before CH4.2.
   sizes or the thread.
 - **Tests** (`fmm-tables/tests/helmholtz/diagonal.rs`, the unit tests of the module):
   - S → F and F → R against the reference at p = 0–5, 7, 12, 24, s = 1 and s ≈ 0.61, within
-    64 u (p + 1) of the largest value (p = 41, 72, 131 in an ignored release test);
+    256 u of the largest value (p = 41, 72, 131 in an ignored release test; measured at most
+    16 u at p = 245);
   - the round trip f2r(s2f(M̂)) = s²ⁿ M̂ to 10⁻¹³ at p ≤ 24;
-  - a box in batches of 1, 2, 5, 4, 5 and 11 at three positions bit for bit the box alone, both
-    ways;
-  - f32 within 64 u₃₂ (p + 1) of the f64 reference;
+  - a box in batches of 1, 2, 4, 5 and 11 boxes at three positions bit for bit the box alone,
+    both ways, at p = 17 (two ring blocks);
+  - f32 within 256 u₃₂ of the f64 reference;
   - the column kernel bit for bit a triple loop over tiles and tails;
   - the azimuth map exactly in integers.
   Changing one sign of the azimuth combination, in S → F or in F → R, fails three of them.
@@ -127,8 +130,6 @@ Kathleen (Xeon Gold 6248, job 644326, `singlenode`, node-c11a-079, core 3, exclu
 | 72 | 31.25 | 292 | 2.234 | 2.927 | 3.06 | 1.1e-15, 1.6e-15 | 1.894 | 1.435 | 0.165 | 2.72 | 0.80 | 3840 | 54000 | 102.299 | 28.716 | 0.281 | 12.861 | 0.126 |
 | 131 | 62.5 | 528 | 9.257 | 11.901 | 4.41 | 1.4e-15, 2.6e-15 | 13.345 | 10.515 | 0.570 | 1.59 | 0.80 | 512 | 12216 | 163.020 | 17.798 | 0.109 | 9.118 | 0.056 |
 | 245 | 125 | 984 | 50.426 | 69.207 | 5.01 | 2.1e-15, 3.6e-15 | 126.485 | 87.294 | 1.881 | 0.95 | 0.80 | 64 | 2504 | 316.718 | 12.368 | 0.039 | 6.237 | 0.020 |
-| 1 | passed | 69.635 |
-| 2 | passed | 507.550 |
 
 Reading:
 
@@ -151,8 +152,11 @@ Reading:
 ## 3. H4's gain, with the product and with an FFT
 
 The FFT replaces the φ step only (proposal §6.7); the Legendre step and the diagonal pairs stay.
-Its gain is at most the φ step's time, which "φ free" removes. Per level that is about half of
-the diagonal level's time at 24–39 pairs per box: 0.03–0.09 of the RCR level.
+Its gain is at most the φ step's time, which "φ free" removes, taken as the φ step's share of
+the multiply-adds (0.80; the azimuths' combination in S → F and fold in F → R are per sample,
+outside the products, and not counted, so the true share is somewhat larger: the steps were
+not timed apart). Per level that is about half of the diagonal level's time at 24–39 pairs per
+box: about 0.03–0.09 of the RCR level.
 
 On the whole run, W1 at kD = 500 at the best split, CH4.0e's §3.1 levels 2 and 3 M2L seconds
 scaled by this report's one-core ratios of the same degree (an estimate: it assumes the diagonal
@@ -187,10 +191,11 @@ None of these includes the transfer functions' build (CH4.0e §3.1: about 4.4 s 
 1.4 s for level 3 serially by S6's interpolation, about 0.2 s over a node's threads; CH4.2's)
 or the signatures' scratch traffic (CH4.1b).
 
-**Against A5.** A5's 2.3× per level assumed 18P³ complex multiply-adds per conversion (the DFT as
-a product without the grid's symmetries, the Legendre step without parity, complex arithmetic
-throughout). The transforms here need 2.5P³ (the θ-factors and the cos and sin are real, the
-parity halves the Legendre step, the symmetries quarter the φ step), and run at a rate close to
+**Against A5.** A5's 2.3× per level took proposal §6.7's count, 18P³ complex multiply-adds per
+conversion (the Legendre step 2P³ complex-by-real without parity, the DFT 16P³ complex without
+the grid's symmetries): about 68P³ real ones. The transforms here need 10P³ real ones (the cos
+and sin are real, so the φ step is two real transforms; the parity halves the Legendre step;
+the symmetries quarter the φ step), 6.8× fewer, and run at a rate close to
 the RCR pair's; so the per-box cost is 1–3 RCR pairs, not 18, and a level of W1 at kD = 500 is
 5–16× faster on one core (3.6–26× over every case here), not 2.3×.
 
@@ -215,7 +220,7 @@ the RCR pair's; so the per-box cost is 1–3 RCR pairs, not 18, and a level of W
 
 1. **The order (A5's stop).** H4 goes on as listed with the product (CH4.1b, CH4.2, CH4.3,
    CH4.4, CH4.5), and the FFT track (CH0.9, CHR.3, CH4.6) stays item 11 after them
-   (**recommended**: an FFT could save at most 1–2 % of W1 at kD = 500's run inside D1, about 2 %
+   (**recommended**: an FFT could save about 1–2 % of W1 at kD = 500's run inside D1, about 2 %
    at kD = 1000). Alternatives: the FFT track moves ahead of CH4.2; or it leaves the priority list
    (to be taken by name).
 2. **The acceptance as read.** CH4.1a's *Done when* met by: the round trip to the grid's bandwidth,
@@ -225,6 +230,6 @@ the RCR pair's; so the per-box cost is 1–3 RCR pairs, not 18, and a level of W
    accumulators' bits and the budget are CH4.1b's (**recommended**: accept).
 3. **Proposal §6.7's count.** Its "about 16P³ as a product" (and the table's "DFT as a product"
    column) counts the φ step without the grid's symmetries in complex arithmetic. Amend §6.7 with
-   the form measured here (2P³ + 8P³ real multiply-adds per conversion, 2.5P³ complex; per box
-   1–3 RCR pairs on locust and Kathleen) and the FFT's bound from §3, with a line in Appendix A
+   the form measured here (2P³ + 8P³ real multiply-adds per conversion against about 68P³ real
+   in §6.7's count; per box 1–3 RCR pairs on locust and Kathleen) and the FFT's bound from §3, with a line in Appendix A
    (**recommended**); or leave the proposal and keep the record here.

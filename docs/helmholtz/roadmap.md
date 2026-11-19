@@ -11,7 +11,7 @@ Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
 (CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11). CH4.1 is split; CH4.1a (the product
 conversions, measured: per box 1–3 RCR pairs, W1 at kD = 500's RCR levels 5–16× faster on one
-core, an FFT worth at most 1–2 % of the run) waits for its sign-off, A5's stop: whether H4 goes
+core, an FFT worth about 1–2 % of the run) waits for its sign-off, A5's stop: whether H4 goes
 on with CH4.1b and CH4.2 or the FFT track moves ahead. HR, H0 and H2 are still open; of H0,
 CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
 `progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
@@ -637,10 +637,10 @@ task's full line is in its record or report and its progress entry
 - [x] **CH4.1a The product conversions, measured.** Report:
   `fmm-validate/results/helmholtz-ch4-1a.md`; record `docs/helmholtz/tasks/CH4.1a.md` (the first
   half of CH4.1, split 2026-11-19). `nd_fmm_tables::helmholtz::diagonal::Conversions`: S → F and
-  F → R by parity and the azimuths' ×4, 2.5P³ complex multiply-adds per conversion, the
+  F → R by parity and the azimuths' ×4, 10P³ real multiply-adds per conversion (§6.7: 68P³), the
   reference to rounding, a box's bits in every batch. Per box 1–3 RCR pairs; W1 at kD = 500's
   levels 2 and 3 modelled at 0.06–0.10 and 0.16–0.20 of RCR on one core (A5: 0.43); an FFT
-  at most 1–2 % of the run. *Sign-off:* the PR's questions 1–3 (pending).
+  about 1–2 % of the run. *Sign-off:* the PR's questions 1–3 (pending).
 - [ ] **CH4.1b The signature buffers and the level's scratch.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* bits independent of the chunk size; scratch within the budget on W1 at
@@ -655,6 +655,8 @@ task's full line is in its record or report and its progress entry
   column kernel of `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core
   (baseline SSE2 codegen, no fma) and 6–10 on a Grace core; measure the level's conversions
   after CH4.2 and, if they matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1).
+  Also (CH4.1a's review): the Legendre tables hold (p + 1)²(p + 2) values per level (S → F and F
+  → R apart; 18.5 MB at p = 131, about 120 MB at p = 245 in f64), counted in the budget.
   *Needs:* CH4.1a and its sign-off.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);

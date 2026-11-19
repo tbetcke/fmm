@@ -56,7 +56,7 @@ the product and for an FFT apart."
     multiply and add rounded apart), safe Rust; every element depends on its own row and
     column only, so a box's bits do not depend on the batch, its position or the block.
   - `ConversionScratch<T>`, sized at construction; no allocation in `s2f`/`f2r`.
-  - Counts: `Conversions::{legendre_flops, phi_flops}` per box, for the report.
+  - Counts: `Conversions::multiply_adds` per box (Legendre, φ), for the report.
 - `nd-fmm-validate`: example `helmholtz_conversions` (MPI-free, not registered; it times): per
   `p@k̂` case on one core, S → F and F → R per box at a batch (the Legendre and φ steps apart),
   the RCR pair as `helmholtz_rcr_pair` times it (by pairs in class order, blocks per call and
@@ -117,11 +117,13 @@ For sign-off on the PR (the report's §5): 1, the order (A5's stop); 2, the acce
 3, proposal §6.7's count amended.
 
 ## Results
-- The conversions: 2P³ + 8P³ real multiply-adds per conversion (2.5P³ complex), the reference
+- The conversions: 2P³ + 8P³ real multiply-adds per conversion (§6.7's count: about 68P³), the reference
   to ≤ 3.6·10⁻¹⁵ relative at p = 245; every acceptance test passes.
 - Per box 1.5–2.8 RCR pairs at p = 66–135, about 1 at p = 245; W1 at kD = 500's RCR levels
   modelled 5–16× faster on one core; an FFT at most 1–2 % of the run (report §2–§3).
-- Deviations from the plan: the ignored release test also runs p = 41; the plan's "signature of
+- Deviations from the plan: the tolerance is 256 u (tighter than the plan's 64 u (p + 1), after
+  the self-review); the bit test runs at p = 17 (two ring blocks); `Grid::azimuth_tables` is public
+  as well as `Grid::theta`; the ignored release test also runs p = 41; the plan's "signature of
   bandwidth above p" check is the F → R test on random signatures (every bandwidth of the grid);
   the Legendre and φ steps are not timed apart: the φ step's share is its share of the
   multiply-adds (both run through one kernel), stated in the report.
