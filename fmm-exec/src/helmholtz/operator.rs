@@ -1420,9 +1420,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let base = kernel.base_degrees.clone();
         let k_root = kernel.tables.k_hat(0);
         let tolerance = kernel.plane_wave_tolerance;
-        // The levels with waves (Helmholtz CHA.11, the builder's V rule reads the same): Auto's
-        // the rule's quadratures from the smallest degree on, below the bound on Im κ_l (since
-        // CH6.1h's sign-off, 2026-11-11, at every tolerance with a quadrature).
+        // The levels with waves, which the builder's V rule reads too (Helmholtz CHA.11). Under
+        // Auto they are the rule's quadratures from the smallest degree on, below the bound on
+        // Im κ_l (since CH6.1h's sign-off, 2026-11-11, at every tolerance with a quadrature).
         let precisions = wave_levels::<T>(
             &WaveSettings {
                 m2l: choice,
@@ -2738,9 +2738,12 @@ mod tests {
     }
 
     /// The levels with waves under every setting that chooses them (Helmholtz CHA.11), at no
-    /// tolerance and four, for real k and, under Auto, damped k (Im κ₂ = 25 ≥ 5π), f64 and (where the gate
-    /// reads it) f32; and at k = 400, where κ₂ = 100 lies outside the tables, so that named
-    /// precisions take no waves there (the builder assumed they did before CHA.11).
+    /// tolerance and four, for real k and, under Auto, damped k (Im κ₂ = 25 ≥ 5π), f64 and
+    /// (where the gate reads it) f32; and where κ₂ lies outside the tables, by its real part
+    /// and by its imaginary part, so that named precisions take no waves there (the builder
+    /// assumed they did before CHA.11). The operator calls `wave_levels` itself, so the test
+    /// guards the levels its tables build against the function; Auto's and the rule's choice
+    /// are checked against their definitions in `tests/helmholtz/plane_wave.rs`.
     #[test]
     fn wave_levels_are_the_operators() {
         use Precision::{Iprec1, Iprec2, Iprec3};
@@ -2770,11 +2773,16 @@ mod tests {
                 }
             }
         }
-        // κ_l = 400 · 2⁻ˡ: level 2 outside the tables, levels 3–5 inside.
-        let k = Wavenumber::new(400.0, 0.0).unwrap();
-        for tolerance in [None, Some(1e-6)] {
-            for settings in &settings(tolerance, [&rule, &named, &mixed])[..4] {
-                check::<f64>(k, settings);
+        // κ_l = 400 · 2⁻ˡ: level 2 outside the tables (Re κ₂ = 100 ≥ 16π), levels 3–5 inside;
+        // κ_l = (20 + 200i) 2⁻ˡ: level 2 outside them by its damping (Im κ₂ = 50 ≥ 12π).
+        for k in [
+            Wavenumber::new(400.0, 0.0).unwrap(),
+            Wavenumber::new(20.0, 200.0).unwrap(),
+        ] {
+            for tolerance in [None, Some(1e-6)] {
+                for settings in &settings(tolerance, [&rule, &named, &mixed])[..4] {
+                    check::<f64>(k, settings);
+                }
             }
         }
     }
