@@ -306,7 +306,8 @@ family, checked against FMM3D's fixtures.
 - [x] **CH1.3d1 The diagonal form in nd-fmm-ref.** Record `docs/helmholtz/tasks/CH1.3d1.md`.
   `nd_fmm_ref::helmholtz::diagonal` (S6's grid, S → F, F → R, T̂ in double-double rounded once,
   the 34 classes, `m2l`, the bound E): against RCR within 2E on the 34 classes at k a 2.83–54,
-  p 7–82, f64 and f32, and on the 316 offsets; at E's floor f64 RCR rounds more than it does.
+  p 7–82, f64 and f32, and on the 316 offsets; at E's floor f64 RCR rounds more than it does. The reading "measured ≤ 2E" and the split
+  signed off 2026-11-19 by the user on #228 ("Agree to both questions").
 - [ ] **CH1.3d2 CONVENTIONS §3.15 revised.** "Signatures" as CH1.3d1 built it (S6's proposal,
   CH0.6's question 5), with the rest of CH1.3d's text above (M1, M3, M4, M10's §3.9; the
   proposal's §3.4 and §3.1, M2), one `CONVENTION_VERSION` bump; `tools/fixtures/check_3_15.py`

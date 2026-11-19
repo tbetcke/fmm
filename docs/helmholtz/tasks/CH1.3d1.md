@@ -190,4 +190,7 @@ None.
 
 ## Open questions
 
-None.
+None. The PR asked two, signed off 2026-11-19 by the user on #228 ("Agree to both questions"):
+
+1. "Within the bound E" read as measured ≤ 2E: agreed.
+2. The split into CH1.3d1 and CH1.3d2: agreed.

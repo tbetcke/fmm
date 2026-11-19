@@ -3476,7 +3476,7 @@ request, using this template:
   --all-targets`, the ignored diagonal tests in release; the `helmholtz` executable's debug time
   unchanged (47 s). Not run: the MPI list (no MPI crate or code they call changed). Nothing
   pending.
-- Decisions: none. "Within the bound E" read as measured ≤ 2E (CH0.6's acceptance, θ = 1/2),
-  stated in the plan and the PR.
+- Decisions: "within the bound E" read as measured ≤ 2E (CH0.6's acceptance, θ = 1/2), and the
+  split into CH1.3d1 and CH1.3d2, both signed off 2026-11-19 by the user on #228 ("Agree to both questions").
 - Laplace: not touched (a new module of `nd-fmm-ref`'s `helmholtz`; no manifest).
 - Follow-ups: CH1.3d2 (roadmap, next); a note in CH4.2's line (its trusted path; RCR's floor).
