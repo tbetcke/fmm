@@ -174,6 +174,31 @@ fn check_levels(row: &Row) {
     }
     assert_eq!(row.v_pairs.len(), row.levels);
     assert_eq!(&row.v_pairs[..2], &[0, 0], "no V pairs on levels 0 and 1");
+    // The diagonal form's scratch (Helmholtz CH4.1b): targets with a V row and their sources
+    // on a level with V pairs, a source per pair at most, every rank within its budget on
+    // these small trees, all of a rank's targets in one chunk.
+    assert_eq!(row.signature_scratch.len(), row.levels);
+    for (l, s) in row.signature_scratch.iter().enumerate() {
+        if row.v_pairs[l] == 0 {
+            assert_eq!((s.targets, s.sources, s.bytes), (0, 0, 0), "level {l}");
+            continue;
+        }
+        assert!(
+            s.targets > 0 && s.targets <= row.v_targets[l],
+            "level {l}: {s:?}"
+        );
+        assert!(
+            s.sources > 0 && s.sources <= row.v_pairs[l],
+            "level {l}: {s:?}"
+        );
+        assert_eq!(s.over_budget, 0, "level {l}: {s:?}");
+        assert!(
+            s.source_bytes < s.bytes && s.bytes <= s.budget,
+            "level {l}: {s:?}"
+        );
+        assert!(s.chunk > 0 && s.chunk <= s.targets, "level {l}: {s:?}");
+        assert_eq!(s.chunks, 1, "level {l}: {s:?}");
+    }
     // The shapes (Helmholtz CH4.0): a box per target, a visit for at most 64 pairs (a block
     // of 64 targets) and at least one pair, m̂ from the shape.
     assert_eq!(row.v_targets.len(), row.levels);
