@@ -7,13 +7,14 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
 `docs/helmholtz/gates/<milestone>.md`.
 
-Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j, CHA.1–CHA.3 and
-CH1.3d1 are merged (items 1–7 and half of 8). CH1.3d2, CONVENTIONS §3.15 at version 4
-("Signatures", "Level units"), is #229, its text signed off 2026-11-19; once it is merged every task of H1 is done and H1.G (off the list) can run. CH4.1 is next. HR, H0, H1
-and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6.
+Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
+`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–8 are merged
+(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2). Next is CHA.11, added at the H1 gate, then CH4.1, whose
+first step measures the product conversions against RCR and stops to ask (review 2026-11-19,
+A5). HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7, CH7.5a–c.
 The history of this line until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`).
+(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+`git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
 
@@ -59,7 +60,10 @@ beyond D1 and the high-frequency classes CH4.3 calibrates, after CH4.0h and CH4.
 for H4 above is replaced by CH4.0e's report §3 (inside D1 the high-frequency RCR levels are
 14–31 % of build plus one evaluation, on W1 at kD = 500 alone). Amended on 2026-11-16 by
 CH4.0h's sign-off (#221's question 2, the user: "Please sign off questions as recommended."): CH4.0j beside CH4.0i in
-item 6, CH4.0k off the list.
+item 6, CH4.0k off the list. Amended on 2026-11-19 at the H1 gate (`docs/helmholtz/gates/H1.md`
+§7, question 5; the user on #230: "CHA.11 + measure first (Recommended)"): CHA.11 as item 9,
+and CH4.1's first step a measurement of the product conversions with a stop to ask (review
+2026-11-19, A5: with the product φ step a high-frequency level gains about 2.3× at most).
 
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
@@ -78,17 +82,20 @@ item 6, CH4.0k off the list.
    configuration removed
 8. CH1.3d1, CH1.3d2 The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures",
    CH4.2's trusted path; split on 2026-11-19)
-9. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
-10. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
+9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
+   user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
+10. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5 (CH4.1 first measures the product conversions against
+    RCR and stops to ask before CH4.2 whether item 11 moves ahead: review 2026-11-19, A5)
+11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
 CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list; kept off at CH4.0j, on
 #223); CH4.0l (added at CH4.0i;
 the user, 2026-11-16, on #222: off the list);
-CH4.0g (after CH4.0d1, through its *Needs*); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
+CH4.0g (after CH4.0d1, through its *Needs*); HR.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
-after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
-CHA.6 recommended before CH7.5d).
+after every other milestone; CH9.0, the dipoles, added at the H1 gate); CHA.4 to CHA.10 and
+CHA.12 (CHA.7 before CH8.1, through its *Needs*; CHA.6 recommended before CH7.5d).
 
 ## Decisions
 
@@ -102,7 +109,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D2 | Placement: modules in the layer crates (A) or separate crates (B) | A (§6.1) | – | CH1.2 | signed off 2026-10-29: A, modules in the layer crates, as recommended |
 | D3 | f32 scope | f64 only until H7; then f32 for low-frequency configurations that pass an accuracy contract; high-frequency levels in f32 only if S6 finds stable classes | CH0.6 | CH7.1 | signed off 2026-11-06 (CH0.6, question 1; the user: "i agree with the recommendations"): as recommended, high-frequency levels may run the diagonal form in f32 at ε ≥ 10⁻⁴ for real k and weak damping, each class by the bound in u = 2⁻²⁴ with C_T = 0.18 and θ = 1/2, failing classes on RCR; f64 below 10⁻⁴ and for η ≈ 1; CH7.1 settles the f32 RCR and the low-frequency levels |
 | D4 | Yukawa: its own operator type, or the wavenumber kind as a type parameter | one `HelmholtzOperator<T, K>` if CH2.1 shows no cost to the complex path | CH2.1 | CH2.2 | open |
-| D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
+| D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task; that task is CH9.0, added at the H1 gate (the user, 2026-11-19, on #230: "Add CH9.0 (Recommended)") |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
 | D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended. Amended 2026-11-11 (CH6.1g, question 2; the user: "Lift for 10⁻⁸–10⁻⁷ only (Recommended)"): `Auto` also takes it at 10⁻⁸ ≤ ε < 10⁻⁷, where the rule runs iprec 3 at the raised degree max(p_l, 32), and not at 10⁻⁷ ≤ ε < 10⁻⁶ until CH6.1h; proposal §5.3 amended. Amended 2026-11-11 (CH6.1h, question 2; the user: "Lift it (Recommended)"): `Auto` also takes it at 10⁻⁷ ≤ ε < 10⁻⁶, with the raised degree on the M2L alone there (`PlaneWaveRaise::Rule`); proposal §5.3 amended |
@@ -217,104 +224,52 @@ D7, D10, D11, D12) put to the user.
 **Gate:** CONVENTIONS §3.15 signed off; `nd-fmm-math` and `nd-fmm-ref` carry the Helmholtz
 family, checked against FMM3D's fixtures.
 
+Its ticked lines were condensed at H1.G (2026-11-19, as at H6.G); each task's full line is in
+its record or report and its progress entry (`docs/helmholtz/progress.md`), and in this file's
+history (`git show 8475009:docs/helmholtz/roadmap.md`).
+
 - [x] **CH1.4 FMM3D convention check and fixtures.** Report:
-  `fmm-validate/results/helmholtz-ch1-4.md`; the draft `docs/helmholtz/conventions-3.15-draft.md`;
-  the fixtures `fmm-ref/fixtures/helmholtz_fmm3d.json`. First a draft of §3.15 from proposal §4
-  and S1–S3; then `hfmm3d` in `tools/fmm3d/driver.f90` and a generator in `tools/fixtures/`.
-  *Done when:* on two points, FMM3D's factor, sign of k, gradient and branch identified and
-  matching the draft (or the draft corrected); fixtures for real, complex and imaginary k and
-  real and complex charges, committed with release, routine and `eps`; whether FMM3D is
-  accurate for imaginary zk (R12). *Needs:* CH0.1, CH0.2, CH0.3. *Machines:* Kathleen.
-- [x] **CH1.1 CONVENTIONS §3.15.** `docs/CONVENTIONS.md` §3.15, `CONVENTION_VERSION = 3`;
-  the check `tools/fixtures/check_3_15.py`. The proposal's Section 4 as a CONVENTIONS
-  section and a `CONVENTION_VERSION` bump. *Done when:* signed off by the user after
-  CH1.4's two-point check. *Needs:* CH1.4, D5. *Sign-off:* §3.15.
-- CH1.2 `nd-fmm-math`. Real orthonormal harmonics, radial functions (with the Yukawa
-  scaling), rotation blocks at any degree. *Done when:* the identities of §3.15; the M2M and
-  L2L coefficients real for real k. *Needs:* CH1.1, D2. Split on 2026-10-29 into three
-  sub-tasks, one per spike it ports (S1, S3, S2), each one reviewable PR; CH1.2 is done
-  when all three are:
-- [x] **CH1.2a Orthonormal harmonics and rotation blocks.** `nd_fmm_math::orthonormal`,
-  tests `fmm-math/tests/orthonormal/`, fixture `fmm-math/fixtures/helmholtz_angular.json`:
-  the normalised Legendre functions of S1 (overflow-free, telescoped near the poles), the
-  real orthonormal harmonics of §3.15 and their angular derivatives, the y-rotation blocks
-  by the Gumerov–Duraiswami recursion at any degree, the z-y-z blocks and the π − β signs.
-  *Done when:* §3.15's angular identities (against the Racah harmonics through N at
-  p ≤ 30, the addition formula, orthonormality); the blocks against an mpmath fixture to
-  p = 1000, orthogonal, against N-conjugated `rotation::blocks` at p ≤ 30, and
-  Y(Qx̂) = Oⁿ Y(x̂); the π − β rule. *Needs:* CH1.1, D2.
-- [x] **CH1.2b Radial functions and scaling.** `nd_fmm_math::radial` and `Complex` (num-complex),
-  tests `fmm-math/tests/radial/`, fixture `fmm-math/fixtures/helmholtz_radial.json`:
-  j_n, h_n for complex z and i_n, k_n for
-  real x, with derivatives and the scaled forms of §3.15 (S3). *Done when:* against an
-  mpmath fixture on every operator's range (S3's), the Wronskians, the relations of
-  §3.15 (k₀, j_n(ix), h_n(ix)). *Needs:* CH1.1, D2.
-- [x] **CH1.2c Coaxial coefficients.** `nd_fmm_math::coaxial`, tests `fmm-math/tests/coaxial/`,
-  fixture `fmm-math/fixtures/helmholtz_coaxial.json`; report
-  `fmm-validate/results/helmholtz-ch1-2c.md`. (R|R), (S|S) and (S|R) of §3.15 by the start
-  column and the recursions (triangle, index symmetry), and by projection where
-  Re(k) a > 40 (S2, S7). *Done when:* against an mpmath fixture (S2's); the M2M and L2L
-  coefficients real for real k; i^{n−n′} (E|F) real for Yukawa; the symmetries; the
-  rectangular truncation a block of the square table. *Needs:* CH1.2a, CH1.2b.
-- CH1.3 `nd-fmm-ref`. Direct-sum oracle, reference operators, direct and RCR
-  translations, the diagonal form in extended precision. *Done when:* addition theorems; the
-  k → 0 limit with the tolerances of §9; Yukawa two ways; the direct sum against CH1.4's
-  fixtures to round-off. *Needs:* CH1.2, CH1.4. Split on 2026-10-30 into four sub-tasks,
-  each one reviewable PR. The diagonal form waits for its signatures, which §3.15 reserves
-  until CH0.6 fixes them, and no acceptance item of CH1.3 tests it: CH1.3d is deferred
-  after CH0.6 and off the priority list (the user, 2026-10-30, "Defer to CH1.3d"). The
-  tasks that need CH1.3's operators (CH2.0, CH3.0) need CH1.3a–c; CH1.3 is done, and
-  H1.G runnable, when all four are:
-- [x] **CH1.3a Direct-sum oracle.** `nd_fmm_ref::helmholtz::p2p` (P2P and the direct
-  sum), tests `fmm-ref/tests/helmholtz/`: the potential and gradient of e^{ikr}/r for real,
-  complex and imaginary k and real and complex charges, coincident pairs excluded (§3.15,
-  "Kernel and factors"), and Yukawa's real kernel e^{−κr}/r for real charges. *Done
-  when:* the direct sum against CH1.4's fixtures to round-off; the k → 0 limit against
-  Laplace's direct sum with the tolerances of §9 (relative to |k| r); Yukawa two ways
-  (the real kernel against the complex one at k = iκ). *Needs:* CH1.4.
-- [x] **CH1.3b Leaf operators.** `nd_fmm_ref::helmholtz::{leaf, Level, Workspace}`, tests
-  `fmm-ref/tests/helmholtz/leaf_*.rs`. P2M, L2P, P2L and M2P in the stored form of §3.15 (the
-  level's scale and damping), with gradients, for complex expansions and Yukawa's real
-  ones. *Done when:* the series (P2M → M2P, P2L → L2P) against CH1.3a's direct sum within
-  the truncation; the k → 0 limit against Laplace's leaf operators under the diagonal map
-  of §3.4 with the tolerances of §9; Yukawa two ways; every applied exponent non-positive
-  (finite at large Im(k) a). *Needs:* CH1.2, CH1.3a.
-- [x] **CH1.3c Translations.** `nd_fmm_ref::helmholtz::{rcr, direct}`, tests
-  `fmm-ref/tests/helmholtz/translation_*.rs`. M2M, L2L and M2L, direct (projection on a sphere by
-  quadrature, from the leaf operators' fields) and RCR (`orthonormal` rotations and the
-  `coaxial` tables), with rectangular degrees, for complex expansions and Yukawa's real
-  ones. *Done when:* the addition theorems (P2M → M2M → M2P, P2L → L2L → L2P and
-  P2M → M2L → L2P against the direct sum within the truncation; RCR against direct to
-  round-off); the k → 0 limit against Laplace's translations with the tolerances of §9;
-  Yukawa two ways. *Needs:* CH1.3b.
-- CH1.3d The diagonal form in extended precision. The S → F, diagonal and F → R
-  chain of §5.4 on the signatures CH0.6 fixes, its transfer functions in extended
-  precision, as the reference of CH4.x; it writes CONVENTIONS §3.15 "Signatures" as S6's
-  report proposes (its question 5). *Done when:* against CH1.3c's RCR on the same
-  class within the bound E of §3.6. Also (review 2026-11-12, M1, M3, M4), in the same
-  revision of §3.15: the stored expansions as CH3.1a built them (the level units r_l φ̃ and
-  k̂_l = k r_l, the factor 4πik̂_l, the ½ of the L2L tables, P2L's charge scale), CH3.1a's
-  deferred question 2; whether the "Exponential M2L" subsection stays unversioned inside a
-  versioned section; and F_k' stated in one convention with §3.14's; §3.9's tested range said for the M2L
-  (M10). Proposed in the PR description first, as every change to CONVENTIONS. With it the
-  proposal's §3.4 (the level scale on the half-width, where §3.15 has the circumradius) and
-  §3.1 ("no operator carries ik") corrected to CONVENTIONS, with their Appendix A line (M2;
-  question 5 of #209, the user, 2026-11-12, on #209: "I agree": left to this task). *Needs:* CH0.6, CH1.3c. Split on 2026-11-19 into two
-  sub-tasks (`docs/helmholtz/tasks/CH1.3d1.md`, "Split"): the code, then the convention,
-  which needs the user's sign-off:
-- [x] **CH1.3d1 The diagonal form in nd-fmm-ref.** Record `docs/helmholtz/tasks/CH1.3d1.md`.
-  `nd_fmm_ref::helmholtz::diagonal` (S6's grid, S → F, F → R, T̂ in double-double rounded once,
-  the 34 classes, `m2l`, the bound E): against RCR within 2E on the 34 classes at k a 2.83–54,
-  p 7–82, f64 and f32, and on the 316 offsets; at E's floor f64 RCR rounds more than it does. The reading "measured ≤ 2E" and the split
-  signed off 2026-11-19 by the user on #228 ("Agree to both questions").
-- [x] **CH1.3d2 CONVENTIONS §3.15 revised.** Record `docs/helmholtz/tasks/CH1.3d2.md`.
-  `CONVENTION_VERSION` 4: "Signatures" fixed (buffers' layout left to CH4.1), "Level units"
-  added (N_φ a per-level multiple of 4, ≥ 4P − 3), "Exponential M2L" exempt from the version,
-  Fₖ stated against §3.14's, §3.9's M2L range;
-  proposal §3.1, §3.4, §4 amended; `check_3_15.py` checks 13–18. The plan's four questions
-  signed off 2026-11-19 by the user, each "(Recommended)"; the text signed off on #229 the
-  same day ("All signed off. Merge when green").
-- [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
+  `fmm-validate/results/helmholtz-ch1-4.md`; fixtures `fmm-ref/fixtures/helmholtz_fmm3d.json`.
+  FMM3D computes the draft's q e^{ikr}/(4πr) for real, complex and imaginary k (one of 16
+  candidates, to 2.6e-16); R12: `hfmm3d` reliable for imaginary zk at κD ≤ 30 and eps ≥ 10⁻⁶.
+  Signed off 2026-10-28, "1–3 as recommended" (CH2.5 limited to where FMM3D met its eps).
+- [x] **CH1.1 CONVENTIONS §3.15.** Record: `docs/helmholtz/tasks/CH1.1.md`. §3.15 and
+  `CONVENTION_VERSION = 3`, `tools/fixtures/check_3_15.py` (101 checks); 4πik on M2L, M2P and
+  P2L, the stored coefficients with e^{∓β_l}. Signed off 2026-10-29 with D2 and D5.
+- CH1.2 `nd-fmm-math`: harmonics, radial functions, rotation blocks. Split on 2026-10-29 into
+  CH1.2a–c, one per spike (S1, S3, S2).
+- [x] **CH1.2a Orthonormal harmonics and rotation blocks.** Record: `docs/helmholtz/tasks/CH1.2a.md`.
+  `nd_fmm_math::orthonormal`; against mpmath to n = 1000 (5.7e-14), blocks orthogonal to
+  4.3e-14.
+- [x] **CH1.2b Radial functions and scaling.** Record: `docs/helmholtz/tasks/CH1.2b.md`.
+  `nd_fmm_math::radial` and `Complex` (`num-complex`, signed off 2026-10-30); against mpmath on
+  every operator's range (7.1e-14), Yukawa's relations bit for bit.
+- [x] **CH1.2c Coaxial coefficients.** Record: `docs/helmholtz/tasks/CH1.2c.md`; report
+  `fmm-validate/results/helmholtz-ch1-2c.md`. `nd_fmm_math::coaxial`, recursion and projection by
+  §3.15's rule; one shift table for M2M and L2L (signed off 2026-10-30, "1 and 2 as
+  recommended").
+- CH1.3 `nd-fmm-ref`: oracle, reference operators, translations, the diagonal form. Split on
+  2026-10-30 into CH1.3a–d; CH1.3d deferred after CH0.6 and split on 2026-11-19 into CH1.3d1–d2.
+- [x] **CH1.3a Direct-sum oracle.** Record: `docs/helmholtz/tasks/CH1.3a.md`.
+  `nd_fmm_ref::helmholtz::p2p`; FMM3D's fixtures to 9.9e-16, k → 0 within §9's tolerances,
+  Yukawa two ways bit for bit.
+- [x] **CH1.3b Leaf operators.** Record: `docs/helmholtz/tasks/CH1.3b.md`.
+  `nd_fmm_ref::helmholtz::{leaf, Level, Workspace}` in §3.15's stored form; series at
+  round-off, k → 0 within 0.54 of the bound, finite at Im(k) a = 1000.
+- [x] **CH1.3c Translations.** Record: `docs/helmholtz/tasks/CH1.3c.md`.
+  `nd_fmm_ref::helmholtz::{rcr, direct}`; RCR against direct 8.4e-15 over the 316 offsets,
+  Yukawa two ways 9.5e-15; the damping finding went to CH2.3 at H1.G.
+- [x] **CH1.3d1 The diagonal form in nd-fmm-ref.** Record: `docs/helmholtz/tasks/CH1.3d1.md`.
+  `nd_fmm_ref::helmholtz::diagonal`, against RCR within 2E on the 34 classes (k a 2.83–54,
+  p 7–82). "≤ 2E" and the split signed off 2026-11-19 on #228.
+- [x] **CH1.3d2 CONVENTIONS §3.15 revised.** Record: `docs/helmholtz/tasks/CH1.3d2.md`.
+  `CONVENTION_VERSION` 4: "Signatures", "Level units", "Exponential M2L" exempt, Fₖ, §3.9's M2L
+  range; proposal §3.1, §3.4, §4 amended. Signed off 2026-11-19 on #229 ("All signed off").
+- [x] **H1.G Gate.** `/milestone-gate H1`. Report: `docs/helmholtz/gates/H1.md`; review
+  `docs/reviews/2026-11-19-H1.md`. Closed 2026-11-19 (the user on #230, every question as
+  recommended): the proposal amended (C1–C3, its Appendix A; C4 in the CH4.0e line); CH9.0
+  (D5's dipoles) added; the review's triage applied (CHA.11, CHA.12 and the "Also" lines);
+  CHA.11 on the priority list before CH4.1. *Needs:* every task above.
 
 ## H2: Yukawa on the host
 
@@ -355,7 +310,12 @@ family, checked against FMM3D's fixtures.
   memory reported; levels reused across an octave sweep. *Needs:* CH2.1, D4.
 - [ ] **CH2.3 Pruning and the calibration of p_l.** *Done when:* the relative error within
   target for κD from 10⁻² to 10³; on pruned levels the V, W and X lists empty and the buffers
-  zeroed; the same levels pruned on both ranks of a two-rank run; θ_D set. *Needs:* CH2.1,
+  zeroed; the same levels pruned on both ranks of a two-rank run; θ_D set. Also (CH1.3c, the
+  H1 gate's G3): under strong damping RCR's M2L loses relative accuracy (2.1·10⁻¹⁰ at κa = 30,
+  |t| = 3w), round-off relative to its input; θ_D prunes such pairs. Also (review 2026-11-19,
+  M13): the two f64 limits, RCR's M2M and L2L overflowing once p log₁₀(1/s) ≳ 300 and the
+  (S|R) start column near p_src + p_tgt ≈ 175 at s < 1, refused by the builder (deep trees at
+  κD = 10⁻²) and stated in §3.15's "Precision and range" at its next revision. *Needs:* CH2.1,
   CH0.7.
 - [ ] **CH2.5 Gate: Yukawa against FMM3D.** *Done when:* both codes against the same sampled
   direct sum over κD on W1 and W3, and the full-target crosscheck. CH1.4's R12 found FMM3D
@@ -584,7 +544,9 @@ task's full line is in its record or report and its progress entry
 - [x] **CH4.0e The comparison under the default, and H4's expected gain.** Report:
   `fmm-validate/results/helmholtz-ch4-0e.md`; record `docs/helmholtz/tasks/CH4.0e.md`. CH3.6's
   matrix under the defaults beside `hfmm3d` on Kathleen and locust, each at its best split: ours
-  0.69–0.93× `fastker` at matched accuracy on Kathleen, 0.27–0.38× on locust (geometric means),
+  0.69–0.93× `fastker` at matched accuracy on Kathleen, 0.27–0.38× on locust (geometric means;
+  against FMM3D's faster variant 0.47–0.54× on locust, where `fastker` is anomalously slow;
+  amended at H1.G, review 2026-11-19, B7),
   slower only on sub-second cases where our build is 46–96 %; H4 inside D1 touches W1 at
   kD = 500 alone (bound 14–31 % of build plus one evaluation, S6's pairs alone 13–30 %;
   kD = 1000 27–42 %); B5 measured (1.9–2.4× per core × 1.8 cores). *Sign-off:* H4's go-ahead and order and the block budget (the PR's
@@ -678,13 +640,23 @@ task's full line is in its record or report and its progress entry
   the signature scratch is added to. Also (CH1.3d2, the user at its plan): the signature
   buffers' layout in memory (interleaved or planes, alignment, chunks) is fixed here, in the
   crate's documentation, not in CONVENTIONS (§3.15 "Signatures", "Not fixed here"); the
-  grid, sample order and stored form are §3.15's. *Needs:* CH3.1, D6.
+  grid, sample order and stored form are §3.15's. Also, first (review 2026-11-19, A5; the user, 2026-11-19, on #230:
+  "CHA.11 + measure first"): the product conversion per box (S → F and F → R, with the ×4 the
+  φ grid's symmetries give, N_φ a multiple of 4) against the RCR pair at the high-frequency
+  levels' degrees, and a high-frequency level's time with the product conversions against
+  RCR's on W1; then a stop to ask before CH4.2 whether H4 goes on as listed or the FFT track
+  (CH0.9, CHR.3, CH4.6) moves ahead. With it the H4 gain stated for the product and for an FFT
+  apart. Also (review 2026-11-19, C5, C7): ref's `diagonal::Symmetry` mapped onto the tables'
+  `SignedPermutation`, with a test that ref's `offsets()` and the tables' V offsets are one
+  set; `diagonal::Workspace` renamed before its first user. *Needs:* CH3.1, D6, CHA.11.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
   deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
   `nd_fmm_ref::helmholtz::diagonal` (its transfer functions sample by sample); at E's floor
   (C₀ u) f64 RCR rounds up to 2.4× more than the diagonal form (CH1.3d1's record), so a
-  comparison with RCR there needs 2E. *Needs:* CH4.1, CH0.6.
+  comparison with RCR there needs 2E. Also (review 2026-11-19, M11): an ignored release test
+  of the trusted path at k a = 108 and 216 on a few classes (CH4.4's degrees; S6 about 5 s per
+  class at p = 256). *Needs:* CH4.1, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
@@ -697,7 +669,10 @@ task's full line is in its record or report and its progress entry
   L ≈ 2ka + c (2ka)^{1/3} of the high-frequency FMM literature, between S6's last two, in
   the same sweep. Also (CH4.0b's sign-off 2): the calibration verified on the constant
   density (kD ≤ 100) and the plane wave's trace (kD = 500) as well as on §9.1's charges
-  (`helmholtz_accuracy::Density`). *Needs:* CH4.2.
+  (`helmholtz_accuracy::Density`). Also (review 2026-11-19, A8, M12): the refit of the
+  high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of the
+  error on W1 at kD = 1000, 10⁻⁸); C₀ checked at p ≥ 72 against a double-double reference, or
+  raised, with the glibc margin. *Needs:* CH4.2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at
@@ -705,7 +680,10 @@ task's full line is in its record or report and its progress entry
   (CH4.0b's sign-off 2): the plane wave's trace at kD = 500 and 1000 beside §9.1's charges.
   *Needs:* CH4.3, CH1.4. *Machines:* Kathleen.
 - [ ] **CH4.5 Host performance against FMM3D at matched accuracy.** As C6.8, setup apart,
-  one node, on CH4.4's sweep. *Needs:* CH4.4. *Machines:* locust, Kathleen.
+  one node, on CH4.4's sweep. Also (review 2026-11-19, A6, B6, B8): ours at 1 × N (one rank,
+  N threads, as a threaded caller runs it) beside the best split; FMM3D's OpenMP binding
+  stated; CH4.0k reconsidered before it, and the H4 gate states one-rank-per-node figures.
+  *Needs:* CH4.4. *Machines:* locust, Kathleen.
 - [ ] **CH4.6 The optional FFTW back end of the φ step.** *Done when:* against the product to
   round-off; per-box plans with bits the same across batch positions, sizes and threads, and
   fingerprints all-gathered; off by default, a default build linking no FFTW, cargo-deny, a CI
@@ -739,7 +717,9 @@ task's full line is in its record or report and its progress entry
   f32's normal range, and the raised degrees are 28 and 32; the degrees f32 supports
   stated and refused beyond. *Needs:* CH3.1, D3. *Machines:* locust.
 - [ ] **CH7.2 Device P2P for Helmholtz and Yukawa.** *Done when:* an accuracy contract as the
-  host's; cost per pair against the host and Laplace's device P2P. *Needs:* CH3.4.
+  host's; cost per pair against the host and Laplace's device P2P. Also (review 2026-11-19,
+  A7): in f32 the phase bound at c_leaf = 2 with V pairs as near pairs (Re(k) r ≤ 88, about
+  6.5·10⁻⁵ per term, against D3's ε ≥ 10⁻⁴). *Needs:* CH3.4.
   *Machines:* locust.
 - [ ] **CH7.3 Device leaf operators.** P2M, L2P, M2P, P2L with radial recursions. *Done
   when:* against the host operators within error. *Needs:* CH3.1. *Machines:* locust.
@@ -892,6 +872,14 @@ task's full line is in its record or report and its progress entry
 
 **Gate:** CH9.1, our FMM with every optimisation and default beside FMM3D, in depth.
 
+- [ ] **CH9.0 Helmholtz dipole sources.** D5's task (signed off 2026-10-29: "dipoles get a
+  later, separate task"), added at the H1 gate (G2; the user, 2026-11-19, on #230: "Add CH9.0"). Dipoles
+  (Burton–Miller, double-layer operators) through the source-type interface of Laplace's C6.4
+  (Phase 6 T8, T8d). *Done when:* CONVENTIONS §3.15's dipole convention (a version bump,
+  proposed in the PR first); the dipole direct sum and leaf operators in `nd-fmm-ref` against
+  the direct sum and k → 0 against Laplace's dipoles; the host FMM's dipole source type within
+  ε on W1 and W3 for real, complex and imaginary k; FMM3D's dipoles as a check where it meets
+  its eps. Split into lettered sub-tasks before it starts. *Needs:* H3.G, CH1.3c.
 - [ ] **CH9.1 The final comparison with FMM3D.** Added on 2026-11-07 (the user: "can you
   schedule an in depth comparison with fmm3d when all optimizations are applied?"), after the
   last optimisation: H4 to H8 closed and every default signed off (D7, D8, the device
@@ -903,12 +891,12 @@ task's full line is in its record or report and its progress entry
     direct sum, with the full-target crosscheck and the worst box;
   - the reference workloads W1–W4 (D12) over D1's range (kD ≤ 500), complex k and Yukawa
     where FMM3D meets its eps (CH2.5, CH5.3), real and complex charges, potentials and
-    gradients, several vectors (FMM3D's vectorised interface), dipoles if D5's task has
-    landed;
+    gradients, several vectors (FMM3D's vectorised interface), dipoles (CH9.0);
   - time: the build (FMM3D's setup) apart from the evaluation, and the evaluations after
     which ours is ahead; per stage and per level (FMM3D's from CH6.2d's patch: the M2L per
     level, lists 3 and 4, P2P), at one thread and on the whole node (FMM3D's OpenMP on every
-    core, ours at the node's best ranks × threads split), each machine quiet for the whole
+    core, ours at the node's best ranks × threads split and at 1 × N, review 2026-11-19, B6),
+    with FMM3D's OpenMP binding stated (B8), each machine quiet for the whole
     run (no other jobs; locust's load sampled during the runs);
   - memory: the peak resident size per node;
   - the device path (CH7.6) beside the host's, and our multi-node runs (H8) labelled apart:
@@ -916,7 +904,7 @@ task's full line is in its record or report and its progress entry
   *Done when:* the report has these tables on the three machines; every case where FMM3D is
   more than 1.1× faster at matched accuracy is traced to its stage and level, with its cause
   or a follow-up task; CH4.5's and CH7.6's results cited where unchanged. *Needs:* H4.G, H5.G,
-  H6.G, H7.G, H8.G. *Machines:* locust, Kathleen, the M6.
+  H6.G, H7.G, H8.G, CH9.0. *Machines:* locust, Kathleen, the M6.
 - [ ] **H9.G Gate.** `/milestone-gate H9`. *Needs:* every task above.
 
 ## Architecture and cleanup (HA)
@@ -954,8 +942,9 @@ item is removed only where the task names it.
 - [ ] **CHA.4 A test-support crate.** Review T1, C3. A small crate without workspace
   dependencies (the generator, the point sets, the error norms, the machine facts) that
   every crate may dev-depend on and nd-fmm-bench depends on in place of nd-fmm-validate
-  where that is all it needs. *Done when:* the 41 copies of the generator and the copies of
-  `relative_l2`, `plummer` and `cube` replaced where the draws stay the same (checked per
+  where that is all it needs. *Done when:* the copies of the generator (41 at the first review,
+  52 files at the second, review 2026-11-19) and the copies of
+  `relative_l2` (eleven), `plummer` and `cube` replaced where the draws stay the same (checked per
   file by the tests' own fixed values); `workspace-structure.md` has the crate.
 - [ ] **CHA.5 The Helmholtz builder's measurement settings apart.** Review P2, P5. *Done
   when:* `HelmholtzFmmBuilder` shows the user's settings; the measurement settings
@@ -963,7 +952,13 @@ item is removed only where the task names it.
   `block_budget`, `PlaneWavePrecision::PerLevel`, `pair_calls`) sit behind one hidden
   tuning struct; `plane_wave_reach` and `PlaneWaveRaise::Level` removed if their guard
   tests (CH6.2g, CH6.1h) can keep their checks without them, else kept there; the harness
-  and the reports' reproduction scripts still run. *Sign-off:* the settings removed.
+  and the reports' reproduction scripts still run. Also (review 2026-11-19, P2, P6, P7): the
+  settings added since (`empty_boxes`, `near_v`, `near_wx`, `batched_term`, `m2l_block_targets`,
+  `rcr_split`, `rcr_budget`, `plane_wave_budget`, `dense_node_budget`, `c_leaf`) sorted the same
+  way, the on/off switches of signed-off rules behind the tuning struct; `Plan`'s
+  `with_near_rule` and `from_key_types_with_near_rule` folded into the `with_rules` forms;
+  `HelmholtzOperator`'s unbuilt state a type that `build_tables` consumes, not a run-time
+  `bool`. *Sign-off:* the settings removed.
 - [ ] **CHA.6 One plane-wave M2L traversal.** Review L2. The slot table, the parent runs
   and the split by child of `operator_plane_wave.rs` and
   `helmholtz/operator_plane_wave.rs` in `driver.rs`, generic over a small kernel trait
@@ -979,11 +974,15 @@ item is removed only where the task names it.
   generic over the operator. *Done when:* Laplace bit for bit and within D9; `HelmholtzFmm`
   routes by node (`Evaluator::with_routing` with the node of its `split_shared`), with the
   work-weighted cut and the timings, rank-invariant as before; what CH8.1 still has to add
-  listed. Split into lettered sub-tasks before it starts. *Machines:* locust, Kathleen.
+  listed. Also (review 2026-11-19, L1, P8): the Helmholtz builder's second cost model
+  (`VCosts`, `WxCosts`) beside `cost.rs`, and its copies of `agree`, `Calls` and `delegate!`;
+  `kind_times`' literal indices replaced by an operator kind. Split into lettered sub-tasks
+  before it starts. *Machines:* locust, Kathleen.
 - [ ] **CHA.8 The large files of nd-fmm-exec split.** Review C2, K4, T2, U2. `device.rs`
   into modules and `DeviceOperator::new` into staged constructors; `fmm.rs`'s option enums
   and report types into submodules; `tests/mpi_exec.rs` into `tests/mpi_exec/main.rs` with
-  one module per scenario. Moves only. *Done when:* bit for bit; within D9 with the
+  one module per scenario, and the same for `fmm-exec/tests/helmholtz_fmm.rs` and
+  `fmm-plan/tests/mpi_regressions.rs` (review 2026-11-19, T2). Moves only. *Done when:* bit for bit; within D9 with the
   placement checked (`-align-loops=64` where a time moves); one PR per file.
   *Machines:* locust, Kathleen.
 - [ ] **CHA.9 Documentation of what is, not of how it came.** Review K1, L4. *Done when:*
@@ -992,10 +991,30 @@ item is removed only where the task names it.
   rules and checks (the time rule of `fmm-exec/CLAUDE.md` restated to what holds);
   `docs/design/workspace-structure.md` has the Helmholtz modules; the crate descriptions
   and `fmm-exec/src/lib.rs` name Helmholtz; `laplace-fmm-plan.md` §2.5's 0.76ᵖ named as
-  the M2L's ratio (M10). Comments and documents only, one crate per PR.
+  the M2L's ratio (M10). Also (review 2026-11-19, C4): `fmm-ref/CLAUDE.md` and
+  `fmm-exec/CLAUDE.md` record as a decision that the host FMM's leaf operators call
+  `nd-fmm-ref`'s per point (no second trusted path there; a change to the oracle moves the
+  FMM's times). Comments and documents only, one crate per PR.
 - [ ] **CHA.10 Housekeeping.** Review K2, U3. *Done when:* the one-off scripts of
   `tools/helmholtz/` and the task-named cases of `tools/scaling/run.sh` are apart from the
   living tools, each report's reproduction line still valid; `octree/Cargo.toml` takes its
   versions from `[workspace.dependencies]` (the migration the root CLAUDE.md leaves open;
   *Sign-off*) and points at the GitHub repository; its unused features removed if no
-  example or test names them.
+  example or test names them (`battleship` is empty). Also (review 2026-11-19, K2, K5): a
+  shared `tools/helmholtz/common.py` for new report scripts (the `*-tables.py` define `cells`
+  11 times), the old ones left; `approx` dropped from `[workspace.dependencies]`, which no
+  member uses, and from the two CLAUDE.md files that allow it.
+- [ ] **CHA.11 The Helmholtz wave levels in one place.** Review 2026-11-19, L1 (its new parts;
+  the user, 2026-11-19, on #230: on the priority list before CH4.1). One crate-private function of
+  `helmholtz/operator.rs` returns the levels with waves from the settings, called by
+  `HelmholtzFmmBuilder::build` (the V rule) and by the operator's `select_tables`, in place of
+  the builder's restatement (`helmholtz/fmm.rs:924-945`), its run-time `assert!` (`:1146-1153`)
+  and the second f64 gate. *Done when:* bit for bit (checksums of `helmholtz_accuracy`'s cases
+  and the MPI list); no Laplace file touched. H4 adds the diagonal form's choice per level to
+  the same builder, which reads it from the same place.
+- [ ] **CHA.12 One entry-point macro set in nd-fmm-simd.** Review 2026-11-19, L5. The eleven
+  macros that `arch/avx2.rs`, `avx512.rs` and `neon.rs` each define after their `Simd` impls
+  (about 670 lines each, about 140 differing) once in `arch/mod.rs`, taking the token, the
+  `target_feature` literal and the block constants. *Done when:* every kernel bit for bit on
+  both architectures (CI's x86_64 and arm64 jobs); D9's protocol on the three machines
+  (code placement). *Machines:* locust, Kathleen.

@@ -551,14 +551,15 @@ The Helmholtz quantities get one new section, CONVENTIONS §3.15, and a bump of
 
 1. **Kernel and factors.** G_k as in Section 1.1, the branch Im k ≥ 0, Hankel functions of
    the first kind (outgoing for the time factor e^{−iωt}), and where 1/(4π) and the factor
-   ik of Section 3.1 are applied (by analogy with §3.1: once, by `nd-fmm-exec`).
+   ik of Section 3.1 are applied (CONVENTIONS §3.15: 4π ik on the crossing operators M2L, M2P
+   and P2L, CH1.1; amended at H1.G).
 2. **Angular basis.** Real orthonormal spherical harmonics: their definition from the
    associated Legendre functions of §3.3, the phase (with or without Condon–Shortley), the
    order of the cos and sin parts in the slots ±m, and the evaluation by recursion without
    trigonometric calls (§3.2).
 3. **Radial functions and scaling.** j_n, h_n, and for Yukawa i_n, k_n with their
-   normalisation; the scale s_l; the exponential scaling for Yukawa above κ r ≈ 1 if S3
-   adopts it; the scaled coefficients of P2M, P2L, M2P, L2P; the powers of i absorbed for
+   normalisation; the scale s_l; the exponential scaling for Yukawa above κ r ≈ 1, as S3
+   adopted it (amended at H1.G); the scaled coefficients of P2M, P2L, M2P, L2P; the powers of i absorbed for
    Yukawa (Section 3.1).
 4. **Storage.** Split real and imaginary planes in the layout of §3.6 (Section 3.3); the
    real layouts and when they apply (Yukawa with real charges; real-k multipoles with real
@@ -1341,7 +1342,7 @@ and reported per frequency in CH4.4.
 | R9 | f32 | phases and high degrees out of f32's range; the bound of Section 3.6 5·10⁸ times larger | f64 first; f32 only by measurement (S6, D3) |
 | R10 | Table build time in frequency sweeps | build dominates short solves | build cost reported per k; per-level cache keys so octave sweeps rebuild one level; interpolated transfer functions if S6 allows |
 | R11 | Laplace code made generic for sharing | a lost bit or a slower Laplace path; re-verification on three machines | constraint 1 of Section 2, shown in the pull request; extraction only with a second user (Section 6.2); copies as the fallback |
-| R12 | FMM3D for purely imaginary zk | an unreliable reference for Yukawa | checked in CH1.4 against our direct sum; if it fails, Yukawa keeps our direct sum and the k = iκ cross-check only (CH2.5 skipped, the reason recorded) |
+| R12 | FMM3D for purely imaginary zk | an unreliable reference for Yukawa | checked in CH1.4 against our direct sum: reliable for κD ≤ 30 at every eps and for eps ≥ 10⁻⁶ at larger κD (to 1.7×); misses by up to 12,000× at κD 50–300 with eps 10⁻⁹ and 10⁻¹² (N = 10⁶); CH2.5 and CH5.3 compare only where it met its eps (amended at H1.G) |
 | R13 | FMM3D's Helmholtz normalisation or sign convention differs from §3.15 | false failures, or a wrong convention adopted to match | identified on two points in CH1.4 before §3.15 is signed off; the driver scales by what it finds and stops on anything else, as T9's |
 | R14 | cubek-fft's limits: powers of two only, twiddles by cos and sin in every butterfly, f64 complex untested upstream | padding costs memory and M2L time; in f64 the twiddles may cancel the gain; unknown f64 accuracy | spike S5; upstream contributions (twiddle tables, radix 3 and 5); the transform as a GEMM as the fallback |
 | R15 | FFT plans and determinism | plans that depend on batch shape, `Measure` or `Patient` plans, alignment-dependent plans, FFTW's threads, wisdom planned or imported by an embedding application on some ranks, or ranks with different FFTW builds or SIMD support change bits between runs, ranks or thread counts | per-box plans (Section 6.7); `Rigor::Estimate` and no wisdom; aligned buffers in class 0; no FFTW threads; plan fingerprints all-gathered at build, with the product on every rank where they differ; one FFTW build per machine (CHR.4); S9; RLST's determinism tests |
@@ -1363,7 +1364,8 @@ Every fast path against a slower trusted path, as for Laplace:
    → L2P against the direct sum over the 316 offsets (the Phase 1 T7 test) on regime-L and
    regime-H levels, for both M2L choices of every class, with point placements that include
    the box corners; the diagonal form against RCR on the same class within the bound E of
-   Section 3.6; the rotation homomorphism and orthogonality; S → F → R round trips; the
+   Section 3.6, read as measured ≤ 2E (θ = 1/2, CH0.6's acceptance; CH1.3d1, amended at H1.G),
+   since at E's floor f64 RCR rounds more than the diagonal form; the rotation homomorphism and orthogonality; S → F → R round trips; the
    reality of the M2M and L2L coefficients for real k.
 3. **The k → 0 limit**: on a fixed tree the scaled Helmholtz coefficients against the
    Laplace operators under the diagonal map of Section 3.4, with tolerances of order
@@ -1458,8 +1460,9 @@ and for complex and purely imaginary k the branch, before any comparison.
 **Limits.** FMM3D is a reference, not ground truth: agreement is meaningful only to the
 looser of the two accuracies, and the sampled direct sum stays the primary measure. Above
 boxes of 8 wavelengths (amended at CH0.4; 32 by its documentation) FMM3D uses point and
-shoot, slower but still accurate. Whether it is accurate and efficient for purely
-imaginary zk (the Yukawa case) is not verified; CH1.4 checks it (risk R12). At eps = 10⁻³
+shoot, slower but still accurate. For purely imaginary zk (the Yukawa case) CH1.4 found it
+accurate at κD ≤ 30 for every eps and at eps ≥ 10⁻⁶ beyond (to 1.7×), and not at κD 50–300
+with eps 10⁻⁹ and 10⁻¹² (risk R12; amended at H1.G). At eps = 10⁻³
 (its iprec 1) FMM3D missed ε on three cases at kD = 100, W1, W3 and the W4 cube
 (1.23–2.03·10⁻³; CH6.2d), so comparisons of time are at matched accuracy, FMM3D's eps chosen
 by its error, not at the same requested eps (amended at H6.G).
@@ -1469,7 +1472,7 @@ by its error, not at the same requested eps (amended at H6.G).
 | Phase | Check against FMM3D | k |
 | --- | --- | --- |
 | H1 (CH1.4) | two-point normalisation; fixtures; `nd-fmm-ref`'s direct sum to round-off | real, complex, imaginary |
-| H2 (CH2.5) | Yukawa FMM on W1 and W3, sampled and full-target, over κ D | imaginary, if R12 clears |
+| H2 (CH2.5) | Yukawa FMM on W1 and W3, sampled and full-target, over κ D | imaginary, where R12 holds (amended at H1.G) |
 | H3 (CH3.6) | RCR on every level: W1, W3 and W4 for kD ≤ 100, and W1 at kD = 500 | real |
 | H6 (CH6.2) | the exponential M2L against `hfmm3d`'s, which uses the same M2L up to boxes of 8 wavelengths (amended at CH0.4): per-level accuracy and time; met at 10⁻³ and 10⁻⁶ (CH6.2d), 10⁻⁷ and 10⁻⁸ in CH9.1 (amended at H6.G) | real |
 | H4 (CH4.4, CH4.5) | W1 to kD = 1000, W2 to 500, W3 to 200, with the levels and classes mapped; then matched accuracy | real |
@@ -1892,6 +1895,12 @@ these.
   scaling on every level and no double factorial absorbed, and the level units; Section 4,
   item 6 (Yukawa's tables real as i^{n−n′} (E|F)) and item 7 (the signatures' storage left
   to CH4.1).
+- **Amended at H1.G, 2026-11-19** (`docs/helmholtz/gates/H1.md` §4, corrections C1–C3; the
+  user on #230, "Close, accept all (Recommended)"): Section 8, R12's row, and Section 9.2's
+  "Limits" and H2 row record CH1.4's result for purely imaginary zk (CH1.4's question 3, signed
+  off 2026-10-28, applied here); Section 4, items 1 and 3, the factor 4π ik on the crossing
+  operators and S3's adopted Yukawa scaling (review 2026-11-19, M14); Section 9, item 2, the
+  bound E read as measured ≤ 2E (CH1.3d1's sign-off on #228).
 
 ## Appendix B. The stability check behind Section 3.6
 
