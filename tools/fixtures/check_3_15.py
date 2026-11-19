@@ -36,7 +36,7 @@ tolerance. It checks:
  13. the plane-wave expansion e^{ik s.r} = 4 pi sum_n i^n j_n(kr) sum_m Y(r^) Y(s)
      ("Signatures"; Helmholtz CH1.3d2);
  14. the signature of charges in stored form: 4 pi e^beta F^(s) = sum q e^{-ik s.(y - c)};
- 15. the signature grid: N_phi = 4P, the symmetric rings, the quadrature exact for the
+ 15. the signature grid: the reference's N_phi = 4P, the symmetric rings, the quadrature exact for the
      products of harmonics to degree 4P - 4;
  16. the 34 classes of the 316 offsets and their sample permutations: the sample of S s
      is S s for every symmetry of an offset;
@@ -793,7 +793,7 @@ def grid(p):
 
 def check_plane_wave_expansion():
     print("13. e^{ik s.r} = 4 pi sum_n i^n j_n(kr) sum_m Y_n^m(r^) Y_n^m(s) (Signatures)")
-    for label, k in (("real", KS["real"]), ("complex", KS["complex"])):
+    for label, k in KS.items():
         err = mpf(0)
         for _ in range(3):
             r, s = rand_point(0.2, 1.5), rand_unit()
@@ -815,9 +815,13 @@ def signature(p, s_l, m_hat, direction):
 
 def check_signature_of_charges():
     print("14. the signature of charges: 4 pi e^beta F^(s) = sum q e^{-ik s.(y - c)}")
-    a, p = mpf("0.5"), 30
+    p = 30
     centre = [mpf("0.2"), mpf("-0.1"), mpf("0.3")]
-    for label, k in (("real", mpf("4")), ("complex", mpc("4", "0.4"))):
+    # k a = 2 (s = 1) and 0.4 (s = 0.4 < 1, so the s^n of F^ is exercised).
+    cases = [(mpf("0.5"), "real", mpf("4")), (mpf("0.5"), "complex", mpc("4", "0.4")),
+             (mpf("0.5"), "yukawa", mpc(0, "4")), (mpf("0.1"), "real", mpf("4")),
+             (mpf("0.1"), "complex", mpc("4", "0.4"))]
+    for a, label, k in cases:
         for cplx in [False, True]:
             q = charges(4, cplx)
             inside = [(rand_point(0, a, centre), qq) for qq in q]
@@ -830,8 +834,8 @@ def check_signature_of_charges():
                 want = sum(qq * mp.exp(-I * k * sum(d[i] * (y[i] - centre[i]) for i in range(3)))
                            for y, qq in inside)
                 err = max(err, abs(got - want) / max(abs(qq) for _, qq in inside))
-            tag = f"{label} k, {'complex' if cplx else 'real'} q"
-            # Truncation at p = 30 with k a = 2: j_31(2)-sized, below 1e-30.
+            tag = f"{label} k, k a = {mp.nstr(abs(k) * a, 2)}, {'complex' if cplx else 'real'} q"
+            # Truncation at p = 30 with |k| a <= 2: j_31(2)-sized, below 1e-30.
             check(f"signature of charges, {tag}", err, mpf(10) ** -25)
 
 
@@ -1005,7 +1009,7 @@ def check_diagonal_m2l():
 def check_level_units():
     print("18. level units: the forms in units of r, k^ = k r (Level units)")
     p = 30
-    for label, k in (("real", KS["real"]), ("complex", KS["complex"])):
+    for label, k in KS.items():
         for cplx in [False, True]:
             tag = f"{label} k, {'complex' if cplx else 'real'} q"
             q = charges(3, cplx)
@@ -1067,8 +1071,10 @@ def check_level_units():
                 got = stored_l2p(kc, a_c / r_c, [v / r_c for v in child], l_c,
                                  [v / r_c for v in x], pc, [])
                 err = max(err, abs(got - want) / abs(want))
+            # Truncation at degree 14, measured below 1e-16 but 2.6e-14 for Yukawa (whose
+            # field at the targets is e^{-35}); a wrong factor of the units errs by O(1).
             check(f"L2L in level units with the factor 1/2 gives r_c phi~, {tag}", err,
-                  mpf(10) ** -14)
+                  mpf(10) ** -12)
             # (d) P2L from a coarser source leaf (r_s = 2 r_t) in the source's units, its
             # charges scaled by r_t / r_s, gives the target box's r_t phi~.
             r_t, r_s = mpf("0.25"), mpf("0.5")

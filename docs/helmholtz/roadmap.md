@@ -8,11 +8,11 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j and CHA.1–CHA.3 are
-merged (items 1–7). CH1.3d is split in two: CH1.3d1 (the PR after #227) adds the diagonal form
-in extended precision to `nd-fmm-ref`, the trusted path of CH4.1 and CH4.2; CH1.3d2, the
-§3.15 revision for sign-off, is next, then CH4.1. HR, H0, H1 and H2 are still open; of H7,
-CH7.5a–c are done, and of H0, CH0.4 and CH0.6.
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j, CHA.1–CHA.3 and
+CH1.3d1 are merged (items 1–7 and half of 8). CH1.3d2, CONVENTIONS §3.15 at version 4
+("Signatures", "Level units"), is the PR after #228, a draft until its text is signed off;
+once it is merged every task of H1 is done and H1.G (off the list) can run. CH4.1 is next. HR, H0, H1
+and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -308,12 +308,12 @@ family, checked against FMM3D's fixtures.
   the 34 classes, `m2l`, the bound E): against RCR within 2E on the 34 classes at k a 2.83–54,
   p 7–82, f64 and f32, and on the 316 offsets; at E's floor f64 RCR rounds more than it does. The reading "measured ≤ 2E" and the split
   signed off 2026-11-19 by the user on #228 ("Agree to both questions").
-- [ ] **CH1.3d2 CONVENTIONS §3.15 revised.** "Signatures" as CH1.3d1 built it (S6's proposal,
-  CH0.6's question 5), with the rest of CH1.3d's text above (M1, M3, M4, M10's §3.9; the
-  proposal's §3.4 and §3.1, M2), one `CONVENTION_VERSION` bump; `tools/fixtures/check_3_15.py`
-  extended to the signature identities. *Done when:* the text proposed in the PR and signed
-  off; the version in `nd-fmm-math` and the file agree. *Needs:* CH1.3d1. *Sign-off:* the
-  convention.
+- [x] **CH1.3d2 CONVENTIONS §3.15 revised.** Record `docs/helmholtz/tasks/CH1.3d2.md`.
+  `CONVENTION_VERSION` 4: "Signatures" fixed (buffers' layout left to CH4.1), "Level units"
+  added (N_φ a per-level multiple of 4, ≥ 4P − 3), "Exponential M2L" exempt from the version,
+  Fₖ stated against §3.14's, §3.9's M2L range;
+  proposal §3.1, §3.4, §4 amended; `check_3_15.py` checks 13–18. The plan's four questions
+  signed off 2026-11-19 by the user, each "(Recommended)"; the text: question 1 of the PR.
 - [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
 
 ## H2: Yukawa on the host
@@ -675,7 +675,10 @@ task's full line is in its record or report and its progress entry
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
   size; scratch within the budget on W1 at kD = 1000. Also, from the H3 gate (§5): the
   resident memory of the RCR FMM on W1 at kD = 500 at the calibrated degrees, the baseline
-  the signature scratch is added to. *Needs:* CH3.1, D6.
+  the signature scratch is added to. Also (CH1.3d2, the user at its plan): the signature
+  buffers' layout in memory (interleaved or planes, alignment, chunks) is fixed here, in the
+  crate's documentation, not in CONVENTIONS (§3.15 "Signatures", "Not fixed here"); the
+  grid, sample order and stored form are §3.15's. *Needs:* CH3.1, D6.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
   deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is

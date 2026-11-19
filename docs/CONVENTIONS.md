@@ -6,8 +6,9 @@ This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
 §3.1–§3.8, §3.11, §3.12 or §3.15 (but for its "Exponential M2L") bumps
 `CONVENTION_VERSION`, which invalidates committed fixtures and cached operator tables.
-§3.13 describes in-memory data only, and §3.14 and §3.15's "Exponential M2L" approximate
-M2Ls whose tables are not cached; a change to them does not bump the version (§3.10).
+§3.13 describes in-memory data only, and §3.14 and §3.15's "Exponential M2L" are
+approximate M2Ls whose tables are not cached; a change to them does not bump the version
+(§3.10).
 
 Summary of the choices: Legendre functions without the Condon–Shortley phase for
 m ≥ 0, negative orders defined by a (−1)^m conjugate symmetry, Racah-type factorial
@@ -1579,7 +1580,7 @@ kρ = k̂ (ρ/r) is unchanged, and so:
 **On a tree** (Helmholtz CH3.1a; `nd_fmm_tables::helmholtz` and
 `nd_fmm_exec::helmholtz::operator`, "Levels and units"), level l works in the units of its
 own boxes: half-width r_l = 1, centres two apart, circumradius √3, wavenumber
-k̂_l = k r_l (formed in f64 from the root's k̂₀ = k r₀ as k̂₀/2^l, exactly). A box of level l
+k̂_l = k r_l. A box of level l
 holds its expansions in those units, so it represents r_l φ̃, as a leaf's chunk holds r φ̃
 (§3.13, "Leaf-scaled coordinates"); the output pass divides by §3.13's scales. Between
 levels:
@@ -1818,10 +1819,12 @@ L_n^m = 4\pi ik\; i^n \int_{S^2} Y_n^m(\hat{\mathbf s})\, T(\hat{\mathbf s})\, F
   4π F(ŝ) = Σⱼ qⱼ e^{−ik ŝ·(yⱼ − c_s)} up to the truncation.
 - **The grid** of degree p, P = p + 1: 2P − 1 rings at the Gauss–Legendre nodes
   uᵢ = cos θᵢ on [−1, 1] in ascending order (ring 0 nearest the south pole), weights wᵢ;
-  N_φ azimuths φⱼ = 2πj/N_φ, N_φ = 4P − 3 rounded up to a multiple of 4, so N_φ = 4P.
-  Sample (i, j) has the index i N_φ + j, the direction
-  ŝᵢⱼ = (sin θᵢ cos φⱼ, sin θᵢ sin φⱼ, cos θᵢ) and the weight wᵢ 2π/N_φ. The rule is
-  exact for spherical polynomials of degree ≤ 4P − 4 = 4p, the degree of Yₙᵐ T F above.
+  N_φ azimuths φⱼ = 2πj/N_φ, N_φ a multiple of 4 and at least 4P − 3. Sample (i, j) has the
+  index i N_φ + j, the direction ŝᵢⱼ = (sin θᵢ cos φⱼ, sin θᵢ sin φⱼ, cos θᵢ) and the
+  weight wᵢ 2π/N_φ. The rule is exact for spherical polynomials of degree ≤ 4P − 4 = 4p,
+  the degree of Yₙᵐ T F above. N_φ is a per-level choice (proposal §6.7: sizes suited to
+  an FFT on the host or the device); `nd-fmm-ref` takes the smallest, 4P − 3 rounded up
+  to a multiple of 4, which is 4P, and a fast form records the N_φ it uses.
   The nodes are symmetric (u_{2p−i} = −uᵢ). Nodes, weights and azimuths are computed in
   extended precision and rounded once.
 - **Stored form**, with the level's s and β ("Radial functions and scaling"), z = k|t|:
@@ -1834,11 +1837,10 @@ L̂ₙᵐ  += sⁿ iⁿ Σᵢⱼ wᵢ (2π/N_φ) Yₙᵐ(ŝᵢⱼ) G(ŝᵢⱼ)  
 ```
 
   T̂ carries the factor e^{Im z} of the stored (S|R) table, and G the scalar factor of the
-  RCR M2L, so both forms take the same stored coefficients. Every sample of T̂ is computed
-  in extended precision (at least double-double: hₗ by the upward recursion, Pₗ by the
-  three-term recurrence, ŝ · t̂ from the directions in extended precision) and rounded once
-  to the working precision, never summed in it. In level units k̂_l replaces k ("Level
-  units"); the signature, a sum of multipole coefficients, does not depend on the unit.
+  RCR M2L, so both forms take the same stored coefficients. Every sample of T̂ comes from
+  extended precision (at least double-double) and is rounded to the working precision,
+  never summed in it (proposal §3.6). In level units k̂_l replaces k ("Level units"); the
+  signature, a sum of multipole coefficients, does not depend on the unit.
 - **Classes.** An offset o = (a, b, c) of the 316 of §3.12 (t = w_l o) belongs to the class
   of its representative (min(|a|, |b|), max(|a|, |b|), |c|): 34 classes. The symmetry S of
   o flips its negative components, then swaps x and y if |a| > |b|, so S o is the
@@ -1848,9 +1850,12 @@ L̂ₙᵐ  += sⁿ iⁿ Σᵢⱼ wᵢ (2π/N_φ) Yₙᵐ(ŝᵢⱼ) G(ŝᵢⱼ)  
   order; T̂_o at sample (i, j) is T̂_rep at the sample of S ŝᵢⱼ.
 - **Not fixed here**: the signature buffers' layout in memory (interleaved complex or split
   planes, the alignment per box, chunks), as the leaf chunks (§3.13) are not; the fast
-  transforms (the φ step as a product or an FFT, the device's); the choice per level and
-  class. CH4.1, CH4.2, CH4.3 and CH7.x fix them in their crates' documentation; a change
-  to them does not bump the version.
+  transforms (the φ step as a product or an FFT, the device's); how T̂ is computed in
+  extended precision (sample by sample, as `nd-fmm-ref` does with hₗ by the upward
+  recursion and Pₗ by the three-term recurrence, or interpolated in ŝ · t̂ from an
+  extended-precision table, proposal §5.4); the choice per level and class. CH4.1, CH4.2,
+  CH4.3 and CH7.x fix them in their crates' documentation; a change to them does not bump
+  the version.
 
 ### Precision and range
 
@@ -1861,7 +1866,7 @@ Tested so far, by the spikes:
 - rotation blocks to n = 1000 (S1);
 - coaxial coefficients to p = 371 and k a = 300, real, complex and imaginary k (S2);
 - radial functions to order 1482 and |z| from 10⁻¹² to 4550 (S3);
-- the diagonal form against RCR in double-double at k a 2.8–300 (S6);
+- the diagonal form against RCR in double-double at k a 2.83–400 (S6);
 - the degrees p_l of S7 (spikes/truncation/results/summary.md) and the two-point check
   and fixtures of CH1.4.
 
@@ -1909,7 +1914,7 @@ for real, complex and imaginary k and real and complex charges:
   stored form; N_φ = 4P, the symmetric rings and the grid exact for the products of
   harmonics to degree 4P − 4; the 34 classes and, for every symmetry of an offset, the
   sample of S ŝ equal to S ŝ; the diagonal M2L in stored form equal to the (S|R) M2L above
-  on the axis (to 10⁻²⁸), and against the direct sum off it, for real, complex and
+  on the axis (to 10⁻²⁵), and against the direct sum off it, for real, complex and
   imaginary k;
 - "Level units": P2M the same numbers and P2L r times them in units of r, M2P and L2P
   giving r φ̃; L2L from a parent's units to a child's with the factor ½, and P2L from a

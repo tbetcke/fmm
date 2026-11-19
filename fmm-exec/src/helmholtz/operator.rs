@@ -28,9 +28,9 @@
 //! | P2P | `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the ISA of the [`P2pChoice`], or `nd_fmm_ref::helmholtz::p2p::p2p` for [`P2pChoice::Reference`], in the target leaf's units, the sources mapped as ĉ(s\|t) + r̂(s\|t) u |
 //!
 //! A box of level l holds r_l φ̃ in its own units, as a leaf's chunk does (CONVENTIONS
-//! §3.13 and §3.15, "Level units"; `nd_fmm_tables::helmholtz`, "Levels and units"). P2L forms the local in the
-//! source leaf's units, so it scales the charges by r̂(t|s) = r_t / r_s (exact, a power of
-//! two); M2P needs nothing, as a multipole's factor 4π ik̂ carries the change of units.
+//! §3.13 and §3.15, "Level units"; `nd_fmm_tables::helmholtz`, "Levels and units"). P2L
+//! forms the local in the source leaf's units, so it scales the charges by r̂(t|s) =
+//! r_t / r_s (exact, a power of two); M2P needs nothing, as a multipole's factor 4π ik̂ carries the change of units.
 //! P2L and M2P pass the reference a `Level` in the points' units: the wavenumber of the
 //! leaf whose points they read, and the frame's radius as the other box's half-width, so
 //! its power scale and damping are the other box's level's (the half-widths differ by

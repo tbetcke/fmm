@@ -40,8 +40,9 @@
 //!
 //! In its own units a box of level l represents r_l φ̃, φ̃ the potential with the factor 4π
 //! of CONVENTIONS §3.15 ("Where the factors go"), as a leaf's chunk does (CONVENTIONS
-//! §3.13; the level units of §3.15, "Level units", since Helmholtz CH1.3d2): a multipole by 4π ik̂_l Σ M̂ … hₙ, whose factor k̂_l = k r_l carries the change of
-//! units, and a local by Σ L̂ … jₙ, which has no such factor. `rcr` translates in one
+//! §3.13; §3.15 "Level units" since Helmholtz CH1.3d2): a multipole by 4π ik̂_l Σ M̂ … hₙ,
+//! whose factor k̂_l = k r_l carries the change of units, and a local by Σ L̂ … jₙ, which
+//! has no such factor. `rcr` translates in one
 //! system of units, so M2M and M2L carry over unchanged, and L2L takes the factor
 //! r_{l+1} / r_l = ½ of the change from the parent's units to the child's: the L2L tables
 //! are ½ times `rcr`'s, exactly (a power of two).
