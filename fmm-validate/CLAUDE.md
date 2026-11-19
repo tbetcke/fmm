@@ -587,8 +587,8 @@ with every pair diagonal, and with the φ step free (an FFT's ceiling). Its repo
 
 Helmholtz CH4.1b (the signature buffers and the level's scratch; docs/helmholtz/tasks/CH4.1b.md)
 added `helmholtz_accuracy::{Row::signature_scratch, SignatureScratch}` (per level, as if every
-V pair ran the diagonal form: per rank the computed targets with a V row and the distinct
-sources of their rows, ghosts included, and `nd_fmm_tables::helmholtz::diagonal::scratch_shape`
+V pair ran the diagonal form: per rank the boxes with a V row it holds, the replicated top's
+on every rank that holds them, and the distinct sources of their rows, ghosts included, and `nd_fmm_tables::helmholtz::diagonal::scratch_shape`
 of them at the level's degree and the run's threads under `DEFAULT_SIGNATURE_NODE_BUDGET` over
 `HelmholtzFmm::ranks_per_node`; the largest over the ranks and the ranks over the budget) and,
 with the example's `--levels`, a table "Diagonal-form scratch". `tools/helmholtz/ch4-1b-runs.sh`

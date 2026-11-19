@@ -21,7 +21,8 @@
 //! into the target's local. [`scratch_shape`] sizes it from a byte budget per rank (the
 //! caller's node budget over the ranks of the node, proposal §2, constraint 7): the
 //! conversion tables, one [`ConversionScratch`] and gather buffer per thread, the sources'
-//! signatures and the largest chunk of accumulators that fits; `None` when not even
+//! signatures and the largest chunk of accumulators that fits (not the transfer functions,
+//! which are CH4.2's tables); `None` when not even
 //! [`BLOCK_BOXES`] targets fit, where the level runs RCR (proposal §7; CH4.3).
 //!
 //! # Determinism
@@ -48,8 +49,9 @@ pub const SIGNATURE_ALIGN: usize = 64;
 pub const DEFAULT_SIGNATURE_NODE_BUDGET: usize = 8 << 30;
 
 /// The signatures of a set of boxes of one level, box after box, each on its own
-/// [`SIGNATURE_ALIGN`]-byte line (module documentation, "The signature buffers").
-#[derive(Clone, Debug)]
+/// [`SIGNATURE_ALIGN`]-byte line (module documentation, "The signature buffers"). A clone is
+/// aligned on its own allocation.
+#[derive(Debug)]
 pub struct Signatures<T> {
     values: Vec<Complex<T>>,
     /// The first sample of box 0 in `values`.
@@ -58,6 +60,17 @@ pub struct Signatures<T> {
     stride: usize,
     capacity: usize,
     boxes: usize,
+}
+
+impl<T: RealScalar> Clone for Signatures<T> {
+    fn clone(&self) -> Self {
+        let mut out = Self::new(self.samples, self.capacity);
+        let len = self.capacity * self.stride;
+        out.values[out.start..out.start + len]
+            .copy_from_slice(&self.values[self.start..self.start + len]);
+        out.boxes = self.boxes;
+        out
+    }
 }
 
 impl<T: RealScalar> Signatures<T> {
@@ -403,12 +416,23 @@ pub fn scratch_shape<T: RealScalar>(
 /// The buffers of one level call of the diagonal form on one thread: the source signatures,
 /// a chunk of target accumulators, the conversions' scratch and a gather buffer of
 /// [`BLOCK_BOXES`] expansions. Sized at construction; [`m2l_level`] allocates nothing.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct LevelBuffers<T> {
     sources: Signatures<T>,
     accumulators: Signatures<T>,
     scratch: ConversionScratch<T>,
     expansions: Vec<T>,
+}
+
+impl<T: RealScalar> Clone for LevelBuffers<T> {
+    fn clone(&self) -> Self {
+        Self {
+            sources: self.sources.clone(),
+            accumulators: self.accumulators.clone(),
+            scratch: self.scratch.clone(),
+            expansions: self.expansions.clone(),
+        }
+    }
 }
 
 impl<T: RealScalar> LevelBuffers<T> {
@@ -449,7 +473,8 @@ impl<T: RealScalar> LevelBuffers<T> {
 /// 1. S → F of the source boxes `sources` (indices of boxes in `multipoles`, each a stored
 ///    expansion of [`Conversions::expansion_len`] values, box after box) into the buffers'
 ///    source signatures, `sources[s]` into slot s;
-/// 2. the targets `targets` (indices of boxes in `locals`, distinct) in chunks of
+/// 2. the targets `targets` (indices of boxes in `locals`, distinct: a box listed twice in
+///    one block would be gathered twice) in chunks of
 ///    [`LevelBuffers::chunk`] in their order: each target's accumulator zeroed, then for each
 ///    of its pairs `rows[i]..rows[i + 1]`, in that order, `pair(i, k, signature, accumulator)`
 ///    with the signature of slot `slots[k]`; then F → R of the chunk added into the locals.

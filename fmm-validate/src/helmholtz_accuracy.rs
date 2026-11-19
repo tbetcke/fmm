@@ -83,8 +83,11 @@ use nd_fmm_exec::helmholtz::{
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
+use nd_fmm_ref::helmholtz::diagonal::azimuth_count;
 use nd_fmm_ref::helmholtz::p2p::direct_sum;
-use nd_fmm_tables::helmholtz::diagonal::{DEFAULT_SIGNATURE_NODE_BUDGET, scratch_shape};
+use nd_fmm_tables::helmholtz::diagonal::{
+    DEFAULT_SIGNATURE_NODE_BUDGET, Signatures, scratch_shape,
+};
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_octree::PhysicalBox;
 
@@ -841,13 +844,14 @@ pub struct Run {
 }
 
 /// One level's diagonal-form scratch over the ranks ([`Row::signature_scratch`]; Helmholtz
-/// CH4.1b): per rank the computed targets with a V row and the distinct sources of their rows
+/// CH4.1b): per rank the boxes with a V row it holds (those of the replicated top on every
+/// rank that holds them, as each runs their M2L) and the distinct sources of their rows
 /// (ghosts included), and `nd_fmm_tables::helmholtz::diagonal::scratch_shape` of them at the
 /// level's degree in f64 under the rank's share of the node budget; the largest over the
 /// ranks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SignatureScratch {
-    /// The most targets with a V row on one rank.
+    /// The most boxes with a V row held on one rank.
     pub targets: usize,
     /// The most distinct V sources on one rank.
     pub sources: usize,
@@ -855,7 +859,8 @@ pub struct SignatureScratch {
     pub budget: usize,
     /// The most bytes of a rank's shape, among the ranks whose shape fits.
     pub bytes: usize,
-    /// The most bytes of a rank's source signatures.
+    /// The most bytes of a rank's source signatures, over every rank (also those over the
+    /// budget).
     pub source_bytes: usize,
     /// The fewest targets per chunk among the ranks with targets whose shape fits.
     pub chunk: usize,
@@ -881,7 +886,9 @@ fn signature_scratch<C: CommunicatorCollectives>(
         let v = plan.level(l).v();
         sources.clear();
         let mut targets = 0;
-        for t in (0..v.nrows()).filter(|&t| plan.computes(l, t)) {
+        // Every row the rank holds, not only the targets it computes: a box of the
+        // replicated top has its V row on every rank that holds it, and each runs it.
+        for t in 0..v.nrows() {
             let row = v.row(t).0;
             if !row.is_empty() {
                 targets += 1;
@@ -896,10 +903,12 @@ fn signature_scratch<C: CommunicatorCollectives>(
         if targets == 0 {
             continue;
         }
-        match scratch_shape::<f64>(fmm.degrees()[l], sources.len(), targets, threads, budget) {
+        let p = fmm.degrees()[l];
+        let samples = (2 * p + 1) * azimuth_count(p);
+        at[3] = Signatures::<f64>::bytes_for(samples, sources.len()) as u64;
+        match scratch_shape::<f64>(p, sources.len(), targets, threads, budget) {
             Some(shape) => {
                 at[2] = shape.bytes() as u64;
-                at[3] = shape.sources as u64;
                 // The fewest per chunk as the most of its negation's complement.
                 at[4] = u64::MAX - shape.chunk as u64;
                 at[5] = shape.chunks(targets) as u64;

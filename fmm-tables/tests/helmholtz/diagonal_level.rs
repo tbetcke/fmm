@@ -92,6 +92,21 @@ fn a_store_holds_any_count_up_to_its_capacity() {
 }
 
 #[test]
+fn a_clone_is_aligned_and_equal() {
+    let mut s = Signatures::<f64>::new(52, 3);
+    for b in 0..3 {
+        s.signature_mut(b)[b] = Complex::new(b as f64, 1.0);
+    }
+    s.set_boxes(2);
+    let c = s.clone();
+    assert!(c.is_aligned());
+    assert_eq!((c.boxes(), c.capacity(), c.stride()), (2, 3, s.stride()));
+    for b in 0..2 {
+        assert_eq!(c.signature(b), s.signature(b));
+    }
+}
+
+#[test]
 #[should_panic(expected = "exceed the capacity")]
 fn refuses_more_boxes_than_its_capacity() {
     Signatures::<f64>::new(12, 4).set_boxes(5);
@@ -145,6 +160,12 @@ fn the_store_conversions_are_the_plain_ones() {
                 signature_bits(&plain[b * samples..(b + 1) * samples])
             );
         }
+        let start: Vec<f32> = values(5 * len, 13).iter().map(|&v| v as f32).collect();
+        let (mut a, mut b) = (start.clone(), start);
+        conversions.f2r(&plain, &mut a, &mut scratch);
+        conversions.f2r_from(&store, 0, &mut b, &mut scratch);
+        let bits32 = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits32(&a), bits32(&b), "f32, p = {p}");
     }
 }
 
@@ -320,7 +341,7 @@ fn check_level(p: usize) {
             bits(&start[b * len..(b + 1) * len])
         );
     }
-    for chunk in [1, 2, 3, BLOCK_BOXES, 5] {
+    for chunk in [1, 2, 3, BLOCK_BOXES, 5, 7] {
         assert_eq!(
             bits(&level_call(&c, p, chunk, &transfers)),
             bits(&whole),
@@ -342,6 +363,57 @@ fn the_level_call_against_refs_m2l_at_every_chunk_size() {
 #[ignore = "a larger degree: run in release"]
 fn the_level_call_at_a_larger_degree() {
     check_level(17);
+}
+
+/// The level call in f32 at p = 2, whose stride pads (60 samples on lines of 8), with a
+/// synthetic pair step: every chunk size and a buffer larger than the targets bit for bit the
+/// whole level in one chunk.
+#[test]
+fn the_level_call_through_a_padded_stride() {
+    let c = case();
+    let p = 2;
+    let conversions = Conversions::<f32>::new(p, 1.0);
+    assert!(Signatures::<f32>::stride_for(conversions.samples()) > conversions.samples());
+    let len = conversions.expansion_len();
+    let multipoles: Vec<f32> = values(c.centres.len() * len, 23)
+        .iter()
+        .map(|&v| v as f32)
+        .collect();
+    let start: Vec<f32> = values(c.centres.len() * len, 29)
+        .iter()
+        .map(|&v| v as f32)
+        .collect();
+    let weights: Vec<Complex<f32>> = values(2 * c.slots.len(), 31)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[re, im]| Complex::new(re as f32, im as f32))
+        .collect();
+    let call = |chunk: usize| {
+        let mut locals = start.clone();
+        let mut buffers = LevelBuffers::new(&conversions, c.sources.len(), chunk);
+        m2l_level(
+            &conversions,
+            &multipoles,
+            &c.sources,
+            &mut locals,
+            &c.targets,
+            &c.rows,
+            &c.slots,
+            &mut buffers,
+            |_, k, signature, accumulator| {
+                for (j, (a, &g)) in accumulator.iter_mut().zip(signature).enumerate() {
+                    *a += g * weights[k] * (1.0 + j as f32 / 64.0);
+                }
+            },
+        );
+        locals.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+    };
+    let whole = call(c.targets.len());
+    assert_ne!(whole, start.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    for chunk in [1, 2, 3, BLOCK_BOXES, 5, 7] {
+        assert_eq!(call(chunk), whole, "chunks of {chunk}");
+    }
 }
 
 #[test]
