@@ -228,7 +228,9 @@ signature buffers, scratch and driver, and `signed_permutation`); Helmholtz CH4.
   offset's bit for bit ref's `Transfer` (and `permuted`) times the factor, the pair bit for bit
   its naive loop (f64, f32), the build in parts bit for bit, and the acceptance: the tables'
   level call against ref's RCR within 2E (CH1.3d1's measure) on the 34 classes (real and
-  damped k), the 316 offsets and f32, the large degrees (k a 32–108) ignored, in release; and
+  damped k), the 316 offsets and f32 (k a = 16 ignored, in release), and the ignored large
+  degrees (k a 32–108; there, at E's floor, an offset above 2E against RCR passes if the
+  diagonal form lies no farther than max(2E, RCR's error) from ref's projection); and
   a level with each target's RCR pairs added after F → R in row order, bit for bit at every
   chunk size and within 2E of the level with every pair RCR.
 - Matrices are column-major with output = A · input. Every application accumulates

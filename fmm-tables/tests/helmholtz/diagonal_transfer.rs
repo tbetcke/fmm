@@ -7,7 +7,7 @@
 //!   samples, the pair against its naive loop, the build in parts, the level at every chunk
 //!   size: bit for bit (`to_bits`);
 //! - an offset's samples against ref's `Transfer` of the offset itself: the largest absolute
-//!   difference within 4 u of the largest sample;
+//!   difference within 4 ε (f64::EPSILON, 2u) of the largest sample;
 //! - the acceptance, an M2L against RCR: CH1.3d1's measure, the larger of the relative ℓ2
 //!   errors of φ̃ and ∇φ̃ after `leaf::l2p` at points of the target box (uniform and its
 //!   corners), the multipole by `leaf::p2m` of complex charges in the source box (uniform and
@@ -134,7 +134,7 @@ fn the_maps_are_refs_symmetries() {
 
 /// The trusted path sample by sample: the stored classes are ref's `Transfer` of the
 /// representative times the factor, every offset's samples ref's permuted transfer function
-/// times the factor bit for bit, and ref's transfer function of the offset itself within 4 u.
+/// times the factor bit for bit, and ref's transfer function of the offset itself within 4 ε.
 fn check_samples(k: C) {
     let p = 6;
     let level = Level::new(k, 1.0);
@@ -182,7 +182,7 @@ fn check_samples(k: C) {
             .fold(0.0f64, |m, (a, &b)| m.max((a - b * f).norm()));
         assert!(
             worst <= 4.0 * f64::EPSILON * largest,
-            "{o:?}: {:.2} u from ref's transfer function of the offset",
+            "{o:?}: {:.2} ε from ref's transfer function of the offset",
             worst / largest / f64::EPSILON
         );
     }
@@ -200,8 +200,10 @@ fn check_pair<T: RealScalar>() {
     let m2l = DiagonalM2l::<T>::build(p, k_hat(4.0, 0.0), &ALL);
     let n = m2l.samples();
     let to_t = |v: &[f64]| -> Vec<Complex<T>> {
-        v.chunks_exact(2)
-            .map(|z| Complex::new(T::from_f64(z[0]), T::from_f64(z[1])))
+        v.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[re, im]| Complex::new(T::from_f64(re), T::from_f64(im)))
             .collect()
     };
     let signature = to_t(&values(2 * n, 3));
@@ -287,7 +289,9 @@ fn the_build_in_parts_the_bytes_and_the_bounds() {
 fn in_box(centre: [f64; 3], n: usize, seed: u64) -> Vec<[f64; 3]> {
     let v = values(3 * n, seed);
     let mut points: Vec<[f64; 3]> = v
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|x| core::array::from_fn(|i| centre[i] + x[i]))
         .collect();
     for corner in 0..8 {
@@ -299,8 +303,10 @@ fn in_box(centre: [f64; 3], n: usize, seed: u64) -> Vec<[f64; 3]> {
 
 fn charges(n: usize, seed: u64) -> Vec<C> {
     values(2 * n, seed)
-        .chunks_exact(2)
-        .map(|z| C::new(z[0], z[1]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[re, im]| C::new(re, im))
         .collect()
 }
 
@@ -423,9 +429,19 @@ fn projected_local(p: usize, level: &Level<f64>, o: [i32; 3], m: &[f64]) -> Vec<
     local
 }
 
-/// The tables' M2L of each offset in `offsets` against ref's RCR, within 2E of its class, or
-/// where it is not (E's floor at large p, where f64 RCR rounds more than the diagonal form),
-/// within 2E plus RCR's own error against the projection; returns the largest measured/E.
+/// Where the comparison with RCR is read at the floor of the bound.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Floor {
+    /// Every offset against RCR within 2E: the acceptance.
+    Strict,
+    /// At large p, where f64 RCR rounds more than the diagonal form at E's floor: an offset
+    /// above 2E against RCR passes if the diagonal form is no farther than max(2E, RCR's error)
+    /// from a third path, ref's projection `direct::m2l`.
+    AgainstTheProjection,
+}
+
+/// The tables' M2L of each offset in `offsets` against ref's RCR, within 2E of its class
+/// (`floor` says how an offset above it is read).
 fn against_rcr<T: RealScalar>(
     ka: f64,
     eta: f64,
@@ -433,7 +449,8 @@ fn against_rcr<T: RealScalar>(
     offsets: &[[i32; 3]],
     constants: BoundConstants,
     seed: u64,
-) -> f64 {
+    floor: Floor,
+) {
     let k = k_hat(ka, eta);
     let level = Level::new(k, 1.0);
     let needed: Vec<usize> = {
@@ -467,29 +484,30 @@ fn against_rcr<T: RealScalar>(
         if std::env::var_os("DIAGONAL_DETAIL").is_some() {
             println!("  {o:?}: measured {measured:.3e}, E {e:.3e}");
         }
-        if measured > e / THETA {
-            // At E's floor the comparison measures RCR's rounding too (module documentation):
-            // RCR's own error, estimated against the projection, is added.
-            let projected = evaluate(
-                p,
-                &level,
-                centre,
-                &projected_local(p, &level, o, &m),
-                &targets,
-            );
-            let rcr_error = error(&reference, &projected);
-            println!(
-                "  {o:?} at the floor: against RCR {measured:.2e} > 2E = {:.2e}; RCR against the \
-                 projection {rcr_error:.2e}, the diagonal {:.2e}",
-                e / THETA,
-                error(&got, &projected)
-            );
-            if measured > e / THETA + rcr_error {
-                failures.push(format!(
-                    "{o:?}: {measured:.2e} > 2E + RCR's {rcr_error:.2e} = {:.2e}",
-                    e / THETA + rcr_error
-                ));
-            }
+        if measured <= e / THETA {
+            continue;
+        }
+        if floor == Floor::Strict {
+            failures.push(format!("{o:?}: {measured:.2e} > 2E = {:.2e}", e / THETA));
+            continue;
+        }
+        let projected = evaluate(
+            p,
+            &level,
+            centre,
+            &projected_local(p, &level, o, &m),
+            &targets,
+        );
+        let (diagonal, rcr) = (error(&got, &projected), error(&reference, &projected));
+        println!(
+            "  {o:?} at the floor: against RCR {measured:.2e} > 2E = {:.2e}; against the \
+             projection the diagonal form {diagonal:.2e}, RCR {rcr:.2e}",
+            e / THETA
+        );
+        if diagonal > (e / THETA).max(rcr) {
+            failures.push(format!(
+                "{o:?}: {diagonal:.2e} from the projection > max(2E, RCR's {rcr:.2e})"
+            ));
         }
     }
     println!(
@@ -497,7 +515,6 @@ fn against_rcr<T: RealScalar>(
         offsets.len()
     );
     assert!(failures.is_empty(), "k a = {ka}, p = {p}: {failures:?}");
-    worst
 }
 
 fn representatives() -> Vec<[i32; 3]> {
@@ -505,18 +522,26 @@ fn representatives() -> Vec<[i32; 3]> {
 }
 
 /// Acceptance (proposal §10 CH4.2): the tables' diagonal M2L against RCR on the 34 classes
-/// within E(l, c), for real k at k a = 2.83 (p = 7, S6's worst ratio) and 8, weakly damped k
-/// at k a = 8 (Im k = Re k / 10), p from §3.5's formula at 10⁻⁶; k a = 16 in release builds.
+/// within E(l, c) (measured ≤ 2E), for real k at k a = 2.83 (p = 7, S6's worst ratio) and 8,
+/// weakly damped k at k a = 8 (Im k = Re k / 10), p from §3.5's formula at 10⁻⁶.
 #[test]
 fn against_rcr_on_the_classes_within_the_bound() {
     let reps = representatives();
-    let mut cases = vec![(2.83, 0.0, 7), (8.0, 0.0, formula_degree(8.0, 1e-6))];
-    cases.push((8.0, 0.1, formula_degree(8.0, 1e-6)));
-    if !cfg!(debug_assertions) {
-        cases.push((16.0, 0.0, formula_degree(16.0, 1e-6)));
-    }
+    let cases = [
+        (2.83, 0.0, 7),
+        (8.0, 0.0, formula_degree(8.0, 1e-6)),
+        (8.0, 0.1, formula_degree(8.0, 1e-6)),
+    ];
     for (i, (ka, eta, p)) in cases.into_iter().enumerate() {
-        against_rcr::<f64>(ka, eta, p, &reps, BoundConstants::F64, 100 * i as u64);
+        against_rcr::<f64>(
+            ka,
+            eta,
+            p,
+            &reps,
+            BoundConstants::F64,
+            100 * i as u64,
+            Floor::Strict,
+        );
     }
 }
 
@@ -524,41 +549,81 @@ fn against_rcr_on_the_classes_within_the_bound() {
 #[test]
 fn every_offset_against_rcr_within_the_bound() {
     let offsets: Vec<[i32; 3]> = m2l_offsets().iter().map(|o| o.map(|x| x as i32)).collect();
-    against_rcr::<f64>(5.0, 0.0, 16, &offsets, BoundConstants::F64, 7000);
+    against_rcr::<f64>(
+        5.0,
+        0.0,
+        16,
+        &offsets,
+        BoundConstants::F64,
+        7000,
+        Floor::Strict,
+    );
 }
 
 /// f32 (the tables rounded from f64, the conversions in f32) against RCR in f64 within the
-/// f32 bound (C_T = 0.18, C₀ = 50, u = 2⁻²⁴): k a = 8, p = 16; k a ≈ 16, p = 30 in release.
+/// f32 bound (C_T = 0.18, C₀ = 50, u = 2⁻²⁴), within 2E: k a = 8, p = 16.
 #[test]
 fn f32_against_rcr_within_its_bound() {
     let reps = representatives();
-    against_rcr::<f32>(8.0, 0.0, 16, &reps, BoundConstants::F32, 9000);
-    if !cfg!(debug_assertions) {
-        against_rcr::<f32>(16.0, 0.0, 30, &reps, BoundConstants::F32, 9100);
-    }
+    against_rcr::<f32>(
+        8.0,
+        0.0,
+        16,
+        &reps,
+        BoundConstants::F32,
+        9000,
+        Floor::Strict,
+    );
 }
 
-/// As the acceptance at large degrees: k a = 32 (the formula at 10⁻⁸), 54 (p = 72, level 3 of
-/// W1 at kD = 500 calibrated, and 82, the formula at 10⁻⁶) on the 34 classes, and 108
-/// (p = 131, level 2) on the nearest, a middle and the farthest class. Release only.
+/// The acceptance's larger cases, within 2E: f64 at k a = 16 (the formula's p at 10⁻⁶), f32 at
+/// k a ≈ 16, p = 30 (D3's range). Release only (about 10 s).
+#[test]
+#[ignore = "larger degrees: run in release by hand"]
+fn against_rcr_at_k_a_16() {
+    let reps = representatives();
+    let p = formula_degree(16.0, 1e-6);
+    against_rcr::<f64>(16.0, 0.0, p, &reps, BoundConstants::F64, 300, Floor::Strict);
+    against_rcr::<f32>(
+        16.0,
+        0.0,
+        30,
+        &reps,
+        BoundConstants::F32,
+        9100,
+        Floor::Strict,
+    );
+}
+
+/// The acceptance at large degrees: k a = 32 (the formula at 10⁻⁸), 54 (p = 72, level 3 of W1
+/// at kD = 500 calibrated, and 82, the formula at 10⁻⁶) on the 34 classes, and 108 (p = 131,
+/// level 2) on the nearest, a middle and the farthest class. Here E is near its floor C₀ u
+/// on the far classes and f64 RCR rounds more than the diagonal form: an offset above 2E
+/// against RCR is read against the projection ([`Floor::AgainstTheProjection`]). Measured on
+/// the M6: 2.4 E against RCR on (2, 2, 2) at k a = 54, p = 82, and 3.7 E on (3, 3, 3) at
+/// k a = 108; the diagonal form nearer the projection than RCR on both
+/// (docs/helmholtz/tasks/CH4.2a.md). Release only (about 2 minutes).
 #[test]
 #[ignore = "large degrees: run in release by hand"]
 fn against_rcr_at_large_degrees() {
     let reps = representatives();
+    let floor = Floor::AgainstTheProjection;
     for (i, (ka, p)) in [(32.0, formula_degree(32.0, 1e-8)), (54.0, 72), (54.0, 82)]
         .into_iter()
         .enumerate()
     {
-        against_rcr::<f64>(ka, 0.0, p, &reps, BoundConstants::F64, 20_000 + i as u64);
+        against_rcr::<f64>(
+            ka,
+            0.0,
+            p,
+            &reps,
+            BoundConstants::F64,
+            20_000 + i as u64,
+            floor,
+        );
     }
-    against_rcr::<f64>(
-        108.0,
-        0.0,
-        131,
-        &[[0, 0, 2], [1, 2, 2], [3, 3, 3]],
-        BoundConstants::F64,
-        21_000,
-    );
+    let few = [[0, 0, 2], [1, 2, 2], [3, 3, 3]];
+    against_rcr::<f64>(108.0, 0.0, 131, &few, BoundConstants::F64, 21_000, floor);
 }
 
 // ---------------------------------------------------------------------------------------

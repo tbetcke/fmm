@@ -77,10 +77,12 @@ floor f64 RCR rounds up to 2.4× more than the diagonal form, which this reading
   offset, p = 5, f64 and f32; a class not stored panics.
 - Acceptance, against RCR within E(l, c): the tables' path (`Conversions` S → F, the pair,
   F → R through `m2l_level`, one source and one target) against ref's `rcr::m2l` in CH1.3d1's
-  measure, ≤ 2E, on the 34 classes at k a = 2.83 (p = 7), 8 and 16 (the formula's p at 10⁻⁶),
-  weakly damped k a = 8 (Im k = Re k / 10); the 316 offsets at k a = 5, p = 16; f32 at
-  k a ≈ 16, p = 30 within the f32 bound (C_T = 0.18, C₀ = 50, u = 2⁻²⁴). Ignored, in release:
-  k a = 32 (the formula at 10⁻⁸), 54 (p = 72 and 82) and 108 (p = 131) on the 34 classes.
+  measure, ≤ 2E, on the 34 classes at k a = 2.83 (p = 7) and 8 (the formula's p at 10⁻⁶),
+  weakly damped k a = 8 (Im k = Re k / 10); the 316 offsets at k a = 5, p = 16; f32 at k a = 8,
+  p = 16 within the f32 bound (C_T = 0.18, C₀ = 50, u = 2⁻²⁴). Ignored, in release: k a = 16
+  (f64 at the formula's p, f32 at p = 30), and the large degrees k a = 32 (the formula at
+  10⁻⁸) and 54 (p = 72 and 82) on the 34 classes and 108 (p = 131) on three (amended: the
+  34 classes at 108 would take the projection's minutes per class).
 - Determinism with the RCR pairs added after F → R: a small level of unit boxes (as CH4.1b's
   `case`, in level units) whose targets' V rows mix diagonal classes and RCR classes; the
   diagonal pairs through `m2l_level`, then each target's RCR pairs through `HelmholtzTables`'
@@ -89,9 +91,9 @@ floor f64 RCR rounds up to 2.4× more than the diagonal form, which this reading
   at points of each target box), within 2 max E of the diagonal classes used.
 - The build in parts: `build_on` on a map that runs the parts in reverse on three threads, bit
   for bit `build`; the bytes without building; `class_bounds` equal to ref's `bound` per class.
-- ref (M11): `m2l_against_rcr_at_the_degrees_of_kd_1000` (ignored, release): ref's diagonal
-  `m2l` against `rcr::m2l` within 2E at (k a, p) = (108, 131) and (216, 245) on the classes
-  (0, 0, 2), (1, 2, 2) and (3, 3, 3).
+- ref (M11): `m2l_at_the_degrees_of_kd_1000` (ignored, release): ref's diagonal `m2l` against
+  `rcr::m2l` at (k a, p) = (108, 131) and (216, 245) on the classes (0, 0, 2), (1, 2, 2) and
+  (3, 3, 3) (the reading at E's floor in "Results").
 
 ## Checks
 `/verify` (fmt, Clippy default and workspace all-targets, rustdoc `-D warnings`, the default and
@@ -117,7 +119,54 @@ None: correctness on the M6 (no timing; the build and level times are CH4.2b's).
   ref's own, whose sizes run in debug there.
 
 ## Pending runs
-None planned.
+None.
 
 ## Open questions
-None yet.
+For sign-off on the PR:
+1. The acceptance as read, with the reading at E's floor at large p ("Results"): within 2E
+   against RCR on every case CI runs and at k a ≤ 32; at k a = 54–108, where f64 RCR rounds
+   more than the diagonal form, a class above 2E passes if the diagonal form lies no farther
+   than max(2E, RCR's error) from the projection; at k a = 216 (p = 245) no f64 reference
+   resolves E's floor, and the test holds a regression limit (5·10⁻¹³). C₀ at p ≥ 72 stays
+   CH4.3's (review M12, its Also). Recommended: accept.
+2. W stored with RCR's factor folded in (rounded in f64, as the RCR tables fold it), not T̂
+   alone: one complex multiply-add per sample in the pair; CONVENTIONS §3.15 leaves the
+   storage to CH4.2 ("Not fixed here"). Recommended: accept.
+
+## Results
+- Built as planned: `nd_fmm_tables::helmholtz::diagonal::{DiagonalM2l, OffsetMap,
+  class_bounds, CLASS_COUNT}` (`diagonal/transfer.rs`), the tests
+  `fmm-tables/tests/helmholtz/diagonal_transfer.rs` (12 tests, 2 ignored), ref's ignored
+  `m2l_at_the_degrees_of_kd_1000`. Deviations: the f64 case at k a = 16 and the f32 case at
+  p = 30 are an ignored test (`against_rcr_at_k_a_16`), not a release-only branch of a CI test
+  (which CI never runs); k a = 108 on three classes, not 34.
+- Within 2E against RCR (largest measured/E, the M6, release): k a 2.83 / p 7: 0.55; 8 / 27:
+  0.45; damped 8 / 27: 0.08; 16 / 36: 0.64; the 316 offsets at 5 / 16: 0.77; f32 8 / 16: 0.14,
+  16 / 30: 0.09; 32 / 61: 1.18; 54 / 72: 1.77. The mixed level (5 targets, classes with
+  |d|² ≥ 9 diagonal, the rest RCR after F → R): 1.5·10⁻¹⁵ against the all-RCR level, max E
+  2.3·10⁻¹⁴; every chunk size bit for bit.
+- At E's floor (E ≈ C₀ u = 2.2·10⁻¹⁴ plus a small Hankel term):
+  - tables, k a = 54, p = 82, (2, 2, 2): 2.42 E against RCR; against the projection
+    `direct::m2l` the diagonal form 3.2·10⁻¹⁴, RCR 7.8·10⁻¹⁴;
+  - tables, k a = 108, p = 131, (3, 3, 3): 3.7 E against RCR; the projection: the diagonal
+    form 7.5·10⁻¹⁴, RCR 1.37·10⁻¹³;
+  - ref (M11), k a = 108, p = 131: (0, 0, 2) 0.17 E, (1, 2, 2) 0.78 E, (3, 3, 3) 2.86 E
+    against RCR; the projection: the diagonal form 6.9, 4.7, 6.3·10⁻¹⁴, RCR 6.3, 5.3,
+    10.6·10⁻¹⁴;
+  - ref (M11), k a = 216, p = 245: 0.70, 1.29, 5.84 E (4.2·10⁻¹⁴, 5.3·10⁻¹⁴, 2.3·10⁻¹³)
+    against RCR. The projection at p = 245 took over 20 minutes per class (the run with it
+    stopped at the 30-minute limit after (0, 0, 2)) and rounds more than either path there:
+    on (0, 0, 2) the diagonal form and RCR 4.2·10⁻¹⁴ apart, each 2.6·10⁻¹³ from the
+    projection. So at p = 245 no f64 reference resolves the floor; the test holds a
+    regression limit of 5·10⁻¹³ (about 2,300 u, twice the largest measured).
+
+  Every difference is at most 2.3·10⁻¹³, far below any tolerance the diagonal form serves
+  (ε ≥ 10⁻¹⁰); E's floor C₀ = 200 is what is not confirmed at p ≥ 82, which CH4.3's Also
+  (review M12: C₀ at p ≥ 72 against a double-double reference, or raised) answers.
+- The self-review (a subagent on the plan, the proposal's §2 and §10 row, the branch) found no
+  defect in `transfer.rs` and nothing out of scope; fixed in the branch: the fallback at E's
+  floor had applied to the cases CI runs too (now strict 2E there, the fallback only in the
+  ignored large-degree tests), a circular allowance at k a = 216 (now a stated regression
+  limit), the criterion against the projection (now max(2E, RCR's error), not 2E plus it),
+  the k a = 16 cases moved to an ignored test, the test's name in the docs, "4 u" written as
+  4 ε.

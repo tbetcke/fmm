@@ -432,20 +432,23 @@ fn m2l_against_rcr_within_the_bound_at_large_degrees() {
 /// Review 2026-11-19, M11: the trusted path at the degrees H4 gates on, on the nearest class,
 /// a middle one and the farthest, k a = 108 (level 2 of W1 at kD = 500, p = 131, calibrated at
 /// 10⁻⁶) and 216 (level 2 at kD = 1000, p = 245; fmm-validate/results/helmholtz-ch4-1b.md).
-/// There E is at its floor C₀ u on every class, and every f64 reference rounds about as much
-/// as the diagonal form (review 2026-11-19, M12; docs/helmholtz/tasks/CH4.2a.md). So the
-/// diagonal form is checked against RCR within 2E plus RCR's own error against the projection
-/// `direct::m2l` (a third path), where the projection is formed: at k a = 108, and at 216 with
-/// `DIAGONAL_PROJECT_ALL` set (the projection at p = 245 takes about 20 minutes per class).
-/// Without it, at k a = 216, within 2E plus `FLOOR_LIMIT`. Whether C₀ holds at p ≥ 72 is
-/// CH4.3's (its Also, review M12). Release only, about 5 minutes.
+/// There E is near its floor C₀ u and the f64 references round about as much as the diagonal
+/// form (review 2026-11-19, M12; docs/helmholtz/tasks/CH4.2a.md). A class passes within 2E
+/// against RCR, or else:
+/// - at k a = 108, if the diagonal form lies no farther than max(2E, RCR's error) from a third
+///   path, the projection `direct::m2l` (measured: (3, 3, 3) 2.9 E against RCR, the diagonal
+///   form 6.3·10⁻¹⁴ from the projection and RCR 1.06·10⁻¹³);
+/// - at k a = 216, if it lies within [`REGRESSION_LIMIT`] of RCR: a limit, not a bound. The
+///   projection takes over 20 minutes per class at p = 245 and rounds more than either path
+///   there ((0, 0, 2): the diagonal form and RCR 4.2·10⁻¹⁴ apart, each 2.6·10⁻¹³ from it), so
+///   no f64 reference resolves the floor; measured against RCR 0.70, 1.29 and 5.84 E
+///   (2.3·10⁻¹³ on (3, 3, 3)). Whether C₀ holds at p ≥ 72 is CH4.3's, against a double-double
+///   reference (its Also, review M12).
+///
+/// Release only, about 5 minutes on the M6.
 #[test]
 #[ignore = "large degrees: run in release by hand (about 5 minutes)"]
 fn m2l_at_the_degrees_of_kd_1000() {
-    /// An absolute allowance for RCR's rounding at p = 245 without the projection, about
-    /// 4,500 u: three times the largest difference measured there (2.3·10⁻¹³ on (3, 3, 3)).
-    const FLOOR_LIMIT: f64 = 1e-12;
-    let all = std::env::var_os("DIAGONAL_PROJECT_ALL").is_some();
     for (ka, p) in [(108.0, 131), (216.0, 245)] {
         let k = wavenumber(ka, 0.0);
         let level = Level::new(k, HALF);
@@ -465,7 +468,15 @@ fn m2l_at_the_degrees_of_kd_1000() {
             );
             let e = bound(k, distance(o), circumradius(), p, BoundConstants::F64);
             let measured = error(&by_diagonal, &by_rcr);
-            let allowance = if p == 131 || all {
+            println!(
+                "k a = {ka}, p = {p}, {o:?}: against RCR {measured:.2e}, E {e:.2e}, \
+                 measured/E {:.2}",
+                measured / e
+            );
+            if measured <= e / THETA {
+                continue;
+            }
+            if p == 131 {
                 let mut ws = Workspace::new(p);
                 let mut projected = vec![0.0; m.len()];
                 direct::m2l(
@@ -479,31 +490,29 @@ fn m2l_at_the_degrees_of_kd_1000() {
                     &mut projected,
                 );
                 let projected = evaluate(p, &level, o, &projected, &case.targets);
-                let rcr_error = error(&by_rcr, &projected);
+                let (diagonal, rcr) = (error(&by_diagonal, &projected), error(&by_rcr, &projected));
                 println!(
-                    "k a = {ka}, p = {p}, {o:?}: against the projection the diagonal {:.2e}, \
-                     RCR {rcr_error:.2e}",
-                    error(&by_diagonal, &projected)
+                    "  against the projection: the diagonal form {diagonal:.2e}, RCR {rcr:.2e}"
                 );
-                rcr_error
-            } else {
-                FLOOR_LIMIT
-            };
-            println!(
-                "k a = {ka}, p = {p}, {o:?}: against RCR {measured:.2e}, E {e:.2e}, \
-                 measured/E {:.2}, allowance {allowance:.2e}",
-                measured / e
-            );
-            if measured > e / THETA + allowance {
+                if diagonal > (e / THETA).max(rcr) {
+                    failures.push(format!(
+                        "{o:?}: {diagonal:.2e} from the projection > max(2E, RCR's {rcr:.2e})"
+                    ));
+                }
+            } else if measured > REGRESSION_LIMIT {
                 failures.push(format!(
-                    "{o:?}: {measured:.2e} > 2E + {allowance:.2e} = {:.2e}",
-                    e / THETA + allowance
+                    "{o:?}: {measured:.2e} against RCR > the limit {REGRESSION_LIMIT:.0e}"
                 ));
             }
         }
         assert!(failures.is_empty(), "k a = {ka}, p = {p}: {failures:?}");
     }
 }
+
+/// The largest difference against RCR that [`m2l_at_the_degrees_of_kd_1000`] allows at
+/// k a = 216 (p = 245) above 2E: about twice the largest measured, 2.3·10⁻¹³ (about 1,000 u);
+/// a regression limit, not a bound.
+const REGRESSION_LIMIT: f64 = 5e-13;
 
 /// All 316 offsets through their class's permuted transfer function, against RCR within
 /// 2E, at k a = 5 and p = 16.
