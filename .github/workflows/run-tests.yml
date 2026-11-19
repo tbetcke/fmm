@@ -102,17 +102,22 @@ jobs:
       - name: Format
         run: cargo fmt -- --check
 
+      # Every target of the default members: the libraries, examples, tests and benches
+      # (review 2026-11-19, U4; the H1 gate). The tests were linted only by the local
+      # strict check before.
       - name: Clippy
-        run: |
-          cargo clippy -- -D warnings
-          cargo clippy --examples -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Run unit tests
         env:
           CARGO_PROFILE_DEV_OPT_LEVEL: "1"
         run: RUST_MIN_STACK=8388608 cargo test
 
+      # rustdoc's warnings (broken intra-doc links among them) fail the job (review
+      # 2026-11-19, U5; the H1 gate).
       - name: Build docs
+        env:
+          RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps
 
   # The licences of the default members' dependency graph, with their default features
@@ -189,7 +194,12 @@ jobs:
   # (the bundler's build-script run) and, from CubeCL's profiling log of the test run
   # (Phase 4S T10), the kernel compilation inside the tests. Since Phase 4S T2
   # (decision 6) the job also type-checks CUDA (nd-fmm-kernels and nd-fmm-exec); CUDA
-  # never runs in CI.
+  # never runs in CI. Since the H1 gate (review 2026-11-19, T4) it also builds nd-fmm-exec's
+  # tests with `--features cpu` in release, so the device path's test code compiles on every
+  # pull request, and runs the device operator tests (`tests/operator`'s `device_*`: the
+  # device's P2P, leaf operators, translations, M2L and rotation M2L against the host's),
+  # which need no MPI initialisation. The other device tests (mpi_exec's device repeats,
+  # device_tune, the ignored gates) stay checks by hand (fmm-exec/CLAUDE.md).
   run-tests-kernels:
     name: run-tests-kernels (CPU runtime)
     runs-on: ubuntu-latest
@@ -255,6 +265,9 @@ jobs:
       - name: Type-check nd-fmm-exec with CUDA
         run: cargo check -p nd-fmm-exec --features cuda
 
+      - name: Build nd-fmm-exec's tests on the CPU runtime
+        run: cargo test -p nd-fmm-exec --features cpu --release --no-run
+
       - name: Build the tests
         run: cargo test -p nd-fmm-kernels --features cpu --release --no-run --timings
 
@@ -281,6 +294,9 @@ jobs:
 
       - name: Kernel compilation measurement (CubeCL profiling log of the test run)
         run: awk -f fmm-kernels/tools/compile_times.awk "$RUNNER_TEMP/cubecl.log"
+
+      - name: Run nd-fmm-exec's device operator tests on the CPU runtime
+        run: RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test operator device_
 
   # The MPI-owning test executables and the nd-octree MPI examples at 2 and 4 ranks
   # (Phase 5 T3; README decision 4), one job per rank count, in parallel (2026-10-31:
