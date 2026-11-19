@@ -203,13 +203,19 @@ On the branch:
   the milestones closed, the task just done, what comes next. Rewrite it, do not append;
 - give every follow-up that a sign-off or the work creates ("a follow-up before H4", "left
   to CH4.3") a roadmap line in the same PR: a new task with *Done when* and *Needs*, or a
-  sentence in the task it belongs to. The progress entry's follow-ups name that line;
+  sentence in the task it belongs to. The progress entry's follow-ups name that line. A
+  follow-up that names another task ("relevant to CH2.3") becomes an "Also" on that task's
+  line, and a decision signed off with "a later task" gets that task now, named in the
+  decision table (the H1 gate: CH1.3c's finding never reached CH2.3, D5's dipole task never
+  existed);
 - append to `docs/helmholtz/progress.md`, using its template;
 - where the work shows the proposal wrong, do not edit it silently: put the correction in
   the PR as a question for sign-off;
 - when a signed-off answer amends the proposal, edit it in the same PR with an inline
-  "(amended at <ID>)" and a line in its Appendix A: "Amended at <ID>, <YYYY-MM-DD>", the
-  report, the PR and the user's words, and the sections changed. CH0.4, CH6.2h, CH6.1g and
+  "(amended at <ID>)" and a line in its Appendix A. That includes an answer worded "for the
+  proposal's next draft": nothing waits for a later draft (the H1 gate applied CH1.4's
+  question 3, signed off three weeks before). The Appendix A line reads "Amended at <ID>,
+  <YYYY-MM-DD>", the report, the PR and the user's words, and the sections changed. CH0.4, CH6.2h, CH6.1g and
   CH6.1h amended it inline only, and the H6 gate added their lines.
 
 Commit as `Helmholtz <ID>: roadmap and progress`.
