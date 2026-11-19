@@ -339,21 +339,19 @@
 //!   runs the overlapped stages with the same events; design §13, question 10); **device
 //!   errors and tuning on several ranks** runs the injected error with overlap off and on.
 //!
-//! The strategy rule on the node (Phase 5N T4, decisions 5 and 7; docs/design/node-m2l.md
-//! §4, §5). Since T4 `Auto` resolves with the ranks per node (`M2lStrategy::resolve_on_node`),
-//! so the one-rank reference of every scenario (`check_one_rank`) is built with the strategy
-//! the multi-rank `Fmm` resolved (`Fmm::strategy`): Phase 5's guarantee, per resolved
-//! strategy. Error measures: exact equality of strategies, counts, outcomes, tables and bit
-//! patterns, agreed on every rank.
-//! - **the strategy rule on the node**: the cube, N = 600, f64 p = 4 (1.7 MB of dense tables
-//!   per rank), shared by rank. The ranks per node of `Fmm::threading` equal the largest
-//!   `split_shared` size, which the test computes itself; under `Auto` with the default
-//!   budget and with a budget of one rank's dense tables (Dense on one rank per node,
-//!   Rotation on two or more) every rank resolves the strategy of the rule for those ranks
-//!   per node, with the same reason (`ThreadingReport::m2l`), and through
+//! The strategy rule and the tables on the node (Phase 5N T4, decision 7;
+//! docs/design/node-m2l.md §5; the rule of Phase 6 T11, `M2lStrategy::resolve_on_node`). The
+//! one-rank reference of every scenario (`check_one_rank`) is built with the strategy the
+//! multi-rank `Fmm` resolved (`Fmm::strategy`): Phase 5's guarantee, per resolved strategy.
+//! Error measures: exact equality of strategies, counts, outcomes, tables and bit patterns,
+//! agreed on every rank.
+//! - **the strategy rule on the node**: the cube, N = 600, f64 p = 4, shared by rank. The
+//!   ranks per node of `Fmm::threading` equal the largest `split_shared` size, which the
+//!   test computes itself; under `Auto` every rank resolves `Batched`, the strategy of the
+//!   rule at f64 p = 4, with the same reason (`ThreadingReport::m2l`), and through
 //!   `evaluate_threaded` the output is bit for bit the one-rank `Fmm` of that strategy; a
-//!   named `Dense` with a budget of zero and a named `Rotation` stay as named
-//!   (`StrategyChoice::Named`). With a cold table cache (a fresh directory, f64 p = 4,
+//!   named `Dense` and a named `Rotation` stay as named (`StrategyChoice::Named`). With a
+//!   cold table cache (a fresh directory, f64 p = 4,
 //!   `Dense` and `Rotation`) the lowest rank of each node reports every family `Built`,
 //!   and every other rank `Loaded` (decision 7: one rank per node first, the others after
 //!   the node's barrier), so on one node the directory is filled once; every rank then
@@ -4704,8 +4702,8 @@ fn same_on_every_rank(value: u64, comm: &SimpleCommunicator) -> bool {
     least == most
 }
 
-/// The rule of `M2lStrategy::Auto` on the node and the table loading with a cache (Phase 5N
-/// T4; module documentation, "The strategy rule on the node").
+/// The rule of `M2lStrategy::Auto` on several ranks and the table loading with a cache
+/// (module documentation, "The strategy rule and the tables on the node").
 fn strategy_on_the_node(comm: &SimpleCommunicator) {
     let rank = comm.rank();
     let p = 4;
@@ -4728,38 +4726,24 @@ fn strategy_on_the_node(comm: &SimpleCommunicator) {
     let first_on_node = node.rank() == 0;
     drop(node);
 
-    let rank_bytes = NodeContext::one_rank::<f64>(p).dense_rank_bytes();
-    let default = M2lStrategy::AUTO_DENSE_NODE_BYTES;
     let mut lines = Vec::new();
-    for (budget, named) in [
-        (default, M2lStrategy::Auto),
-        (rank_bytes, M2lStrategy::Auto),
-        (0, M2lStrategy::Dense),
-        (usize::MAX, M2lStrategy::Rotation),
-    ] {
-        let builder = FmmBuilder::<f64>::new(p)
-            .strategy(named)
-            .dense_node_budget(budget);
+    for named in [M2lStrategy::Auto, M2lStrategy::Dense, M2lStrategy::Rotation] {
+        let builder = FmmBuilder::<f64>::new(p).strategy(named);
         let (fmm, _) =
             evaluate_threaded(&builder, sets, &local_charges, &[], comm).expect("the FMM builds");
         let report = fmm.threading();
         assert_eq!(report.ranks_per_node, ranks_per_node, "rank {rank}");
-        let node_context = NodeContext::new(p, 8, ranks_per_node, budget);
         let want = if named == M2lStrategy::Auto {
-            M2lStrategy::Auto.choose(&node_context)
+            M2lStrategy::Auto.choose(&NodeContext::new(p, 8))
         } else {
             StrategyChoice::Named(named)
         };
-        assert_eq!(report.m2l, Some(want), "rank {rank}, budget {budget}");
+        assert_eq!(report.m2l, Some(want), "rank {rank}, {named:?}");
         assert_eq!(fmm.strategy(), want.strategy(), "rank {rank}");
         assert_ne!(fmm.strategy(), M2lStrategy::Auto);
-        if named == M2lStrategy::Auto && budget == rank_bytes {
-            // Since Phase 6 T11 the budget does not enter: Batched at f64 p = 4.
-            assert_eq!(
-                fmm.strategy(),
-                M2lStrategy::Batched,
-                "one rank's tables as the budget"
-            );
+        if named == M2lStrategy::Auto {
+            // The rule of Phase 6 T11: Batched at f64 p = 4.
+            assert_eq!(fmm.strategy(), M2lStrategy::Batched, "rank {rank}");
         }
         let agreed = same_on_every_rank(u64::from(strategy_code(fmm.strategy())), comm)
             && same_on_every_rank(report.ranks_per_node as u64, comm)
@@ -4768,7 +4752,7 @@ fn strategy_on_the_node(comm: &SimpleCommunicator) {
             agreed,
             "rank {rank}: the ranks resolve different strategies"
         );
-        lines.push(format!("{named:?}, budget {budget}: {}", want));
+        lines.push(format!("{named:?}: {want}"));
     }
 
     // A cold cache: a fresh directory, named by rank 0's process id.

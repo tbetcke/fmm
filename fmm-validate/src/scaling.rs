@@ -22,10 +22,9 @@
 //!   of the strategy the run resolved or of another ([`Settings::reference_strategy`],
 //!   Phase 5N T3);
 //! - the M2L strategy as resolved and why (Phase 5N T4): under `Auto` the rule of
-//!   `M2lStrategy::resolve_on_node` with the agreed ranks per node and the node budget
-//!   ([`Settings::dense_node_budget`]; the harness sets it per machine class), in the
-//!   threading line of the report and as `requested`, `budget_mb`, `dense_rank_mb` and
-//!   `dense_node_mb` in the summary;
+//!   `M2lStrategy::resolve_on_node`, in the threading line of the report and as `requested`
+//!   in the summary, with the dense tables' bytes per rank and per node (`dense_rank_mb`,
+//!   `dense_node_mb`, whatever the strategy);
 //! - optionally the time of every level call by operator kind ([`Settings::kinds`], Phase
 //!   5N T3): per rank and kind the median over the evaluations ([`KINDS`]), and the M2L
 //!   and downward time per V pair of the slowest rank;
@@ -397,9 +396,6 @@ pub struct Settings {
     pub threads: usize,
     /// The M2L strategy (`FmmBuilder::strategy`; the default `Auto`).
     pub strategy: M2lStrategy,
-    /// The node budget of `Auto` in bytes (`FmmBuilder::dense_node_budget`; Phase 5N T4),
-    /// or the library's default (`M2lStrategy::AUTO_DENSE_NODE_BYTES`, 64 MB) if `None`.
-    pub dense_node_budget: Option<usize>,
     /// The multiply–add mode of the batched M2L (`FmmBuilder::m2l_mul_add`, Phase 6 T2),
     /// or the library's default of p if `None` (`fmm::default_m2l_mul_add`, Phase 6 T11:
     /// fused from p = 6): only `M2lStrategy::Batched` uses it.
@@ -498,7 +494,6 @@ impl Settings {
             p,
             threads: 1,
             strategy: M2lStrategy::Auto,
-            dense_node_budget: None,
             m2l_mul_add: None,
             plane_wave_split: PlaneWaveSplit::Auto,
             overlap: Overlap::Off,
@@ -2109,8 +2104,8 @@ fn bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
     bits
 }
 
-/// The builder of `settings`: the harness's tree, gradients, the threads, the strategy, its
-/// node budget and the batched M2L's mode, the P2P kernel, overlap, the kind timings, the second cut and
+/// The builder of `settings`: the harness's tree, gradients, the threads, the strategy, the
+/// batched M2L's mode, the P2P kernel, overlap, the kind timings, the second cut and
 /// its constants.
 fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) -> FmmBuilder<T> {
     let mut builder = FmmBuilder::<T>::new(settings.p)
@@ -2128,9 +2123,6 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
         } else {
             KindTiming::Off
         });
-    if let Some(bytes) = settings.dense_node_budget {
-        builder = builder.dense_node_budget(bytes);
-    }
     builder = builder
         .work_cut(settings.work_cut)
         .multipole_routing(settings.routing)
@@ -3166,11 +3158,12 @@ impl Report {
     }
 
     /// The private dense tables of `ranks` ranks at this p and precision, in bytes:
-    /// `ranks` × 332 (p + 1)⁴ values (`NodeContext::dense_node_bytes`), whatever the
+    /// `ranks` × 332 (p + 1)⁴ values (`NodeContext::dense_rank_bytes`), whatever the
     /// strategy.
     fn dense_bytes(&self, ranks: usize) -> f64 {
         let value_bytes = if self.precision == "f32" { 4 } else { 8 };
-        NodeContext::new(self.settings.p, value_bytes, ranks, 0).dense_node_bytes() as f64
+        let rank = NodeContext::new(self.settings.p, value_bytes).dense_rank_bytes();
+        ranks.saturating_mul(rank) as f64
     }
 
     /// The heading of the report: the problem, the ranks and the settings.
@@ -3227,14 +3220,6 @@ impl Report {
                     ),
                     format!("p2p={}", self.p2p),
                     format!("leaf={}", self.settings.leaf_points()),
-                    format!(
-                        "budget_mb={}",
-                        mb(self
-                            .settings
-                            .dense_node_budget
-                            .unwrap_or(M2lStrategy::AUTO_DENSE_NODE_BYTES)
-                            as f64)
-                    ),
                     format!("dense_rank_mb={}", mb(self.dense_bytes(1))),
                     format!(
                         "dense_node_mb={}",

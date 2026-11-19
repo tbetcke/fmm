@@ -75,10 +75,6 @@
 //! - `--split auto|parents|children` how the plane-wave M2L splits merge and shift over
 //!   the pool (`FmmBuilder::plane_wave_split`, Helmholtz CH6.2i; default `auto`, the
 //!   library's; the summary's `split`);
-//! - `--budget MB` the node budget in MB of 10⁶ bytes (`FmmBuilder::dense_node_budget`;
-//!   the library's 64 if not given; Phase 5N T4: `tools/scaling/run.sh` passes 56 on the
-//!   M3 Max and 96 on locust and Kathleen; reported only since Phase 6 T11, whose rule of
-//!   `auto` does not read it);
 //! - `--overlap off|on|both` (both: one build, the evaluations alternating, a block each);
 //! - `--input share|rank0|owners|ranges` (share; `ranges`: contiguous index ranges, found
 //!   in O(N/P) time, for N above 10⁹);
@@ -191,7 +187,6 @@ fn arguments() -> Arguments {
             "--p" => s.p = number(),
             "--threads" => s.threads = number().max(1),
             "--strategy" => s.strategy = strategy(&flag, &value),
-            "--budget" => s.dense_node_budget = Some(number() * 1_000_000),
             "--p2p" => {
                 s.p2p = value
                     .parse::<P2pChoice>()

@@ -15,7 +15,7 @@ use crate::common::{
 };
 
 /// The rule of Phase 6 T11, restated: PlaneWave from f64 p = 7 and f32 p = 8, Batched
-/// below, whatever the ranks per node and the budget.
+/// below.
 fn rule(p: usize, value_bytes: usize) -> M2lStrategy {
     let threshold = if value_bytes == 4 { 8 } else { 7 };
     if p >= threshold {
@@ -32,40 +32,32 @@ fn auto_resolves_by_the_node_rule() {
     assert_eq!(M2lStrategy::AUTO_PLANE_WAVE_MIN_P_F32, 8);
     assert_eq!(M2lStrategy::auto_plane_wave_min_p(8), 7);
     assert_eq!(M2lStrategy::auto_plane_wave_min_p(4), 8);
-    assert_eq!(M2lStrategy::AUTO_DENSE_RANK_BYTES, 9_000_000);
-    assert_eq!(M2lStrategy::AUTO_DENSE_NODE_BYTES, 64_000_000);
     assert_eq!(M2lStrategy::default(), M2lStrategy::Auto);
-    // Both precisions, p = 0–20, 1–128 ranks per node, the default budget, the harness's
-    // 96 MB, and budgets at the edges: the ranks and the budget do not enter.
+    // Both precisions, p = 0–20.
     let mut cells = 0;
     for value_bytes in [4, 8] {
         for p in 0..=20 {
-            for ranks in 1..=128 {
-                for budget in [0, 1, 48_000_000, 64_000_000, 96_000_000, usize::MAX] {
-                    let node = NodeContext::new(p, value_bytes, ranks, budget);
-                    let got = M2lStrategy::Auto.resolve_on_node(&node);
-                    assert_ne!(got, M2lStrategy::Auto);
-                    assert_eq!(
-                        got,
-                        rule(p, value_bytes),
-                        "p = {p}, {value_bytes}-byte values, {ranks} ranks per node, budget \
-                         {budget}"
-                    );
-                    assert_eq!(M2lStrategy::Auto.choose(&node).strategy(), got);
-                    // A named strategy is never overridden.
-                    for strategy in STRATEGIES {
-                        assert_eq!(strategy.resolve_on_node(&node), strategy);
-                        assert_eq!(strategy.choose(&node), StrategyChoice::Named(strategy));
-                    }
-                    cells += 1;
-                }
+            let node = NodeContext::new(p, value_bytes);
+            let got = M2lStrategy::Auto.resolve_on_node(&node);
+            assert_ne!(got, M2lStrategy::Auto);
+            assert_eq!(
+                got,
+                rule(p, value_bytes),
+                "p = {p}, {value_bytes}-byte values"
+            );
+            assert_eq!(M2lStrategy::Auto.choose(&node).strategy(), got);
+            // A named strategy is never overridden.
+            for strategy in STRATEGIES {
+                assert_eq!(strategy.resolve_on_node(&node), strategy);
+                assert_eq!(strategy.choose(&node), StrategyChoice::Named(strategy));
             }
+            cells += 1;
         }
     }
-    assert_eq!(cells, 2 * 21 * 128 * 6);
+    assert_eq!(cells, 2 * 21);
 
     // The table sizes of node-m2l.md §2.2, still reported.
-    let rank_mb = |p, b| NodeContext::new(p, b, 1, 0).dense_rank_bytes() as f64 / 1e6;
+    let rank_mb = |p, b| NodeContext::new(p, b).dense_rank_bytes() as f64 / 1e6;
     for (p, b, mb) in [
         (3, 8, 0.68),
         (6, 8, 6.38),
@@ -81,18 +73,17 @@ fn auto_resolves_by_the_node_rule() {
             rank_mb(p, b)
         );
     }
-    let default = M2lStrategy::AUTO_DENSE_NODE_BYTES;
 
     // The reason, as the threading report shows it.
-    let text = |p, b, ranks, budget| {
+    let text = |p, b| {
         M2lStrategy::Auto
-            .choose(&NodeContext::new(p, b, ranks, budget))
+            .choose(&NodeContext::new(p, b))
             .to_string()
     };
-    assert_eq!(text(8, 4, 12, default), "Auto → PlaneWave: f32 p = 8 ≥ 8");
-    assert_eq!(text(7, 4, 12, default), "Auto → Batched: f32 p = 7 < 8");
-    assert_eq!(text(6, 8, 4, default), "Auto → Batched: f64 p = 6 < 7");
-    assert_eq!(text(7, 8, 1, 96_000_000), "Auto → PlaneWave: f64 p = 7 ≥ 7");
+    assert_eq!(text(8, 4), "Auto → PlaneWave: f32 p = 8 ≥ 8");
+    assert_eq!(text(7, 4), "Auto → Batched: f32 p = 7 < 8");
+    assert_eq!(text(6, 8), "Auto → Batched: f64 p = 6 < 7");
+    assert_eq!(text(7, 8), "Auto → PlaneWave: f64 p = 7 ≥ 7");
     assert_eq!(
         StrategyChoice::Named(M2lStrategy::Classes).to_string(),
         "Classes (named)"
@@ -102,14 +93,7 @@ fn auto_resolves_by_the_node_rule() {
         "Auto → Dense (the device path)"
     );
 
-    // The deprecated one-rank f64 form agrees with the rule.
-    #[allow(deprecated)]
-    for p in 0..=20 {
-        assert_eq!(M2lStrategy::Auto.resolve(p), rule(p, 8), "p = {p}");
-        assert_eq!(M2lStrategy::AUTO_DENSE_MAX_P, 8);
-    }
-
-    // The tables resolve `Auto` on one rank in their own precision, and hold the families
+    // The tables resolve `Auto` in their own precision, and hold the families
     // of the resolved strategy only.
     for (p, strategy, kinds) in [
         (
@@ -142,10 +126,7 @@ fn auto_resolves_by_the_node_rule() {
         Tables::<f64>::build(7, M2lStrategy::Auto).strategy(),
         M2lStrategy::PlaneWave
     );
-    assert_eq!(
-        NodeContext::one_rank::<f32>(8),
-        NodeContext::new(8, 4, 1, default)
-    );
+    assert_eq!(NodeContext::one_rank::<f32>(8), NodeContext::new(8, 4));
 }
 
 #[test]
@@ -221,17 +202,15 @@ fn batched_holds_the_dense_tables_and_names_its_kernel() {
         [TableKind::M2m, TableKind::L2l, TableKind::M2l]
     );
     // Named, never overridden; `Auto`'s choice at this degree (Phase 6 T11).
-    for ranks in [1, 12, 128] {
-        let node = NodeContext::new(p, 8, ranks, 64_000_000);
-        assert_eq!(
-            M2lStrategy::Batched.choose(&node),
-            StrategyChoice::Named(M2lStrategy::Batched)
-        );
-        assert_eq!(
-            M2lStrategy::Auto.resolve_on_node(&node),
-            M2lStrategy::Batched
-        );
-    }
+    let node = NodeContext::new(p, 8);
+    assert_eq!(
+        M2lStrategy::Batched.choose(&node),
+        StrategyChoice::Named(M2lStrategy::Batched)
+    );
+    assert_eq!(
+        M2lStrategy::Auto.resolve_on_node(&node),
+        M2lStrategy::Batched
+    );
     // One pair at a time it applies the dense tables: every translation bit for bit.
     let n = len(p);
     let mut rng = SplitMix64::new(0xba7c);

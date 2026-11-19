@@ -579,12 +579,9 @@ impl CostModel {
     pub fn calibrated(strategy: M2lStrategy, value_bytes: usize, p: usize) -> Self {
         let strategy = match strategy {
             M2lStrategy::Classes => M2lStrategy::Dense,
-            M2lStrategy::Auto => M2lStrategy::Auto.resolve_on_node(&NodeContext::new(
-                p,
-                value_bytes,
-                1,
-                M2lStrategy::AUTO_DENSE_NODE_BYTES,
-            )),
+            M2lStrategy::Auto => {
+                M2lStrategy::Auto.resolve_on_node(&NodeContext::new(p, value_bytes))
+            }
             named => named,
         };
         let candidates = |bytes: usize| {

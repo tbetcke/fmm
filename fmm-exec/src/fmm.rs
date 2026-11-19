@@ -66,14 +66,13 @@
 //! 6. Takes the points of every local leaf from the redistributions, the radius of every
 //!    local leaf, and the output order (local).
 //! 7. All-reduces the largest number of sources in a leaf, which sizes the P2P scratch,
-//!    and the largest number of ranks per node (one all-reduce of two maxima); with a
-//!    device backend resolves the M2L strategy of [`M2lStrategy::Auto`] for the device
-//!    (Phase 4 T12: from the tuning cache, by timing rotation against dense, or by the
-//!    static rule; on several ranks with a tuning cache rank 0's, broadcast, Phase 5 T8),
-//!    and otherwise by the host rule ([`M2lStrategy::resolve_on_node`]; since Phase 6
-//!    T11 by p and the precision, the agreed ranks per node and
-//!    [`FmmBuilder::dense_node_budget`] only reported), so every rank resolves the same
-//!    strategy;
+//!    and the largest number of ranks per node, reported in [`Fmm::threading`] (one
+//!    all-reduce of two maxima); with a device backend resolves the M2L strategy of
+//!    [`M2lStrategy::Auto`] for the device (Phase 4 T12: from the tuning cache, by timing
+//!    rotation against dense, or by the static rule; on several ranks with a tuning cache
+//!    rank 0's, broadcast, Phase 5 T8), and otherwise by the host rule
+//!    ([`M2lStrategy::resolve_on_node`]: p and the precision), so every rank resolves the
+//!    same strategy;
 //!    builds or loads the tables (with a cache, the lowest rank of each node first, the
 //!    others after a barrier of the node's communicator: [`FmmBuilder::table_cache`]), the
 //!    host operator, and the evaluator with the per-leaf counts (its own collectives).
@@ -1226,7 +1225,6 @@ pub enum FmmError {
 /// | --- | --- |
 /// | degree p ([`new`](Self::new)) | none; 0 ≤ p ≤ [`MAX_DEGREE`] |
 /// | [`strategy`](Self::strategy) | [`M2lStrategy::Auto`]: on the host `Batched` at f64 p ≤ 6 and f32 p ≤ 7, `PlaneWave` above ([`M2lStrategy::resolve_on_node`]) |
-/// | [`dense_node_budget`](Self::dense_node_budget) | [`M2lStrategy::AUTO_DENSE_NODE_BYTES`], 64 MB |
 /// | [`gradients`](Self::gradients) | off |
 /// | [`vectors`](Self::vectors) | 1: one charge vector per evaluation |
 /// | [`sources`](Self::sources) | [`SourceType::Charges`]: point charges |
@@ -1266,7 +1264,6 @@ pub enum FmmError {
 pub struct FmmBuilder<T> {
     p: usize,
     strategy: M2lStrategy,
-    dense_node_budget: usize,
     gradients: bool,
     vectors: usize,
     sources: SourceType,
@@ -1311,7 +1308,6 @@ impl<T> FmmBuilder<T> {
         Self {
             p,
             strategy: M2lStrategy::Auto,
-            dense_node_budget: M2lStrategy::AUTO_DENSE_NODE_BYTES,
             gradients: false,
             vectors: 1,
             sources: SourceType::Charges,
@@ -1354,22 +1350,10 @@ impl<T> FmmBuilder<T> {
     /// Sets the M2L strategy, which also chooses the tables of M2M and L2L
     /// ([`M2lStrategy`]). A named strategy is never overridden; under
     /// [`M2lStrategy::Auto`] (the default) [`build`](Self::build) resolves it on the host
-    /// by the rule of [`M2lStrategy::resolve_on_node`], with the ranks per node it agrees
-    /// ([`Fmm::strategy`], [`Fmm::threading`]).
+    /// by the rule of [`M2lStrategy::resolve_on_node`] ([`Fmm::strategy`],
+    /// [`Fmm::threading`]).
     pub fn strategy(mut self, strategy: M2lStrategy) -> Self {
         self.strategy = strategy;
-        self
-    }
-
-    /// Sets the node budget in bytes ([`NodeContext::node_budget`]; default
-    /// [`M2lStrategy::AUTO_DENSE_NODE_BYTES`], 64 MB): reported in [`Fmm::threading`],
-    /// and since Phase 6 T11 no longer read by [`M2lStrategy::Auto`]'s host rule, which
-    /// depends on p and the precision alone. Under the rule of Phase 5N T4
-    /// (docs/design/node-m2l.md §4) it was the private dense tables of all the ranks of
-    /// a node above which `Auto` resolved to `Rotation`. Every rank must pass the same
-    /// value.
-    pub fn dense_node_budget(mut self, bytes: usize) -> Self {
-        self.dense_node_budget = bytes;
         self
     }
 
@@ -1910,9 +1894,9 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             });
         let (pool, supplied, mut device) = agree(comm, local)?;
         let mut threading = ThreadingReport::read(self.rayon_threads(), provided);
-        // The node (Phase 5N T4, docs/design/node-m2l.md §4, §5): one split of the
+        // The node (Phase 5N T4, docs/design/node-m2l.md §5): one split of the
         // communicator by node, on every rank and every backend. Its size is the ranks per
-        // node of the strategy rule (agreed in step 7), and its barrier orders the table
+        // node of the threading report (agreed in step 7), and its barrier orders the table
         // loading of step 7 with a cache. A device per rank (Phase 5 T8,
         // docs/design/distributed-fmm.md §7.4): every rank of a device build opens the
         // default device of the backend (above), and the ranks of a node share it; the
@@ -1926,15 +1910,13 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 .expect("the node's ranks are ranks of the communicator") as usize;
         let ranks = self.place_rank(comm, &node, device.as_mut());
 
-        // Step 2: are there points at all? The same all-reduce agrees the largest number
-        // of ranks per node, for the strategy of the cost model (step 4).
-        let local_max = [(sources.len() + targets.len()) as u64, node.size() as u64];
-        let mut agreed = [0u64; 2];
-        comm.all_reduce_into(&local_max[..], &mut agreed[..], SystemOperation::max());
-        if agreed[0] == 0 {
+        // Step 2: are there points at all?
+        let local_points = (sources.len() + targets.len()) as u64;
+        let mut agreed = 0u64;
+        comm.all_reduce_into(&local_points, &mut agreed, SystemOperation::max());
+        if agreed == 0 {
             return Err(FmmError::NoPoints);
         }
-        let model_ranks_per_node = agreed[1] as usize;
 
         // Step 3: the domain, and every point strictly inside it.
         let (coordinates, domain) = pipeline::domain(sources, targets, supplied, comm)?;
@@ -1960,12 +1942,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let cost_model = self.cost_model.unwrap_or_else(|| {
             let strategy = self
                 .strategy
-                .choose(&NodeContext::new(
-                    self.p,
-                    size_of::<T>(),
-                    model_ranks_per_node,
-                    self.dense_node_budget,
-                ))
+                .choose(&NodeContext::new(self.p, size_of::<T>()))
                 .strategy();
             CostModel::calibrated(strategy, size_of::<T>(), self.p)
         });
@@ -2046,8 +2023,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let redistribute_time = start.elapsed();
 
         // Step 7: tables, operator, evaluator. One all-reduce agrees the largest number of
-        // sources in a leaf and the largest number of ranks per node (Phase 5N T4), so that
-        // every rank resolves the same strategy.
+        // sources in a leaf and the largest number of ranks per node (reported).
         let start = Instant::now();
         let local_max = [
             points
@@ -2071,13 +2047,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let tuning_time = tuning_start.elapsed();
         let start = start + tuning_time;
         // The strategy: a named one; under `Auto` the device path's (above), or the host
-        // rule in the node context (Phase 5N T4, `M2lStrategy::resolve_on_node`).
-        let node_context = NodeContext::new(
-            self.p,
-            size_of::<T>(),
-            ranks_per_node,
-            self.dense_node_budget,
-        );
+        // rule (`M2lStrategy::resolve_on_node`).
+        let node_context = NodeContext::new(self.p, size_of::<T>());
         let choice = match (self.strategy, strategy) {
             (M2lStrategy::Auto, M2lStrategy::Auto) => M2lStrategy::Auto.choose(&node_context),
             (M2lStrategy::Auto, device) => StrategyChoice::Device(device),
@@ -4297,8 +4268,7 @@ where
 
     /// Returns the resolved strategy, never [`M2lStrategy::Auto`], for which the tables
     /// were built: a named strategy; on the host `Auto` by the rule of
-    /// [`M2lStrategy::resolve_on_node`] with the agreed ranks per node (Phase 5N T4), the
-    /// same on every rank; with a device backend and M2L on the device, `Auto` by the
+    /// [`M2lStrategy::resolve_on_node`] (p and the precision), the same on every rank; with a device backend and M2L on the device, `Auto` by the
     /// device path's choice (Phase 4 T12: from the tuning cache, tuned at build, or the
     /// static rule of the `tune` module, feature `gpu`). [`Fmm::threading`] gives the
     /// reason ([`ThreadingReport::m2l`]).
