@@ -24,13 +24,11 @@
 //!    of a device [`Backend`] (compiled in, a device that comes up, the precision
 //!    supported), and agrees the outcome on every rank (one all-reduce). Then it splits
 //!    the communicator by node once (`split_shared`; Phase 5N T4 on every backend, Phase 5
-//!    T8 with a device): its size is the ranks per node of the strategy rule (step 7),
-//!    its barrier orders the table loading with a cache (step 7), and with a device
+//!    T8 with a device): its size is the ranks per node of the threading report (step
+//!    7), its barrier orders the table loading with a cache (step 7), and with a device
 //!    backend the rank's place there is in the device report, and on the CPU runtime the
 //!    units per cube are capped at the node's cores over its ranks.
-//! 2. Checks that some rank has points and agrees the largest number of ranks per node
-//!    (one all-reduce of two maxima; the ranks per node since Phase 5S T7, for the
-//!    strategy of the cost model in step 4); no point at all is an error.
+//! 2. Checks that some rank has points (one all-reduce); no point at all is an error.
 //! 3. Takes the supplied domain, or `compute_global_bounding_box` over the sources and
 //!    targets of every rank (after one all-reduce pair that rejects points spanning no
 //!    volume, which that function cannot handle). Checks that every point lies strictly
@@ -47,8 +45,8 @@
 //!    learns the ghost leaves' source counts by the build of a source exchange, counts the
 //!    work of every own block by operator kind on the plan ([`cost::work_counts`]),
 //!    weighs it with the [`CostModel`] ([`FmmBuilder::cost_model`], by default
-//!    [`CostModel::calibrated`] for the strategy the host rule resolves with the ranks per
-//!    node of step 2, the precision and p), repartitions the octree by those weights
+//!    [`CostModel::calibrated`] for the strategy the host rule resolves at the precision
+//!    and p), repartitions the octree by those weights
 //!    (`Octree::repartition`: an all-gather-v of the weights, a sparse exchange of the
 //!    leaves and the push of the locally essential keys, unless the cut stays as it is),
 //!    taking the new cut only where it lowers the busiest rank's modelled block cost by
@@ -332,11 +330,10 @@
 //! - **Equal to one rank.** On P ranks the output is bit for bit the output of the
 //!   one-rank `Fmm` of the same settings and the same *resolved* strategy
 //!   ([`Fmm::strategy`]) over the union of every rank's points in rank order (rank 0's
-//!   points, then rank 1's, …), with the second cut or without it. Under
-//!   [`M2lStrategy::Auto`] the strategy depends on the ranks per node (Phase 5N T4,
-//!   decision 5), so the same input on 1 and on 12 ranks may
-//!   resolve differently; a caller who needs the same bits across rank counts names the
-//!   strategy. Its leaves are the same (Phase 5 T4), the
+//!   points, then rank 1's, …), with the second cut or without it. On the host
+//!   [`M2lStrategy::Auto`] resolves by p and the precision alone (Phase 6 T11), so the same
+//!   on every rank count; with a device backend it is the device path's choice, which a
+//!   caller who needs the same bits across rank counts names. Its leaves are the same (Phase 5 T4), the
 //!   points of a leaf lie in the same order, the near and X rows are ordered by the source
 //!   leaf's (level, key) (Phase 5 T5), received values are exact copies, and the owner of a
 //!   `Global` box forms it from exact copies of its children by octant, as one rank does
@@ -4268,8 +4265,8 @@ where
 
     /// Returns the resolved strategy, never [`M2lStrategy::Auto`], for which the tables
     /// were built: a named strategy; on the host `Auto` by the rule of
-    /// [`M2lStrategy::resolve_on_node`] (p and the precision), the same on every rank; with a device backend and M2L on the device, `Auto` by the
-    /// device path's choice (Phase 4 T12: from the tuning cache, tuned at build, or the
+    /// [`M2lStrategy::resolve_on_node`] (p and the precision), the same on every rank;
+    /// with a device backend and M2L on the device, `Auto` by the device path's choice (Phase 4 T12: from the tuning cache, tuned at build, or the
     /// static rule of the `tune` module, feature `gpu`). [`Fmm::threading`] gives the
     /// reason ([`ThreadingReport::m2l`]).
     pub fn strategy(&self) -> M2lStrategy {

@@ -263,12 +263,12 @@
 #            "1 2 4 8 16 32 64 72" on Linux)
 #   BUDGET   the node budget in MB of Phase 5N T4's strategy rule, which `auto_resolves`
 #            restates for the sweeps that name that rule (t11's `default`, node-rule);
-#            no longer passed to a launch (Helmholtz CHA.3 removed `scaling --budget`)
-#            (Phase 5N T4, per machine class: default 56 on macOS, the M3 Max
+#            no longer passed to a launch, since Helmholtz CHA.3 removed `scaling
+#            --budget`. Per machine class (Phase 5N T4): default 56 on macOS, the M3 Max
 #            and the M6, and 96 on Linux, locust, and under Slurm, Kathleen; signed off as
 #            64 for the M3 Max, set to 56 by the user on 2026-10-11 after T4's f64 p = 6
 #            runs at 8 and 10 ranks per node, fmm-validate/results/phase5n-kathleen.md,
-#            "Phase 5N, T4"). Kept at 56 for the M6 by the user on 2026-10-31 after its crossover
+#            "Phase 5N, T4". Kept at 56 for the M6 by the user on 2026-10-31 after its crossover
 #            sweep at 2, 4 and 6 ranks (tools/m6/machine.md, "BUDGET": Dense wins f32 p = 8
 #            up to 52 MB per node, loses f64 p = 6 at every count, most at 2 ranks, which no
 #            budget expresses). Since Phase 6 T11 the library's `auto` no longer reads it

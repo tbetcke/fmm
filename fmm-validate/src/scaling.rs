@@ -96,7 +96,7 @@
 //! bit for bit when rank r of the small run holds the concatenation of the inputs of ranks
 //! k r, …, k r + k − 1 of the large one, in that order. Both runs are in one launch: the
 //! small one on a split of the communicator, with the strategy of the large one named
-//! (`Auto` resolves by the ranks per node, which differ); the outputs move back by index,
+//! (the guarantee is per resolved strategy); the outputs move back by index,
 //! point to point, and are never gathered. The test of `nd-fmm-exec`
 //! (`tests/invariance.rs`) checks the same at N = 10⁴ on 1, 2 and 4 ranks in CI; this is
 //! the check at scale (P against P/8: 512 against 64 on locust, 160 against 20 and 640
@@ -2764,8 +2764,8 @@ pub struct Invariance {
 /// and drops the FMM. For each k, `split` of `comm` gives the small communicator: colour 0
 /// on the ranks k r, none elsewhere; the other ranks enter nothing of it. Small rank r
 /// finds the inputs of ranks k r … k r + k − 1 (the share in one pass over the indices),
-/// concatenates them, builds the FMM with the strategy of the large run named (`Auto`
-/// resolves by the ranks per node, which differ), evaluates one path (overlapped unless
+/// concatenates them, builds the FMM with the strategy of the large run named (the
+/// guarantee is per resolved strategy), evaluates one path (overlapped unless
 /// overlap is off), and sends each rank k r + i (i ≥ 1) its slice of the output, point to
 /// point; the sizes are known on both sides, and a waiting rank sleeps between tests of its
 /// receive, so that oversubscribed small runs get the cores. Each rank compares its own

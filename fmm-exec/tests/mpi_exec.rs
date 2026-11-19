@@ -1440,8 +1440,8 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     let output = fmm.evaluate(charges).expect("the FMM evaluates");
     check_reference("host, one thread", &mut fmm, &output);
     check_shadow_once((sources, targets), charges, &output, &fmm, comm);
-    // The one-rank reference of the resolved strategy (Phase 5N T4): under `Auto` the
-    // strategy depends on the ranks per node.
+    // The one-rank reference of the resolved strategy (Phase 5N T4): the guarantee is per
+    // resolved strategy.
     check_one_rank(
         "host, one thread",
         &builder.clone().strategy(fmm.strategy()),
@@ -5673,7 +5673,7 @@ fn dipole_sources(comm: &SimpleCommunicator) {
             );
             check_one_rank_sources(
                 &format!("dipole sources, {name}, {kind}, f32"),
-                // The resolved strategy: under `Auto` it depends on the ranks per node.
+                // The resolved strategy: the guarantee is per resolved strategy.
                 (&f32_builder.clone().strategy(single_fmm.strategy()), kind),
                 &local,
                 (&local_q32, &local_d32),

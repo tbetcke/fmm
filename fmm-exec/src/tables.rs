@@ -124,7 +124,8 @@ impl M2lStrategy {
     /// Returns the strategy used in the node context `node`: `self`, or for
     /// [`Auto`](Self::Auto) [`PlaneWave`](Self::PlaneWave) from degree
     /// [`auto_plane_wave_min_p`](Self::auto_plane_wave_min_p) (f64 p ≥ 7, f32 p ≥ 8) and
-    /// [`Batched`](Self::Batched) below it. Never returns `Auto`. [`choose`](Self::choose) also gives the reason.
+    /// [`Batched`](Self::Batched) below it. Never returns `Auto`.
+    /// [`choose`](Self::choose) also gives the reason.
     ///
     /// *Source of the rule* (Phase 6 T11, decision 7 of docs/phase6/README.md, signed off
     /// on 2026-10-20; fmm-validate/results/phase6.md). Measured on one node of each

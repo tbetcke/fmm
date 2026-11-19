@@ -646,7 +646,8 @@ p = 8, one rank to 12, 72 and 40 per node and the splits with threads), the rule
 1.10 of the best strategy except the f32 p = 8 band of 8–10 ranks per node on locust and
 Kathleen; with it (§10.2) at p = 8 within 1.03 of the best at every count of that grid on the
 three machines, and in the band where the budget decides (f32 p = 8 at 12–16 and f64 p = 6 at
-8–12 ranks per node) within 1.16. The 9 MB cap: f64 p ≤ 6 (6.4 MB) and f32 p ≤ 8 (8.7 MB) below
+8–12 ranks per node) within 1.16. Threads shared their rank's copy and so did not enter; no
+machine property entered, so a job resolved alike on every machine. The 9 MB cap: f64 p ≤ 6 (6.4 MB) and f32 p ≤ 8 (8.7 MB) below
 it, f64 p = 7 (10.9 MB) and f32 p = 9 (13.3 MB) above; at f64 p = 7 Dense was 6–10 % faster on
 the M3 Max and locust and 10–15 % slower on Kathleen, at f32 p = 9 14–31 % faster on all three,
 and the cap stayed as signed off (§10.1). The harness's budgets: 96 MB on locust and Kathleen,

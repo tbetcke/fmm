@@ -838,8 +838,8 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
     first plan (`cost::work_counts`: P2M and L2P points, M2M and L2L pairs, V pairs, X
     pairs × source points, W pairs × target points, near interactions n_t Σ n_s; the rows
     of `Global` boxes belong to no block), weighs it with a `CostModel` (`cost_model`, by
-    default `CostModel::calibrated` for the strategy the host rule resolves with the ranks
-    per node agreed in step 2's all-reduce, the precision and p: Kathleen's constants,
+    default `CostModel::calibrated` for the strategy the host rule resolves at the
+    precision and p: Kathleen's constants,
     scaled by powers of p + 1 away from the calibrated p), calls
     `nd_octree::Octree::repartition` with `min_gain` `WORK_CUT_MIN_GAIN` (2 %: the new cut
     only where it lowers the busiest rank's block cost by that much; signed off on
