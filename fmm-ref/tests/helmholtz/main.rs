@@ -12,9 +12,13 @@
 //! stored form against closed forms, strong damping, f32, the limit k → 0 against
 //! Laplace's leaf operators under the diagonal map of proposal §3.4, and Yukawa two ways.
 //!
+//! The diagonal form of the M2L (Helmholtz CH1.3d1), `diagonal`: the grid, S → F → R, the
+//! permuted transfer functions, and the M2L against RCR within the bound E of proposal §3.6.
+//!
 //! Every test names its error measure (docs/phase1/README.md, "Error measures").
 
 mod common;
+mod diagonal;
 mod fixtures;
 mod leaf_common;
 mod leaf_limit;

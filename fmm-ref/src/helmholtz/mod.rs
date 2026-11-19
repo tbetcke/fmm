@@ -39,7 +39,12 @@
 //! - [`plane_wave`]: a generator of the quadratures of the exponential (plane-wave) M2L
 //!   for any κ = k w, the trusted path of the tabulated ones (Helmholtz CH6.1b, S4's
 //!   generator).
+//! - [`diagonal`]: the diagonal form of the M2L on high-frequency levels (S → F, the
+//!   transfer function in double-double rounded once, F → R), on the signature grid of
+//!   spike S6, with the 34 reflection classes and the rounding bound of proposal §3.6, the
+//!   trusted path of the diagonal M2L (Helmholtz CH1.3d1).
 
+pub mod diagonal;
 pub mod direct;
 pub mod leaf;
 mod level;
