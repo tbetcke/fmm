@@ -585,6 +585,15 @@ through a class permutation), and the level modelled from them: RCR against the 
 with every pair diagonal, and with the φ step free (an FFT's ceiling). Its report is
 `results/helmholtz-ch4-1a.md`.
 
+Helmholtz CH4.1b (the signature buffers and the level's scratch; docs/helmholtz/tasks/CH4.1b.md)
+added `helmholtz_accuracy::{Row::signature_scratch, SignatureScratch}` (per level, as if every
+V pair ran the diagonal form: per rank the boxes with a V row it holds, the replicated top's
+on every rank that holds them, and the distinct sources of their rows, ghosts included, and `nd_fmm_tables::helmholtz::diagonal::scratch_shape`
+of them at the level's degree and the run's threads under `DEFAULT_SIGNATURE_NODE_BUDGET` over
+`HelmholtzFmm::ranks_per_node`; the largest over the ranks and the ranks over the budget) and,
+with the example's `--levels`, a table "Diagonal-form scratch". `tools/helmholtz/ch4-1b-runs.sh`
+runs the task's memory baseline and census. Its report is `results/helmholtz-ch4-1b.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

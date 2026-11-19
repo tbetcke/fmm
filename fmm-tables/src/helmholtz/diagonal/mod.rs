@@ -64,7 +64,9 @@
 //! Multipoles and locals are §3.15's stored complex expansions of degree p, two real planes
 //! of (p + 1)² (real, then imaginary) at idx(n, m) = n² + n + m, box after box. A signature
 //! is the grid's (2p + 1) N_φ complex samples at i N_φ + j (CONVENTIONS §3.15), interleaved,
-//! box after box. The level's buffers, their alignment and chunks are CH4.1b's.
+//! box after box. The level's buffers ([`Signatures`]: each box on its own 64-byte line), the
+//! level driver ([`m2l_level`]) and its scratch under a budget ([`scratch_shape`]) are the
+//! module [`level`]'s (Helmholtz CH4.1b), the layout fixed there.
 //!
 //! # Example
 //!
@@ -87,7 +89,7 @@
 //! // Box 1 against the reference.
 //! let grid = Grid::<f64>::new(p);
 //! let mut expected = vec![Complex::new(0.0, 0.0); samples];
-//! diagonal::s2f(&grid, &level, &multipoles[len..2 * len], &mut diagonal::Workspace::new(p), &mut expected);
+//! diagonal::s2f(&grid, &level, &multipoles[len..2 * len], &mut diagonal::SignatureWorkspace::new(p), &mut expected);
 //! for (a, b) in signatures[samples..2 * samples].iter().zip(&expected) {
 //!     assert!((a - b).norm() < 1e-13);
 //! }
@@ -103,6 +105,15 @@
 use nd_fmm_math::orthonormal::legendre;
 use nd_fmm_math::{Complex, RealScalar};
 use nd_fmm_ref::helmholtz::diagonal::{Grid, azimuth_count};
+
+pub mod level;
+mod symmetry;
+
+pub use level::{
+    DEFAULT_SIGNATURE_NODE_BUDGET, LevelBuffers, SIGNATURE_ALIGN, ScratchShape, Signatures,
+    m2l_level, scratch_shape,
+};
+pub use symmetry::signed_permutation;
 
 /// The number of boxes converted together: the columns of the Legendre product are the four
 /// real planes of this many boxes. A box's bits do not depend on it.
@@ -301,17 +312,8 @@ impl<T: RealScalar> Conversions<T> {
         signatures: &mut [Complex<T>],
         scratch: &mut ConversionScratch<T>,
     ) {
-        let boxes = self.check(multipoles.len(), signatures.len(), scratch, "multipoles");
-        let (len, samples) = (self.expansion_len(), self.samples());
-        for first in (0..boxes).step_by(BLOCK_BOXES) {
-            let nb = BLOCK_BOXES.min(boxes - first);
-            self.s2f_block(
-                &multipoles[first * len..(first + nb) * len],
-                &mut signatures[first * samples..(first + nb) * samples],
-                nb,
-                scratch,
-            );
-        }
+        self.check(multipoles.len(), signatures.len(), scratch, "multipoles");
+        self.s2f_strided(multipoles, signatures, self.samples(), scratch);
     }
 
     /// F → R of a batch of boxes: adds sⁿ iⁿ Σᵢⱼ wᵢ (2π/N_φ) Yₙᵐ(ŝᵢⱼ) G(ŝᵢⱼ) of every box's
@@ -328,12 +330,50 @@ impl<T: RealScalar> Conversions<T> {
         locals: &mut [T],
         scratch: &mut ConversionScratch<T>,
     ) {
-        let boxes = self.check(locals.len(), signatures.len(), scratch, "locals");
+        self.check(locals.len(), signatures.len(), scratch, "locals");
+        self.f2r_strided(signatures, self.samples(), locals, scratch);
+    }
+
+    /// S → F of a batch of boxes into a stride of signatures: box b's signature at
+    /// `b * stride` (stride ≥ [`samples`](Self::samples)), the padding between untouched. The
+    /// caller has checked the lengths.
+    pub(super) fn s2f_strided(
+        &self,
+        multipoles: &[T],
+        signatures: &mut [Complex<T>],
+        stride: usize,
+        scratch: &mut ConversionScratch<T>,
+    ) {
         let (len, samples) = (self.expansion_len(), self.samples());
+        let boxes = multipoles.len() / len;
+        for first in (0..boxes).step_by(BLOCK_BOXES) {
+            let nb = BLOCK_BOXES.min(boxes - first);
+            self.s2f_block(
+                &multipoles[first * len..(first + nb) * len],
+                &mut signatures[first * stride..(first + nb - 1) * stride + samples],
+                stride,
+                nb,
+                scratch,
+            );
+        }
+    }
+
+    /// F → R of a batch of boxes from a stride of signatures (as
+    /// [`s2f_strided`](Self::s2f_strided)). The caller has checked the lengths.
+    pub(super) fn f2r_strided(
+        &self,
+        signatures: &[Complex<T>],
+        stride: usize,
+        locals: &mut [T],
+        scratch: &mut ConversionScratch<T>,
+    ) {
+        let (len, samples) = (self.expansion_len(), self.samples());
+        let boxes = locals.len() / len;
         for first in (0..boxes).step_by(BLOCK_BOXES) {
             let nb = BLOCK_BOXES.min(boxes - first);
             self.f2r_block(
-                &signatures[first * samples..(first + nb) * samples],
+                &signatures[first * stride..(first + nb - 1) * stride + samples],
+                stride,
                 &mut locals[first * len..(first + nb) * len],
                 nb,
                 scratch,
@@ -384,6 +424,7 @@ impl<T: RealScalar> Conversions<T> {
         &self,
         multipoles: &[T],
         signatures: &mut [Complex<T>],
+        stride: usize,
         nb: usize,
         scratch: &mut ConversionScratch<T>,
     ) {
@@ -495,7 +536,7 @@ impl<T: RealScalar> Conversions<T> {
                     columns,
                 );
                 for b in 0..nb {
-                    let signature = &mut signatures[b * samples..(b + 1) * samples];
+                    let signature = &mut signatures[b * stride..b * stride + samples];
                     for hh in 0..h {
                         let i = i0 + hh;
                         for side in 0..2 {
@@ -530,6 +571,7 @@ impl<T: RealScalar> Conversions<T> {
     fn f2r_block(
         &self,
         signatures: &[Complex<T>],
+        stride: usize,
         locals: &mut [T],
         nb: usize,
         scratch: &mut ConversionScratch<T>,
@@ -567,7 +609,7 @@ impl<T: RealScalar> Conversions<T> {
                 let rows = 2 * bases;
                 z[..rows * columns].fill(T::zero());
                 for b in 0..nb {
-                    let signature = &signatures[b * samples..(b + 1) * samples];
+                    let signature = &signatures[b * stride..b * stride + samples];
                     for hh in 0..h {
                         let i = i0 + hh;
                         for side in 0..2 {

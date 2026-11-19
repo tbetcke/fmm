@@ -130,7 +130,7 @@ fn diagonal_local(
     transfer: &Transfer<f64>,
     m: &[f64],
 ) -> Vec<f64> {
-    let mut ws = diagonal::Workspace::new(grid.degree());
+    let mut ws = diagonal::SignatureWorkspace::new(grid.degree());
     let mut local = vec![0.0; m.len()];
     diagonal::m2l(
         grid,
@@ -194,7 +194,7 @@ fn s2f_then_f2r_is_the_identity() {
         let level = Level::new(wavenumber(ka, 0.0), HALF);
         let s = level.scale();
         let grid = Grid::new(p);
-        let mut ws = diagonal::Workspace::new(p);
+        let mut ws = diagonal::SignatureWorkspace::new(p);
         let mut rng = SplitMix64::new(17 + p as u64);
         let len = Layout::new(p).len();
         let m: Vec<f64> = (0..2 * len).map(|_| rng.range(-1.0, 1.0)).collect();
@@ -235,7 +235,7 @@ fn the_signature_of_a_charge() {
             &grid,
             &level,
             &m,
-            &mut diagonal::Workspace::new(p),
+            &mut diagonal::SignatureWorkspace::new(p),
             &mut signature,
         );
         let factor = 4.0 * std::f64::consts::PI * level.damping().exp();
@@ -527,7 +527,7 @@ fn m2l_in_f32_within_its_bound() {
         let reference = evaluate(p, &level, o, &rcr_local(p, &level, o, &m), &case.targets);
         let m32: Vec<f32> = m.iter().map(|&x| x as f32).collect();
         let transfer = Transfer::new(&grid, &level32, &from, &to);
-        let mut ws = diagonal::Workspace::new(p);
+        let mut ws = diagonal::SignatureWorkspace::new(p);
         let mut local32 = vec![0.0f32; m32.len()];
         diagonal::m2l(
             &grid,
@@ -578,7 +578,7 @@ fn a_workspace_of_another_degree_panics() {
         &grid,
         &level,
         &m,
-        &mut diagonal::Workspace::new(5),
+        &mut diagonal::SignatureWorkspace::new(5),
         &mut signature,
     );
 }
@@ -593,7 +593,7 @@ fn a_multipole_of_the_wrong_length_panics() {
         &grid,
         &level,
         &[0.0; 49],
-        &mut diagonal::Workspace::new(6),
+        &mut diagonal::SignatureWorkspace::new(6),
         &mut signature,
     );
 }
@@ -609,7 +609,7 @@ fn a_signature_of_the_wrong_length_panics() {
         &grid,
         &level,
         &signature,
-        &mut diagonal::Workspace::new(6),
+        &mut diagonal::SignatureWorkspace::new(6),
         &mut local,
     );
 }

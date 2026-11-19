@@ -26,6 +26,7 @@ mod classes;
 mod contribution;
 mod dense;
 mod diagonal;
+mod diagonal_level;
 mod parts;
 mod plane_wave_merge;
 mod plane_wave_pair;

@@ -129,6 +129,13 @@
 //!   level's rotation blocks are stored or formed per V pair (`Row::m2l_blocks_stored`);
 //!   then a row `Σ` with the levels' seconds summed and the evaluation's (with several
 //!   evaluations also the first's).
+//!   Then (Helmholtz CH4.1b) a table "Diagonal-form scratch", a row per run and level with V
+//!   pairs: the diagonal form's scratch as if every V pair of the level ran it
+//!   (`Row::signature_scratch`, `nd_fmm_tables::helmholtz::diagonal::scratch_shape` at the
+//!   level's degree and the run's threads under 8 GiB per node over the ranks per node): the
+//!   most targets with a V row and V sources on one rank, the budget, the most MiB of a
+//!   rank's source signatures and whole scratch, the fewest targets per chunk, the most
+//!   chunks, and the ranks over the budget.
 //! - `--block-budget MB` (Helmholtz CH4.0e): the bytes of the M2L's stored rotation blocks
 //!   per rank (default the library's, 512 MiB); the levels that do not fit, coarsest first,
 //!   form their blocks per V pair. No bit depends on it.
@@ -854,6 +861,7 @@ fn main() {
         );
     }
     let mut levels: Vec<String> = Vec::new();
+    let mut scratch_rows: Vec<String> = Vec::new();
     let mut left_out: Vec<String> = Vec::new();
     let mut near: Vec<String> = Vec::new();
     let mut leaf_rows: Vec<String> = Vec::new();
@@ -1045,6 +1053,35 @@ fn main() {
                     sum(3),
                 ));
                 lines
+            };
+            // `--levels`: the rows of the table "Diagonal-form scratch" (Helmholtz CH4.1b), a
+            // row per level with V pairs.
+            let scratch_lines = |row: &Row| -> Vec<String> {
+                let mb = |bytes: usize| bytes as f64 / (1u64 << 20) as f64;
+                (0..row.levels)
+                    .filter(|&l| row.v_pairs[l] > 0)
+                    .map(|l| {
+                        let s = row.signature_scratch[l];
+                        format!(
+                            "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {} | {l} | {} \
+                             | {} | {} | {:.0} | {:.0} | {:.0} | {} | {} | {} |",
+                            workload.name(),
+                            problem.len(),
+                            setting_name(row),
+                            row.ranks,
+                            row.threads,
+                            row.degrees[l],
+                            s.targets,
+                            s.sources,
+                            mb(s.budget),
+                            mb(s.source_bytes),
+                            mb(s.bytes),
+                            s.chunk,
+                            s.chunks,
+                            s.over_budget,
+                        )
+                    })
+                    .collect()
             };
             // The row of the table "Empty boxes" (Helmholtz CH4.0d1).
             let left_out_line = |row: &Row| -> String {
@@ -1426,6 +1463,7 @@ fn main() {
                                                 print(&row, reference.filter(|_| !is_rotation));
                                                 if arguments.levels {
                                                     levels.extend(per_level(&row));
+                                                    scratch_rows.extend(scratch_lines(&row));
                                                 }
                                                 left_out.push(left_out_line(&row));
                                                 near.extend(near_lines(&row));
@@ -1518,6 +1556,29 @@ fn main() {
              | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
         );
         for line in &levels {
+            println!("{line}");
+        }
+        println!();
+        println!("## Diagonal-form scratch");
+        println!();
+        println!(
+            "Per level with V pairs, as if every V pair ran the diagonal form (Helmholtz CH4.1b; \
+             `scratch_shape` in f64 at the level's degree and the run's threads): the most \
+             targets with a V row and distinct V sources on one rank, the rank's budget (8 GiB \
+             per node over the ranks per node), the most MiB of a rank's source signatures and \
+             of its whole scratch (among the ranks that fit), the fewest targets per chunk, the \
+             most chunks, and the ranks whose scratch does not fit (RCR there)."
+        );
+        println!();
+        println!(
+            "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | targets | sources \
+             | budget MiB | sources MiB | scratch MiB | chunk | chunks | over budget |"
+        );
+        println!(
+            "| --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: \
+             | ---: | ---: | ---: |"
+        );
+        for line in &scratch_rows {
             println!("{line}");
         }
     }

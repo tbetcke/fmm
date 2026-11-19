@@ -17,7 +17,8 @@ translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1
 rule of which Helmholtz CH6.1e measured; Helmholtz CH4.0h (`parts`, the parts of a build on
 a caller's threads); Helmholtz CH4.0j (the exponential M2L's tables in parts within a
 level); Helmholtz CH4.1a (`helmholtz::diagonal`, S → F and F → R of the diagonal form as
-products over a batch of boxes).
+products over a batch of boxes); Helmholtz CH4.1b (`helmholtz::diagonal::level`, the level's
+signature buffers, scratch and driver, and `signed_permutation`).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -188,6 +189,29 @@ products over a batch of boxes).
   expansions are §3.15's two planes, the signatures §3.15's samples, interleaved complex, box
   after box (the level's buffers are CH4.1b's). `s2f` overwrites its signatures, as the
   reference does (the one exception to "every application accumulates"); `f2r` adds. Not cached.
+  Since Helmholtz CH4.1b (`diagonal::level`, its module docs; docs/helmholtz/tasks/CH4.1b.md):
+  `Signatures`, a level's signatures box after box, each box's first sample on a 64-byte line
+  (`SIGNATURE_ALIGN`; the stride the samples rounded up to whole lines, the padding zero and
+  never read; aligned from the allocation's address in safe Rust, `is_aligned`), interleaved
+  complex in §3.15's sample order; this layout is the crate's, not a convention.
+  `Conversions::{s2f_into, f2r_from}` convert into and out of it, each box `s2f`'s and `f2r`'s
+  bits. `m2l_level` is the serial level driver (S → F of every source once per call, then
+  the targets in chunks of `LevelBuffers::chunk`: each accumulator zeroed, its pairs in its
+  row's order by the caller's closure, F → R of the chunk by blocks, the locals gathered and
+  scattered by copies), so every local is the same bits at every chunk size; nd-fmm-exec's
+  threaded level call (CH4.2) keeps that order. `scratch_shape` sizes it under a byte budget
+  per rank (`DEFAULT_SIGNATURE_NODE_BUDGET` 8 GiB per node, divided by the caller over the
+  node's ranks): the tables (`Conversions::bytes_for`, the Legendre tables (p + 1)²(p + 2)
+  values), a `ConversionScratch` and gather buffer per thread, the sources' signatures whole,
+  the largest chunk of accumulators that fits, `None` below `BLOCK_BOXES` targets (CH4.3's
+  fallback to RCR). `signed_permutation` names ref's `diagonal::Symmetry` (flips, then the
+  x ↔ y swap) as the element of O_h acting the same on offsets (review 2026-11-19, C5).
+  `tests/helmholtz/diagonal_level.rs` checks the alignment (f64 and f32, padded and not), the
+  store conversions bit for bit, the level call against the sum of `nd_fmm_ref`'s
+  `diagonal::m2l` over each target's pairs (256 u; p = 6 and 12, p = 17 ignored in release),
+  chunks of 1, 2, 3, 4, 5, 7 and all bit for bit (f64, and a padded f32 stride), clones aligned,
+  the shapes by hand, the sizes without building,
+  and ref's 316 offsets the tables' set with each of the 34 classes inside one of the 16.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are deterministic: the same inputs give bit-identical tables and cache files.
