@@ -29,7 +29,7 @@
 //! - **Equal to one rank** (requirement 2, decision 7; docs/design/distributed-fmm.md
 //!   §5.3, §5.4): every output value of every evaluation, φ and ∇φ, is bit for bit that
 //!   of the one-rank `Fmm` of the same settings and the same resolved strategy (Phase 5N
-//!   T4: `Auto` resolves with the ranks per node, so the one-rank runs name the strategy
+//!   T4: the guarantee is per resolved strategy, so the one-rank runs name the strategy
 //!   the multi-rank run reports) over the union of every rank's points in rank order,
 //!   built on rank 0 on `SimpleCommunicator::self_comm()`; and within 100 u_T
 //!   (1.1e-14 in f64, 6.0e-6 in f32) relative L2 over every target, φ and ∇φ, of the
@@ -471,9 +471,8 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .build(&local_points, &local_points, comm)
         .expect("the FMM builds");
     let build = fmm.build_timings();
-    // The one-rank runs take the strategy the multi-rank run resolved: under `Auto` it
-    // depends on the ranks per node (Phase 5N T4), and the guarantee is per resolved
-    // strategy. They evaluate one vector at a time.
+    // The one-rank runs take the strategy the multi-rank run resolved: the guarantee is
+    // per resolved strategy (Phase 5N T4). They evaluate one vector at a time.
     let builder_strategy = fmm.strategy();
     let builder = builder.strategy(builder_strategy);
     let mut outputs = Vec::new();

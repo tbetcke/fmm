@@ -401,8 +401,10 @@ and its dependency table hold the product crates alone (review 2026-11-12, K3 an
   `compute_global_bounding_box`), `radius`,
   `centre`, `integer_centre`, `relative_frame::<T>(s, t)` (the exact dyadic frame of
   box s seen from box t, CONVENTIONS §3.13), `leaf_coordinates` and `contains`.
-- `tables`: `enum M2lStrategy { Dense, Classes, Rotation, Auto }` (`Auto`: `Dense`
-  for p ≤ 8, `Rotation` above; `resolve(p)`), and `Tables<T>`, which builds or loads
+- `tables`: `enum M2lStrategy { Dense, Classes, Rotation, Batched, PlaneWave, Auto }`
+  (`Auto` on the host: `Batched` below f64 p = 7 and f32 p = 8, `PlaneWave` from there,
+  `resolve_on_node`; `Dense` for p ≤ 8 and `resolve(p)` until Phase 5N, removed in
+  Helmholtz CHA.3), and `Tables<T>`, which builds or loads
   (`load_or_build` with a `TableCache`) only the families the strategy uses and applies
   `m2m(o, …)`, `l2l(o, …)` and `m2l(index, …)` by octant and offset index with a
   `TableScratch`. `Compressed` comes with C6.2.

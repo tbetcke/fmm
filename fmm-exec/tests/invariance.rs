@@ -29,7 +29,8 @@
 //! **What must be the same** (scale-out.md §5.1): the precision, p, `max_level`, the leaf
 //! size and the domain (the bounding box of the same union), the near rule, and **the
 //! strategy, named**:
-//! `Auto` resolves by the ranks per node, which differ between the runs. Threads, overlap,
+//! the guarantee is per resolved strategy (Phase 5N T4; on the host `Auto` resolves by p
+//! and the precision alone since Phase 6 T11). Threads, overlap,
 //! the table cache and the cut change no bit.
 //!
 //! **Workloads** (T2 brief), N = 10,000, sources equal to targets, gradients on,

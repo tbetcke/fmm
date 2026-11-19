@@ -458,11 +458,11 @@ fn host_of(host: &[Measurement], strategy: M2lStrategy, threads: usize) -> &Meas
 }
 
 /// The host path's default: `Auto`, as the host resolves it at this p and precision on
-/// one rank (the example runs on one; Phase 5N T4, `M2lStrategy::resolve_on_node`).
+/// one rank (the example runs on one; `M2lStrategy::resolve_on_node`).
 fn host_default(host: &[Measurement], threads: usize) -> &Measurement {
     let run = &host[0].run;
     let value_bytes = if run.precision == "f32" { 4 } else { 8 };
-    let node = NodeContext::new(run.p, value_bytes, 1, M2lStrategy::AUTO_DENSE_NODE_BYTES);
+    let node = NodeContext::new(run.p, value_bytes);
     host_of(host, M2lStrategy::Auto.resolve_on_node(&node), threads)
 }
 

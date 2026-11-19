@@ -5,8 +5,9 @@
 > each table read once per block of targets) and the plane-wave M2L (C6.5, no dense
 > tables), `Auto` resolves by p and the precision alone (`Batched` at f64 p ≤ 6 and f32
 > p ≤ 7, `PlaneWave` above); the ranks per node and the node budget of this document's rule
-> are agreed and reported but no longer decide. The measurements below stand for `Dense`
-> and `Rotation`, which remain selectable.
+> no longer decide, and since Helmholtz CHA.3 (2026-11-19) the budget, its setter and
+> constants are gone (Section 11, with the rule's history from the rustdoc). The
+> measurements below stand for `Dense` and `Rotation`, which remain selectable.
 
 As of 2026-10-11 (Section 10, the outcome of T4, added). Written in Phase 5N T3 ([docs/phase5n/T3-m2l-node-
 study.md](../phase5n/T3-m2l-node-study.md)); signed off by the user on 2026-10-11, every
@@ -615,3 +616,53 @@ harness's budget (Kathleen 96 MB: Rotation at f64 p = 8 in every configuration, 
 f64 p = 3; f32 p = 8 Dense at 2 × 20 and Rotation at 40 × 1), prefer a few ranks per node
 with threads (4 × 10 the fastest split at f64 p = 8 on one Kathleen node), and pass a
 `table_cache` on Lustre for builds at scale.
+
+## 11. Superseded (Phase 6 T11) and removed (Helmholtz CHA.3)
+
+**Replaced.** Phase 6 T11 (decision 7 of docs/phase6/README.md, signed off on 2026-10-20;
+fmm-validate/results/phase6.md) replaced the rule of §4: `M2lStrategy::Auto` resolves on the
+host to `Batched` below f64 p = 7 and f32 p = 8 and to `PlaneWave` from there, by p and the
+precision alone. Both strategies hold their tables once per rank, and at one rank per core
+Batched's dense tables (6.4 MB at f64 p = 6) cost less than Dense's per-target reads did, so
+the ranks per node and the node budget no longer enter. Measured on one node of each machine,
+the evaluation was 1.1–11.5× faster than under the rule of §4 (0.92 in the worst cell, f64
+p = 3 on locust at 72 ranks). From T11 to CHA.3 the node context's ranks per node and budget,
+`FmmBuilder::dense_node_budget` and the harness's `--budget` were agreed and reported only.
+
+**The rule of §4 as it stood in the rustdoc** of `M2lStrategy::resolve_on_node` until CHA.3:
+Dense iff the dense tables of one rank, D(p, T) = 332 (p + 1)⁴ · size_of(T) bytes, were at most
+`AUTO_DENSE_RANK_BYTES` (9 MB) and those of the node, ranks per node × D(p, T), at most the
+node budget (`AUTO_DENSE_NODE_BYTES`, 64 MB, or `FmmBuilder::dense_node_budget`); Rotation
+otherwise. Signed off as rule B of §4 on 2026-10-11 (decision 5 of docs/phase5n/README.md).
+Every rank holds its own dense tables (316 M2L and 16 octant matrices), and a dense M2L reads a
+different matrix for every V pair, so the tables are streamed from the nearest level that holds
+the copies of every rank of a node. While those fit the node's shared cache Dense keeps its
+one-rank cost; beyond, every pair streams from memory at the share of the socket's bandwidth
+that is left, and the cost grows with the ranks (at f64 p = 8 from 1.15 to 4.93 µs per pair
+from 1 to 12 ranks on the M3 Max, 1.18 to 9.63 from 1 to 72 on locust, 2.92 to 8.83 from 1 to
+40 on Kathleen), while Rotation's tables (0.83 MB at p = 8) stay in each core's L2. Measured
+over 194 cells (N = 10⁶, the cube and the Plummer sphere, f64 p = 3, 6, 8, 10, 12 and f32
+p = 8, one rank to 12, 72 and 40 per node and the splits with threads), the rule scored within
+1.10 of the best strategy except the f32 p = 8 band of 8–10 ranks per node on locust and
+Kathleen; with it (§10.2) at p = 8 within 1.03 of the best at every count of that grid on the
+three machines, and in the band where the budget decides (f32 p = 8 at 12–16 and f64 p = 6 at
+8–12 ranks per node) within 1.16. Threads shared their rank's copy and so did not enter; no
+machine property entered, so a job resolved alike on every machine. The 9 MB cap: f64 p ≤ 6 (6.4 MB) and f32 p ≤ 8 (8.7 MB) below
+it, f64 p = 7 (10.9 MB) and f32 p = 9 (13.3 MB) above; at f64 p = 7 Dense was 6–10 % faster on
+the M3 Max and locust and 10–15 % slower on Kathleen, at f32 p = 9 14–31 % faster on all three,
+and the cap stayed as signed off (§10.1). The harness's budgets: 96 MB on locust and Kathleen,
+56 MB on the M3 Max and the M6 (§10.1; tools/m6/machine.md). The rule of Phases 2–5 before it
+(Dense for p ≤ 8, `AUTO_DENSE_MAX_P`, deprecated in T4 with `resolve(p)`, from Phase 2 T8's
+one-thread, one-rank, one-pair timings; docs/design/laplace-fmm-plan.md §7) put f64 p = 8 on
+Dense, 1.07–1.27× Rotation's time on one rank and up to 6.3× at 72 ranks per node.
+
+**Removed** (Helmholtz CHA.3, review 2026-11-12 P1; docs/helmholtz/tasks/CHA.3.md):
+`M2lStrategy::{AUTO_DENSE_MAX_P, AUTO_DENSE_RANK_BYTES, AUTO_DENSE_NODE_BYTES, resolve}`,
+`NodeContext::{ranks_per_node, node_budget, dense_node_bytes}` (`NodeContext` keeps p and the
+value's bytes, `NodeContext::new(p, value_bytes)`), `FmmBuilder::dense_node_budget`, the
+harness's `--budget` (`Settings::dense_node_budget`, the summary's `budget_mb`). `Auto`'s choice
+is unchanged on every (precision, p). What stays of this design: the one split by node per
+build (§5), whose size `ThreadingReport::ranks_per_node` reports and whose barrier orders the
+table loading with a cache (decision 7), and the ranks × threads guidance (§7).
+`tools/scaling/run.sh` keeps `BUDGET` for `auto_resolves`, its restatement of the rule of §4 in
+the sweeps that name it.

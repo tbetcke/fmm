@@ -838,8 +838,8 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
     first plan (`cost::work_counts`: P2M and L2P points, M2M and L2L pairs, V pairs, X
     pairs × source points, W pairs × target points, near interactions n_t Σ n_s; the rows
     of `Global` boxes belong to no block), weighs it with a `CostModel` (`cost_model`, by
-    default `CostModel::calibrated` for the strategy the host rule resolves with the ranks
-    per node agreed in step 2's all-reduce, the precision and p: Kathleen's constants,
+    default `CostModel::calibrated` for the strategy the host rule resolves at the
+    precision and p: Kathleen's constants,
     scaled by powers of p + 1 away from the calibrated p), calls
     `nd_octree::Octree::repartition` with `min_gain` `WORK_CUT_MIN_GAIN` (2 %: the new cut
     only where it lowers the busiest rank's block cost by that much; signed off on
@@ -905,7 +905,8 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
     2026-10-20; fmm-validate/results/phase6.md): `Auto` resolves on the host by p and the
     precision alone, `Batched` below `M2lStrategy::auto_plane_wave_min_p` (f64 7, f32 8) and
     `PlaneWave` from it (`StrategyChoice`'s reason `Auto → PlaneWave: f64 p = 8 ≥ 7`; the
-    ranks per node and the node budget agreed and reported, no longer read); `Batched`'s mode
+    ranks per node agreed and reported, not read; Phase 5N's node budget removed in
+    Helmholtz CHA.3); `Batched`'s mode
     `fmm::default_m2l_mul_add(p)` (fused from `FUSED_MUL_ADD_MIN_P` = 6) unless named; the
     near rule `NearRuleChoice::CostModel`; `Isa::detect` AVX-512 where the CPU has it; the
     leaf size `fmm::default_max_points_per_leaf(p, backend)` unless named
@@ -921,26 +922,20 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
     `Dense` or rule-off references where the scenario now resolves `Batched`, `PlaneWave` or
     the rule (reusing the scenario's `Fmm` where they can: about 9 % more on the 4-rank debug
     run, 224 → 244 s on the M3 Max; `run-tests-mpi`'s timeout rose to 900 s).
-  - The strategy rule on the node (Phase 5N T4, C5N.3; docs/design/node-m2l.md §4, §5;
-    until Phase 6 T11, which replaced its rule:
-    `tables` and `fmm` module docs): under `Auto` the host resolves the strategy by
-    `M2lStrategy::resolve_on_node` (rule B: Dense iff the dense tables of a rank, 332
-    (p + 1)⁴ values, are at most `AUTO_DENSE_RANK_BYTES` = 9 MB and ranks per node × those
-    at most the node budget, `FmmBuilder::dense_node_budget`, default
-    `AUTO_DENSE_NODE_BYTES` = 64 MB; Rotation otherwise), with a `NodeContext` of p, the
-    value's bytes, the ranks per node and the budget. `build` splits the communicator by
-    node once on every backend (step 1; the device path reuses it for `RankPlacement`) and
-    agrees the largest ranks per node in step 7's all-reduce (two maxima), so every rank
-    resolves the same strategy; `ThreadingReport::{ranks_per_node, m2l}` report it with
-    the reason (`StrategyChoice`). The device path keeps the `tune` rule. `resolve(p)` and
-    `AUTO_DENSE_MAX_P` are deprecated. The guarantee is per *resolved* strategy: a
-    one-rank reference names `Fmm::strategy()` of the multi-rank run (`check_one_rank` in
-    `tests/mpi_exec.rs`, `tests/multi_rank.rs`). With `table_cache` the lowest rank of
-    each node loads or builds and stores first, the others after a barrier of the node's
-    communicator, then load (decision 7; `TableCache` unchanged). `tests/mpi_exec.rs`,
-    **the strategy rule on the node**, checks the agreement, a named strategy kept, and
-    the cold cache filled once per node; `tests/operator/strategy.rs` the rule over both
-    precisions, p = 0–20, 1–128 ranks per node and the budgets.
+  - The node (Phase 5N T4, C5N.3; docs/design/node-m2l.md §5, §11): `build` splits the
+    communicator by node once on every backend (step 1; the device path reuses it for
+    `RankPlacement`) and agrees the largest ranks per node in step 7's all-reduce (two
+    maxima), reported in `ThreadingReport::ranks_per_node` beside the strategy's reason
+    (`ThreadingReport::m2l`, `StrategyChoice`). Phase 5N's rule (Dense or Rotation by the
+    dense tables' bytes per rank and per node) was replaced by Phase 6 T11's (above), and its
+    budget, constants and `resolve(p)` removed in Helmholtz CHA.3; `NodeContext` holds p and
+    the value's bytes. The guarantee is per *resolved* strategy: a one-rank reference names
+    `Fmm::strategy()` of the multi-rank run (`check_one_rank` in `tests/mpi_exec.rs`,
+    `tests/multi_rank.rs`). With `table_cache` the lowest rank of each node loads or builds
+    and stores first, the others after a barrier of the node's communicator, then load
+    (decision 7; `TableCache` unchanged). `tests/mpi_exec.rs`, **the strategy rule on the
+    node**, checks the agreement, a named strategy kept, and the cold cache filled once per
+    node; `tests/operator/strategy.rs` the rule over both precisions and p = 0–20.
   - `examples/basic_evaluation.rs` is the user-facing example of calling `Fmm`
     (registered with `templated-examples`, so the weekly job runs it at 3 ranks): it
     must run on any number of ranks, each passing its own points, and keep to the

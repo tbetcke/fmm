@@ -261,17 +261,18 @@
 #            launch, with the load before and after on Linux
 #   RANKS    the rank counts of strong and weak (default "1 2 4 8 12" on macOS,
 #            "1 2 4 8 16 32 64 72" on Linux)
-#   BUDGET   the node budget of the strategy rule in MB, passed to every launch as
-#            --budget (Phase 5N T4, per machine class: default 56 on macOS, the M3 Max
+#   BUDGET   the node budget in MB of Phase 5N T4's strategy rule, which `auto_resolves`
+#            restates for the sweeps that name that rule (t11's `default`, node-rule);
+#            no longer passed to a launch, since Helmholtz CHA.3 removed `scaling
+#            --budget`. Per machine class (Phase 5N T4): default 56 on macOS, the M3 Max
 #            and the M6, and 96 on Linux, locust, and under Slurm, Kathleen; signed off as
 #            64 for the M3 Max, set to 56 by the user on 2026-10-11 after T4's f64 p = 6
 #            runs at 8 and 10 ranks per node, fmm-validate/results/phase5n-kathleen.md,
-#            "Phase 5N, T4"). Kept at 56 for the M6 by the user on 2026-10-31 after its crossover
+#            "Phase 5N, T4". Kept at 56 for the M6 by the user on 2026-10-31 after its crossover
 #            sweep at 2, 4 and 6 ranks (tools/m6/machine.md, "BUDGET": Dense wins f32 p = 8
 #            up to 52 MB per node, loses f64 p = 6 at every count, most at 2 ranks, which no
 #            budget expresses). Since Phase 6 T11 the library's `auto` no longer reads it
-#            (it resolves by p and the precision); the sweeps that name Phase 5N's rule
-#            (`auto_resolves`, t11's `default`) still use it
+#            (it resolves by p and the precision)
 #   NODE_GRID  ranks x threads per node of node-rule (default T3's grid, rescaled to the
 #            M6's 6 cores: "1x1 2x1 4x1 6x1 1x6 2x3" on macOS, "1x1 8x1 16x1 32x1 64x1
 #            72x1 1x72 4x18 8x9" on Linux, "1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10" under
@@ -587,7 +588,7 @@ of $CORES cores evenly" | tee -a "${OUT}/skipped.txt"
     alpha=""
     if [ -n "${ALPHA:-}" ]; then alpha="--alpha $ALPHA"; fi
     command="timeout $TIMEOUT mpirun $flags -n $ranks $exe --threads $threads --evals $EVALS \
---budget $BUDGET $alpha $*"
+$alpha $*"
     if [ -n "${DRY_RUN:-}" ]; then
         echo "$command"
         return
