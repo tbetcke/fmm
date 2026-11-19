@@ -84,8 +84,9 @@ and CH4.1's first step a measurement of the product conversions with a stop to a
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5 (CH4.1 first measures the product conversions against
-    RCR and stops to ask before CH4.2 whether item 11 moves ahead: review 2026-11-19, A5)
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2, CH4.3, CH4.4, CH4.5 (CH4.1a first
+    measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
+    moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
@@ -632,23 +633,32 @@ task's full line is in its record or report and its progress entry
   *Done when:* W1 at kD = 500's build at 1 × 40 and 1 × 72 at most half its one-core time, the
   output bit for bit; Laplace's builds no slower (D9). *Needs:* CH4.0h. *Machines:* Kathleen,
   locust (the M6 with the user's go-ahead). *Sign-off:* the Laplace change.
-- [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
+- [ ] **CH4.1 S → F and F → R by the transform as a product.** Split on 2026-11-19 into CH4.1a
+  and CH4.1b (one reviewable PR each; review 2026-11-19, A5, asks for the measurement and a stop
+  first). *Done when:* both are ticked.
+- [ ] **CH4.1a The product conversions, measured.** In `nd-fmm-tables` (`helmholtz::diagonal`):
+  S → F and F → R for a batch of boxes, the Legendre step halved by the rings' parity and the φ
+  step by the grid's symmetries (×4, N_φ a multiple of 4), from `nd_fmm_ref`'s grid; a box's bits
+  independent of its batch. *Done when:* round trips to the grid's bandwidth; against
+  `nd_fmm_ref::helmholtz::diagonal::{s2f, f2r}` to round-off; a box's bits the same in every
+  batch and position; first (review 2026-11-19, A5; the user, 2026-11-19, on #230: "CHA.11 +
+  measure first"): the product conversion per box against the RCR pair at the high-frequency
+  levels' degrees on one core (locust, Kathleen), and a high-frequency level's time with the
+  product conversions against RCR's on W1, with H4's gain stated for the product and for an FFT
+  apart; then a stop to ask before CH4.2 whether H4 goes on as listed or the FFT track (CH0.9,
+  CHR.3, CH4.6) moves ahead. *Needs:* CH3.1, D6, CHA.11. *Machines:* locust, Kathleen.
+  *Sign-off:* the order.
+- [ ] **CH4.1b The signature buffers and the level's scratch.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
-  budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
-  size; scratch within the budget on W1 at kD = 1000. Also, from the H3 gate (§5): the
-  resident memory of the RCR FMM on W1 at kD = 500 at the calibrated degrees, the baseline
-  the signature scratch is added to. Also (CH1.3d2, the user at its plan): the signature
-  buffers' layout in memory (interleaved or planes, alignment, chunks) is fixed here, in the
-  crate's documentation, not in CONVENTIONS (§3.15 "Signatures", "Not fixed here"); the
-  grid, sample order and stored form are §3.15's. Also, first (review 2026-11-19, A5; the user, 2026-11-19, on #230:
-  "CHA.11 + measure first"): the product conversion per box (S → F and F → R, with the ×4 the
-  φ grid's symmetries give, N_φ a multiple of 4) against the RCR pair at the high-frequency
-  levels' degrees, and a high-frequency level's time with the product conversions against
-  RCR's on W1; then a stop to ask before CH4.2 whether H4 goes on as listed or the FFT track
-  (CH0.9, CHR.3, CH4.6) moves ahead. With it the H4 gain stated for the product and for an FFT
-  apart. Also (review 2026-11-19, C5, C7): ref's `diagonal::Symmetry` mapped onto the tables'
+  budget. *Done when:* bits independent of the chunk size; scratch within the budget on W1 at
+  kD = 1000. Also, from the H3 gate (§5): the resident memory of the RCR FMM on W1 at kD = 500
+  at the calibrated degrees, the baseline the signature scratch is added to. Also (CH1.3d2, the
+  user at its plan): the signature buffers' layout in memory (interleaved or planes, alignment,
+  chunks) is fixed here, in the crate's documentation, not in CONVENTIONS (§3.15 "Signatures",
+  "Not fixed here"); the grid, sample order and stored form are §3.15's. Also (review
+  2026-11-19, C5, C7): ref's `diagonal::Symmetry` mapped onto the tables'
   `SignedPermutation`, with a test that ref's `offsets()` and the tables' V offsets are one
-  set; `diagonal::Workspace` renamed before its first user. *Needs:* CH3.1, D6, CHA.11.
+  set; `diagonal::Workspace` renamed before its first user. *Needs:* CH4.1a and its sign-off.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
   deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
