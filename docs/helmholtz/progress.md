@@ -3513,3 +3513,59 @@ request, using this template:
   regenerated fixtures.
 - Follow-ups: CH4.1's line (the signature buffers' layout is its, unversioned); H1.G once
   merged (off the priority list).
+
+## 2026-11-19: H1.G Gate
+- Done:
+  - `/milestone-gate H1`. Report `docs/helmholtz/gates/H1.md`:
+    - the gate condition, met: §3.15 signed off at versions 3 and 4; `nd-fmm-math` and
+      `nd-fmm-ref` carry the family; the direct sum matches FMM3D's fixtures to 9.9e-16;
+    - all 10 tasks (#133, #135–#137, #149–#152, #228, #229), each with its record and
+      sign-offs, no pending run, Laplace untouched;
+    - CI on `main` and its job times against their limits;
+    - proposal §9's items, the measurements against §4, §3.6 and §9.2;
+    - corrections C1–C4, recommendations, a retrospective on the loop.
+  - Three gaps in the record:
+    - G1: CH1.4's signed-off question 3 (R12 and §9.2) had never been applied;
+    - G2: D5's promised dipole task did not exist;
+    - G3: CH1.3c's damping finding had not reached CH2.3's line.
+  - The project review at the gate, `docs/reviews/2026-11-19-H1.md`. Two read-only passes on
+    Fable at medium effort over 8475009. The driver checked every finding of high or
+    medium-high severity and every one a task rests on (A5, B6, B7, M14, C4, C5, L1, L5 in
+    structure, P2, T4, U4, U5, K5). New findings: M11–M14, A5–A8, B6–B10, C4–C7, L5–L8, P6–P8,
+    K5, T4, T5, U4, U5. The status of every earlier finding.
+  - Roadmap:
+    - H1.G ticked; H1's ticked lines condensed, the full lines in git history (8475009);
+    - the status line rewritten;
+    - CHA.11 as item 9 of the priority list, and CH4.1 begins with A5's measurement and a stop
+      to ask;
+    - CH9.0 (Helmholtz dipole sources, D5's task) in H9 before CH9.1, off the list;
+    - CHA.12 off the list;
+    - the review's "Also" lines on CH2.3, CH4.1–CH4.3, CH4.5, CH7.2, CH9.1 and CHA.4, CHA.5 and
+      CHA.7–CHA.10;
+    - C4 on the CH4.0e line; D5's row names CH9.0.
+  - Proposal (draft 0.8 kept): C1–C3 applied (R12's row, §9.2, §4 items 1 and 3, §9 item 2),
+    with a line in its Appendix A ("Amended at H1.G").
+- Tests: none (documents only).
+- Checks:
+  - None of cargo's (no Rust or manifest change).
+  - `tools/roadmap/sync_issues.py --out` reads the edited roadmap: H1's issue #141 closes on
+    merge; H2, H4, H7 and H9 get edits.
+  - CI on `main`: every H1 merge passed every job. Two cancellations in the period were on
+    other merges (#131, #138), at the old 15-minute limit. #224's install failure was fixed by
+    #227. 8475009's run 44570151593 passed.
+- Decisions: signed off 2026-11-19 by the user on #230, every question as recommended:
+  - 1–2: "Close, accept all (Recommended)";
+  - 3: "Add CH9.0 (Recommended)";
+  - 4 and 6: "Accept all + CI PR (Recommended)";
+  - 5: "CHA.11 + measure first (Recommended)".
+- Laplace: not touched (documents only).
+- Follow-ups:
+  - The CI PR of question 6: Clippy on all targets, rustdoc `-D warnings`, nd-fmm-exec's
+    `--features cpu` tests built in `run-tests-kernels`.
+  - The retrospective's changes to `/next-task` and `/milestone-gate`, for the user
+    (`.claude/skills/`):
+    - a signed-off change to the proposal is applied in its task's PR or becomes a named
+      task's "Also";
+    - a decision that promises a task creates it;
+    - a progress entry's follow-up that names a task becomes that task's "Also";
+    - the gate checks the decision table for promised tasks.
