@@ -114,7 +114,8 @@ node-c11a-079, `singlenode`, core 3) ran; results in the report.
 
 ## Open questions
 For sign-off on the PR (the report's §5): 1, the order (A5's stop); 2, the acceptance as read;
-3, proposal §6.7's count amended.
+3, proposal §6.7's count amended. Signed off 2026-11-19 by the user on #234, all three as
+recommended: "Q1-3 as recommended. Merge when green".
 
 ## Results
 - The conversions: 2P³ + 8P³ real multiply-adds per conversion (§6.7's count: about 68P³), the reference

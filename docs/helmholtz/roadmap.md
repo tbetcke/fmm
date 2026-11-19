@@ -11,8 +11,8 @@ Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
 (CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11). CH4.1 is split; CH4.1a (the product
 conversions, measured: per box 1–3 RCR pairs, W1 at kD = 500's RCR levels 5–16× faster on one
-core, an FFT worth about 1–2 % of the run) waits for its sign-off, A5's stop: whether H4 goes
-on with CH4.1b and CH4.2 or the FFT track moves ahead. HR, H0 and H2 are still open; of H0,
+core, an FFT worth about 1–2 % of the run) is signed off (A5's stop): H4 goes on with the
+product, CH4.1b next, then CH4.2; the FFT track stays item 11. HR, H0 and H2 are still open; of H0,
 CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
 `progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
 H1.G in `git show 8475009:docs/helmholtz/roadmap.md`.
@@ -65,6 +65,8 @@ item 6, CH4.0k off the list. Amended on 2026-11-19 at the H1 gate (`docs/helmhol
 §7, question 5; the user on #230: "CHA.11 + measure first (Recommended)"): CHA.11 as item 9,
 and CH4.1's first step a measurement of the product conversions with a stop to ask (review
 2026-11-19, A5: with the product φ step a high-frequency level gains about 2.3× at most).
+Confirmed on 2026-11-19 by CH4.1a's sign-off (#234's question 1, the user: "Q1-3 as recommended. Merge when green"):
+the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 keep their order.
 
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
@@ -640,7 +642,9 @@ task's full line is in its record or report and its progress entry
   F → R by parity and the azimuths' ×4, 10P³ real multiply-adds per conversion (§6.7: 68P³), the
   reference to rounding, a box's bits in every batch. Per box 1–3 RCR pairs; W1 at kD = 500's
   levels 2 and 3 modelled at 0.06–0.10 and 0.16–0.20 of RCR on one core (A5: 0.43); an FFT
-  about 1–2 % of the run. *Sign-off:* the PR's questions 1–3 (pending).
+  about 1–2 % of the run. *Sign-off:* the PR's questions 1–3 as recommended (the user on #234,
+  2026-11-19: "Q1-3 as recommended. Merge when green"): H4 goes on with the product, the FFT track stays item 11; the
+  acceptance met as read; proposal §6.7 amended.
 - [ ] **CH4.1b The signature buffers and the level's scratch.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* bits independent of the chunk size; scratch within the budget on W1 at

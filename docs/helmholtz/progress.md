@@ -3636,9 +3636,10 @@ request, using this template:
   in release; the tables' Helmholtz test executable at opt-level 0, 38.4 s. Not run: the MPI
   list (no MPI crate's code changed), `cargo deny` (no manifest), Laplace's benchmarks (no
   Laplace path changed). Nothing pending.
-- Decisions: questions for sign-off on the PR: 1, the order (H4 on with the product, the FFT
-  track stays item 11; A5's stop); 2, the acceptance as read (the level modelled, not timed in
-  a level call); 3, proposal §6.7's count amended.
+- Decisions: signed off 2026-11-19 by the user on #234, "Q1-3 as recommended. Merge when green": 1, the order
+  (H4 on with the product, the FFT track stays item 11; A5's stop); 2, the acceptance as read
+  (the level modelled, not timed in a level call); 3, proposal §6.7's count amended (inline
+  and Appendix A, in this PR).
 - Laplace: not touched (a new module of `nd-fmm-tables`, two accessors of `nd-fmm-ref`'s
   Helmholtz grid, an example; no Laplace path, table or default).
 - Follow-ups: CH4.1b (roadmap), with an "Also" on the column kernel's rate on x86_64 and one on

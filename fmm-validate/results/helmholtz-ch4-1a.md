@@ -218,6 +218,9 @@ the RCR pair's; so the per-box cost is 1–3 RCR pairs, not 18, and a level of W
 
 ## 5. Questions for sign-off
 
+Signed off 2026-11-19 by the user on #234, all three as recommended: "Q1-3 as recommended. Merge when green". Proposal
+§6.7 is amended in the same PR (question 3).
+
 1. **The order (A5's stop).** H4 goes on as listed with the product (CH4.1b, CH4.2, CH4.3,
    CH4.4, CH4.5), and the FFT track (CH0.9, CHR.3, CH4.6) stays item 11 after them
    (**recommended**: an FFT could save about 1–2 % of W1 at kD = 500's run inside D1, about 2 %
