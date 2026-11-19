@@ -284,7 +284,7 @@ fn signature_of<T: RealScalar>(
     let zero = Complex::new(T::zero(), T::zero());
     let (a, b) = ring.split_at_mut(p + 1);
     for i in 0..grid.rings() {
-        let theta = grid.ring(i);
+        let theta = grid.theta(i);
         // a_μ = Σₙ (−i)ⁿ sⁿ M̂_{n,+μ} Θₙ^μ, b_μ = Σₙ (−i)ⁿ sⁿ M̂_{n,−μ} Θₙ^μ.
         for mu in 0..=p {
             let (mut sa, mut sb) = (zero, zero);
@@ -340,7 +340,7 @@ fn local_of<T: RealScalar>(
     let (c, sn) = ring.split_at_mut(p + 1);
     for i in 0..grid.rings() {
         let weight = grid.weight(i);
-        let theta = grid.ring(i);
+        let theta = grid.theta(i);
         let g = &signature[i * azimuths..(i + 1) * azimuths];
         // C_μ = wᵢ Σⱼ Gⱼ cos μφⱼ, S_μ = wᵢ Σⱼ Gⱼ sin μφⱼ.
         for mu in 0..=p {

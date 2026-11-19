@@ -25,6 +25,7 @@ mod batched;
 mod classes;
 mod contribution;
 mod dense;
+mod diagonal;
 mod parts;
 mod plane_wave_merge;
 mod plane_wave_pair;
