@@ -3505,8 +3505,9 @@ request, using this template:
   changed), `cargo deny` (no manifest). Nothing pending.
 - Decisions: signed off 2026-11-19 at the plan (the user, all four as recommended): "Exempt in
   place (Recommended)" (M3), "Keep, say so (Recommended)" (M4), "Leave layout to CH4.1
-  (Recommended)", "Go ahead (Recommended)" (the bump). For sign-off on the PR: the §3.15 text,
-  with N_φ left a per-level choice (proposal §6.7) after the self-review.
+  (Recommended)", "Go ahead (Recommended)" (the bump). The §3.15 text, with N_φ left a per-level
+  choice (proposal §6.7) after the self-review, signed off on #229 the same day: "All signed
+  off. Merge when green".
 - Laplace: no code path changed; the version constant only. Laplace's cached tables and tuning
   files of version 3 are rejected once and rebuilt, identical. Every test passes with the
   regenerated fixtures.

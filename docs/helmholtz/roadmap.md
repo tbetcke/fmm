@@ -10,8 +10,7 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j, CHA.1–CHA.3 and
 CH1.3d1 are merged (items 1–7 and half of 8). CH1.3d2, CONVENTIONS §3.15 at version 4
-("Signatures", "Level units"), is the PR after #228, a draft until its text is signed off;
-once it is merged every task of H1 is done and H1.G (off the list) can run. CH4.1 is next. HR, H0, H1
+("Signatures", "Level units"), is #229, its text signed off 2026-11-19; once it is merged every task of H1 is done and H1.G (off the list) can run. CH4.1 is next. HR, H0, H1
 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
@@ -313,7 +312,8 @@ family, checked against FMM3D's fixtures.
   added (N_φ a per-level multiple of 4, ≥ 4P − 3), "Exponential M2L" exempt from the version,
   Fₖ stated against §3.14's, §3.9's M2L range;
   proposal §3.1, §3.4, §4 amended; `check_3_15.py` checks 13–18. The plan's four questions
-  signed off 2026-11-19 by the user, each "(Recommended)"; the text: question 1 of the PR.
+  signed off 2026-11-19 by the user, each "(Recommended)"; the text signed off on #229 the
+  same day ("All signed off. Merge when green").
 - [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
 
 ## H2: Yukawa on the host

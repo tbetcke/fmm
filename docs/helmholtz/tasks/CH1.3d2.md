@@ -191,3 +191,6 @@ Signed off 2026-11-19 at the plan (the user, all four as recommended):
 3. The signature buffers: "Leave layout to CH4.1 (Recommended)": the mathematics and the
    sample order versioned; the buffers' layout in memory fixed by CH4.1, unversioned.
 4. The plan and the bump to version 4: "Go ahead (Recommended)".
+
+The PR's question 1, the §3.15 text as written (N_φ a per-level multiple of 4, ≥ 4P − 3), signed
+off 2026-11-19 by the user on #229: "All signed off. Merge when green".
