@@ -28,8 +28,10 @@ fn values(count: usize, seed: u64) -> Vec<f64> {
 
 fn signatures_of(count: usize, seed: u64) -> Vec<Complex<f64>> {
     let v = values(2 * count, seed);
-    v.chunks_exact(2)
-        .map(|c| Complex::new(c[0], c[1]))
+    v.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[re, im]| Complex::new(re, im))
         .collect()
 }
 
