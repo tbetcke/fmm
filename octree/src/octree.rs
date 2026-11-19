@@ -1408,6 +1408,12 @@ pub fn points_to_morton<ArrayImpl: ValueArrayImpl<f64, 2>>(
     points
         .col_iter()
         .map(|point| {
+            // The one `unsafe` of nd-octree, which denies `unsafe_code` (Helmholtz CHA.2): the
+            // safe reads (`get_value` with a check, or the column's value iterator) cost 1–9 %
+            // of this function on the M6, measured at CHA.2 (docs/helmholtz/tasks/CHA.2.md).
+            #[allow(unsafe_code)]
+            // SAFETY: the shape was asserted above to be `[3, n]`, so every column has the
+            // indices 0, 1 and 2.
             let point = unsafe {
                 [
                     point.get_value_unchecked([0]),

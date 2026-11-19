@@ -221,6 +221,9 @@ way around a failing debug assertion.
   `# Parameters`, `# Returns`, `# Examples`, and `# Collective operation` where
   relevant, with a compiling (or `no_run`) example.
 - Clippy `forbid`s wildcard imports (`[lints.clippy] wildcard_imports = "forbid"`).
+- `unsafe_code` is denied (`[lints.rust]`, Helmholtz CHA.2). The one exception is
+  `points_to_morton`'s unchecked reads, allowed there with its reason and `// SAFETY:`
+  comment: the safe forms measured 1–9 % slower (docs/helmholtz/tasks/CHA.2.md). Add no other.
 - Add deterministic unit tests next to serial helpers, using
   `tools::seeded_rng` / `tools::generate_random_keys` where randomness helps.
   Exercise distributed behaviour in `examples/test_mpi_*.rs`, covering rank

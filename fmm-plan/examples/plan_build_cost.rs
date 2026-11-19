@@ -25,7 +25,10 @@ fn grow(bytes: usize) {
     PEAK.fetch_max(current, Ordering::Relaxed);
 }
 
+// The crate denies `unsafe_code` (Helmholtz CHA.2); a counting global allocator cannot be
+// written without it, and this example measures the plan's heap use with one.
 // SAFETY: every call is forwarded to `System` unchanged; only the counters are added.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         grow(layout.size());

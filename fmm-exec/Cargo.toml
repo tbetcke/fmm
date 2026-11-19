@@ -47,3 +47,7 @@ name = "basic_evaluation"
 
 [package.metadata.example.basic_evaluation.templated-examples]
 command = "mpirun -n {{NPROCESSES}}"
+
+# No `unsafe` in any target of this crate (root CLAUDE.md, "Working rules"; Helmholtz CHA.2).
+[lints.rust]
+unsafe_code = "forbid"

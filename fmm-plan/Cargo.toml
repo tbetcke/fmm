@@ -21,3 +21,8 @@ mpi = { workspace = true, features = ["complex"] }
 
 [dev-dependencies]
 rand_chacha = { workspace = true }
+
+# No `unsafe` but where a file allows it with its reason: the counting allocator of
+# examples/plan_build_cost.rs (root CLAUDE.md, "Working rules"; Helmholtz CHA.2).
+[lints.rust]
+unsafe_code = "deny"

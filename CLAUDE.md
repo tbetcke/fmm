@@ -80,7 +80,13 @@ Slash commands in `.claude/skills/`, for the Helmholtz work:
 - `unsafe` only in nd-fmm-simd's `arch` modules and its ISA dispatch, in
   nd-fmm-kernels, and in spikes/. Every block carries a `// SAFETY:` comment and
   every public function stays safe; all other crates, nd-fmm-exec included, are free
-  of `unsafe` (docs/design/simd-p2p.md §5.4).
+  of `unsafe` (docs/design/simd-p2p.md §5.4). The compiler enforces it (Helmholtz CHA.2):
+  `[lints.rust] unsafe_code = "forbid"` in the `Cargo.toml` of nd-fmm-math, -ref, -tables,
+  -exec, -validate and -bench, `"deny"` in nd-fmm-plan's and nd-octree's, every target of
+  the package. The two exceptions, each `#[allow(unsafe_code)]` in its file with its reason:
+  the counting allocator of `fmm-plan/examples/plan_build_cost.rs`, and nd-octree's
+  unchecked reads in `points_to_morton` (`octree/src/octree.rs`; the safe forms 1–9 %
+  slower there, CHA.2). A new crate free of `unsafe` gets the `forbid` table.
 - Document every public item; follow the crate's existing rustdoc style.
 
 ## Layout
