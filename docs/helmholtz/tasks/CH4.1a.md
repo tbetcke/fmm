@@ -109,7 +109,19 @@ first; locust and Kathleen are the machines of record of CH4.0e).
   level call is CH4.1b/CH4.2's. The report says so.
 
 ## Pending runs
-(filled in step 6)
+None. locust (core 5, 2026-11-19 20:13–20:18, load 1.5–2.6) and Kathleen (job 644326,
+node-c11a-079, `singlenode`, core 3) ran; results in the report.
 
 ## Open questions
-(filled when they arise)
+For sign-off on the PR (the report's §5): 1, the order (A5's stop); 2, the acceptance as read;
+3, proposal §6.7's count amended.
+
+## Results
+- The conversions: 2P³ + 8P³ real multiply-adds per conversion (2.5P³ complex), the reference
+  to ≤ 3.6·10⁻¹⁵ relative at p = 245; every acceptance test passes.
+- Per box 1.5–2.8 RCR pairs at p = 66–135, about 1 at p = 245; W1 at kD = 500's RCR levels
+  modelled 5–16× faster on one core; an FFT at most 1–2 % of the run (report §2–§3).
+- Deviations from the plan: the ignored release test also runs p = 41; the plan's "signature of
+  bandwidth above p" check is the F → R test on random signatures (every bandwidth of the grid);
+  the Legendre and φ steps are not timed apart: the φ step's share is its share of the
+  multiply-adds (both run through one kernel), stated in the report.

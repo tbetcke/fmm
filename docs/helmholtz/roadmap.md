@@ -9,12 +9,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11: the wave levels in one place, which also lets
-named precisions run with the V rule where they panicked). Next is CH4.1, whose first step
-measures the product conversions against RCR and stops to ask (review 2026-11-19, A5). HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of
-H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
-`git show 8475009:docs/helmholtz/roadmap.md`.
+(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11). CH4.1 is split; CH4.1a (the product
+conversions, measured: per box 1–3 RCR pairs, W1 at kD = 500's RCR levels 5–16× faster on one
+core, an FFT worth at most 1–2 % of the run) waits for its sign-off, A5's stop: whether H4 goes
+on with CH4.1b and CH4.2 or the FFT track moves ahead. HR, H0 and H2 are still open; of H0,
+CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
+`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
+H1.G in `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
 
@@ -633,19 +634,13 @@ task's full line is in its record or report and its progress entry
   *Done when:* W1 at kD = 500's build at 1 × 40 and 1 × 72 at most half its one-core time, the
   output bit for bit; Laplace's builds no slower (D9). *Needs:* CH4.0h. *Machines:* Kathleen,
   locust (the M6 with the user's go-ahead). *Sign-off:* the Laplace change.
-- [ ] **CH4.1a The product conversions, measured.** CH4.1 "S → F and F → R by the transform
-  as a product", split on 2026-11-19 into CH4.1a and CH4.1b. In `nd-fmm-tables` (`helmholtz::diagonal`):
-  S → F and F → R for a batch of boxes, the Legendre step halved by the rings' parity and the φ
-  step by the grid's symmetries (×4, N_φ a multiple of 4), from `nd_fmm_ref`'s grid; a box's bits
-  independent of its batch. *Done when:* round trips to the grid's bandwidth; against
-  `nd_fmm_ref::helmholtz::diagonal::{s2f, f2r}` to round-off; a box's bits the same in every
-  batch and position; first (review 2026-11-19, A5; the user, 2026-11-19, on #230: "CHA.11 +
-  measure first"): the product conversion per box against the RCR pair at the high-frequency
-  levels' degrees on one core (locust, Kathleen), and a high-frequency level's time with the
-  product conversions against RCR's on W1, with H4's gain stated for the product and for an FFT
-  apart; then a stop to ask before CH4.2 whether H4 goes on as listed or the FFT track (CH0.9,
-  CHR.3, CH4.6) moves ahead. *Needs:* CH3.1, D6, CHA.11. *Machines:* locust, Kathleen.
-  *Sign-off:* the order.
+- [x] **CH4.1a The product conversions, measured.** Report:
+  `fmm-validate/results/helmholtz-ch4-1a.md`; record `docs/helmholtz/tasks/CH4.1a.md` (the first
+  half of CH4.1, split 2026-11-19). `nd_fmm_tables::helmholtz::diagonal::Conversions`: S → F and
+  F → R by parity and the azimuths' ×4, 2.5P³ complex multiply-adds per conversion, the
+  reference to rounding, a box's bits in every batch. Per box 1–3 RCR pairs; W1 at kD = 500's
+  levels 2 and 3 modelled at 0.06–0.10 and 0.16–0.20 of RCR on one core (A5: 0.43); an FFT
+  at most 1–2 % of the run. *Sign-off:* the PR's questions 1–3 (pending).
 - [ ] **CH4.1b The signature buffers and the level's scratch.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* bits independent of the chunk size; scratch within the budget on W1 at
@@ -656,7 +651,11 @@ task's full line is in its record or report and its progress entry
   "Not fixed here"); the grid, sample order and stored form are §3.15's. Also (review
   2026-11-19, C5, C7): ref's `diagonal::Symmetry` mapped onto the tables'
   `SignedPermutation`, with a test that ref's `offsets()` and the tables' V offsets are one
-  set; `diagonal::Workspace` renamed before its first user. *Needs:* CH4.1a and its sign-off.
+  set; `diagonal::Workspace` renamed before its first user. Also (CH4.1a's report §2): the
+  column kernel of `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core
+  (baseline SSE2 codegen, no fma) and 6–10 on a Grace core; measure the level's conversions
+  after CH4.2 and, if they matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1).
+  *Needs:* CH4.1a and its sign-off.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
   deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
