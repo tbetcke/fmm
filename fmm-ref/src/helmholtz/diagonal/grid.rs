@@ -1,5 +1,5 @@
-//! The signature grid of a high-frequency level (proposal §5.4; S6's proposal for
-//! CONVENTIONS §3.15 "Signatures").
+//! The signature grid of a high-frequency level (proposal §5.4; CONVENTIONS §3.15
+//! "Signatures", S6's proposal).
 
 use nd_fmm_math::RealScalar;
 use nd_fmm_math::orthonormal::legendre;
@@ -7,7 +7,7 @@ use nd_fmm_math::orthonormal::legendre;
 use super::dd::{Dd, gauss_legendre};
 
 /// The (θ, φ) grid of the diagonal form for expansions of degree p (P = p + 1, proposal
-/// §5.4 and S6's report, "The proposal for CONVENTIONS §3.15 'Signatures'"):
+/// §5.4; CONVENTIONS §3.15 "Signatures"):
 ///
 /// - 2P − 1 = 2p + 1 **rings** at the Gauss–Legendre nodes uᵢ = cos θᵢ in ascending order
 ///   (ring 0 nearest the south pole), with weights wᵢ;

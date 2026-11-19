@@ -3480,3 +3480,36 @@ request, using this template:
   split into CH1.3d1 and CH1.3d2, both signed off 2026-11-19 by the user on #228 ("Agree to both questions").
 - Laplace: not touched (a new module of `nd-fmm-ref`'s `helmholtz`; no manifest).
 - Follow-ups: CH1.3d2 (roadmap, next); a note in CH4.2's line (its trusted path; RCR's floor).
+
+## 2026-11-19: CH1.3d2 CONVENTIONS §3.15 revised
+- Done: `CONVENTION_VERSION` 4. §3.15 "Signatures" fixed from CH1.3d1's code and S6's
+  proposal: the grid (2P − 1 Gauss–Legendre rings, N_φ a multiple of 4 and ≥ 4P − 3, 4P in
+  `nd-fmm-ref`; sample i N_φ + j), the stored signature F̂ = e^{−β} F, the stored transfer
+  function T̂ = e^{Im z} T to l ≤ 2p from extended precision, the diagonal M2L
+  G = 4π ik e^{2β − Im(k)|t|} T̂ F̂ and F → R, the identity, the 34 classes' sample permutations;
+  the buffers' layout, the fast transforms, how T̂ is computed and the choice per class "not
+  fixed here". "Level units" added (review M1): the forms hold in any unit; a box of level l
+  holds r_l φ̃ at k̂_l = k r_l, so L2L carries ½ and P2L scales its charges by r_t/r_s.
+  "Exponential M2L" exempt from the version (M3) in the header, §3.10 and §3.15; its Fₖ the
+  largest order, stated against §3.14's count (M4); §3.9: Laplace's M2L above p = 20
+  untested (M10). Proposal §3.1, §3.4 and §4 items 6 and 7 corrected (M2, CH1.1's sign-off 2),
+  Appendix A. The eight fixtures' headers regenerated; doc citations in `nd-fmm-ref`'s
+  `diagonal`, `nd-fmm-tables`' and `nd-fmm-exec`'s "Levels and units". Record
+  `docs/helmholtz/tasks/CH1.3d2.md`.
+- Tests: `tools/fixtures/check_3_15.py` checks 13–18 (the plane-wave expansion, the signature of
+  charges, the grid, the classes and sample maps, the diagonal M2L equal to the (S|R) M2L to
+  1.4·10⁻²⁸ and against the direct sum, the level units), 168 checks pass;
+  `check_3_15_plane_wave.py` passes; every fixture's `--check` and `crosscheck_scipy.py` pass.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default and
+  workspace tests at opt-level 1 (1,302 and 1,346 passed). Not run: the MPI list (no code path
+  changed), `cargo deny` (no manifest). Nothing pending.
+- Decisions: signed off 2026-11-19 at the plan (the user, all four as recommended): "Exempt in
+  place (Recommended)" (M3), "Keep, say so (Recommended)" (M4), "Leave layout to CH4.1
+  (Recommended)", "Go ahead (Recommended)" (the bump). The §3.15 text, with N_φ left a per-level
+  choice (proposal §6.7) after the self-review, signed off on #229 the same day: "All signed
+  off. Merge when green".
+- Laplace: no code path changed; the version constant only. Laplace's cached tables and tuning
+  files of version 3 are rejected once and rebuilt, identical. Every test passes with the
+  regenerated fixtures.
+- Follow-ups: CH4.1's line (the signature buffers' layout is its, unversioned); H1.G once
+  merged (off the priority list).

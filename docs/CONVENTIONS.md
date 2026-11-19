@@ -1,13 +1,14 @@
 # Conventions
 
-`CONVENTION_VERSION = 3` .
+`CONVENTION_VERSION = 4` .
 
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
-§3.1–§3.8, §3.11, §3.12 or §3.15 bumps `CONVENTION_VERSION`, which invalidates committed
-fixtures and cached operator tables. §3.13 describes in-memory data only, and §3.14 an
-approximate M2L whose tables are not cached; a change to either does not bump the
-version (§3.10).
+§3.1–§3.8, §3.11, §3.12 or §3.15 (but for its "Exponential M2L") bumps
+`CONVENTION_VERSION`, which invalidates committed fixtures and cached operator tables.
+§3.13 describes in-memory data only, and §3.14 and §3.15's "Exponential M2L" are
+approximate M2Ls whose tables are not cached; a change to them does not bump the version
+(§3.10).
 
 Summary of the choices: Legendre functions without the Condon–Shortley phase for
 m ≥ 0, negative orders defined by a (−1)^m conjugate symmetry, Racah-type factorial
@@ -202,13 +203,16 @@ D^n(Q_1 Q_2) = D^n(Q_1)\, D^n(Q_2)
 - M2L (§3.11) evaluates irregular harmonics up to degree 2p at the scaled shift
   b = (c' − c)/r. On a uniform level, with the V-list offsets {−3..3}³ \ {−1..1}³ and
   shift 2r · offset, 4 ≤ |b| ≤ 6√3 ≈ 10.4. f64 is therefore also tested for irregular
-  harmonics up to degree 40 (M2L up to p = 20) at |v| in [4, 11].
+  harmonics up to degree 40 (M2L up to p = 20) at |v| in [4, 11]. M2L above p = 20 is
+  not tested by these ranges; the FMM's own tests and gates run it at their degrees
+  (the Helmholtz family's ranges are §3.15's).
 
 ## 3.10 Versioning
 
-`CONVENTION_VERSION = 3`. Any change to §3.1–§3.8, §3.11, §3.12 or §3.15 bumps it,
+`CONVENTION_VERSION = 4`. Any change to §3.1–§3.8, §3.11, §3.12 or §3.15 bumps it,
 which invalidates committed fixtures and cached operator tables. §3.12 is included because
-cached tables depend on its geometry, layout and class rule.
+cached tables depend on its geometry, layout and class rule. §3.15's subsection
+"Exponential M2L" is excluded, as §3.14 is (below).
 
 - Version 1: the conventions of Phases 0–6 T7.
 - Version 2 (Phase 6 T8): adds "Dipole sources" to §3.7. No existing quantity changed;
@@ -218,6 +222,14 @@ cached tables depend on its geometry, layout and class rule.
   only) and cached tables are rebuilt. §3.15's "Signatures" and its f32 ranges are
   reserved, and fixing them bumps the version again; its leaf chunks are excluded, as
   §3.13 is.
+- Version 4 (Helmholtz CH1.3d2): §3.15 revised. "Signatures" fixed (the grid, the
+  signature and transfer function in stored form, the diagonal M2L and the 34 classes'
+  sample permutations; the buffers' layout in memory excluded, as the leaf chunks are);
+  "Level units" added, the stored expansions as the operators hold them on a level (no
+  quantity changed: every form above holds in any unit); "Exponential M2L" excluded from
+  the version and its Fourier counts stated against §3.14's. No quantity of §3.1–§3.14
+  changed; the fixtures were regenerated with the new version (their headers only) and
+  cached tables are rebuilt. f32 stays reserved.
 
 §3.13 is not included, and a change to it does not bump `CONVENTION_VERSION`: it
 describes in-memory data only (chunk layouts, leaf-scaled values, relative frames), and
@@ -227,7 +239,10 @@ code that implements it in the same pull request.
 §3.14 (Phase 6 T13) is not included either: it adds an approximate operator beside §3.11
 and changes no quantity of §3.1–§3.12; no committed fixture depends on it, and its tables
 are built at every `Tables` build, never cached (they take milliseconds). A change to
-§3.14 changes `nd_fmm_tables::plane_wave` in the same pull request.
+§3.14 changes `nd_fmm_tables::plane_wave` in the same pull request. The same holds for
+§3.15's "Exponential M2L" (Helmholtz CH6.1c; excluded at version 4, Helmholtz CH1.3d2): an
+approximate M2L beside RCR whose tables are built per FMM and never cached; a change to it
+changes `nd_fmm_tables::helmholtz::plane_wave` in the same pull request.
 
 ## 3.11 Translation operators
 
@@ -1425,7 +1440,9 @@ radial functions, scaling and translations are below. Notation as in §3.2–§3
 P_n^m without the Condon–Shortley phase (§3.3), idx(n, m) = n² + n + m (§3.6), the
 z-y-z Euler angles (§3.8). The items follow proposal §4. The first release has charges
 only, real and complex, with potentials and gradients; dipole sources are added by a
-later task, with a version bump (decision D5).
+later task, with a version bump (decision D5). The forms are written in one system of
+units; "Level units" says how the operators hold them on the levels of a tree. The
+section is versioned (§3.10) but for its subsection "Exponential M2L".
 
 ### Kernel and factors
 
@@ -1547,6 +1564,36 @@ M2P   φ̃   = 4π ik Σ M̂ₙᵐ ĥₙ(k|v|) e^{β − Im(k)|v|} Yₙᵐ(v̂)
   real tables i^{n−n′} (S|S) (M2M), i^{n′−n} (R|R) (L2L) and −i^{n+n′} (S|R) (M2L, with
   4πκ in place of 4π ik).
 
+### Level units
+
+The forms above hold in any unit of length. With lengths in units of r (positions
+u = x/r, the circumradius a_l/r, a shift t/r) and the wavenumber k̂ = k r, every argument
+kρ = k̂ (ρ/r) is unchanged, and so:
+
+- s_l, β_l and the stored coaxial tables of a shift are the same (they depend on k a_l
+  and k|t| alone);
+- a multipole's coefficients Mₙᵐ = Σⱼ qⱼ jₙ(kρⱼ) Yₙᵐ(ρ̂ⱼ), and M̂ₙᵐ, are the same numbers;
+  with its factor 4π ik̂ = r · 4π ik it represents r φ̃;
+- a local's coefficients are r times their values in the original unit (P2L's factor is
+  4π ik̂), and the local represents r φ̃.
+
+**On a tree** (Helmholtz CH3.1a; `nd_fmm_tables::helmholtz` and
+`nd_fmm_exec::helmholtz::operator`, "Levels and units"), level l works in the units of its
+own boxes: half-width r_l = 1, centres two apart, circumradius √3, wavenumber
+k̂_l = k r_l. A box of level l
+holds its expansions in those units, so it represents r_l φ̃, as a leaf's chunk holds r φ̃
+(§3.13, "Leaf-scaled coordinates"); the output pass divides by §3.13's scales. Between
+levels:
+
+- M2M (from the child's units to the parent's) and M2L (within a level) carry no factor
+  of the units: a multipole's numbers do not depend on them;
+- L2L, from the parent's units to the child's, carries r_{l+1}/r_l = ½ besides its table;
+- P2L, formed in the units of the source leaf (half-width r_s) for a box of half-width r_t,
+  scales its charges by r_t/r_s; M2P, formed in the units of the target leaf, needs none;
+- the factor 4π ik of "Where the factors go" reads 4π ik̂_l on level l.
+
+Every ratio is a power of two, so the change of units is exact.
+
 ### Storage
 
 - **A complex expansion** is two real planes per box, the real part then the imaginary
@@ -1611,7 +1658,8 @@ F_n^m(\mathbf{r} + \mathbf{t}) = \sum_{n'} (E|F)^m_{n'n}(t)\; G_{n'}^m(\mathbf{r
   With the stored coefficients above, M2M and L2L apply these tables with the power
   scales s_c and s_P alone (|t| = a_c and β_P = 2β_c, so the damping factors cancel), and
   M2L applies the factor e^{2β_l − Im(k)|t|} ≤ 1, a scalar per level and offset, besides
-  4π ik.
+  4π ik. This is in one system of units; between the units of two levels L2L also
+  carries ½ ("Level units").
 - **The recursions** (spikes/coaxial/SPIKE_REPORT.md §2.1), with E = (E|F) and f the
   radial function of F. The start column, from Gegenbauer's addition theorem:
   E⁰_{n′0}(t) = (−1)^{n′} √(2n′ + 1) f_{n′}(k t). In n, for every order m:
@@ -1646,14 +1694,15 @@ a_n^m E^m_{n',n+1} = a_{n-1}^m E^m_{n',n-1} - a_{n'}^m E^m_{n'+1,n} + a_{n'-1}^m
 ### Exponential M2L
 
 The plane-wave M2L of §3.14 for the Helmholtz family on low-frequency levels (Helmholtz
-CH6.1c; proposal §5.3), unversioned, as §3.14: an approximate operator beside the RCR M2L
-above, whose input is a stored multipole and whose output is added to a stored local.
+CH6.1c; proposal §5.3), excluded from `CONVENTION_VERSION` as §3.14 is (§3.10): an
+approximate operator beside the RCR M2L above, whose input is a stored multipole and whose
+output is added to a stored local.
 `nd_fmm_tables::helmholtz::plane_wave` implements it and its tests check it against RCR
 on every V offset; `tools/fixtures/check_3_15_plane_wave.py` checks the identities below
 in mpmath.
 
-- **Units.** On a level the stored coefficients work in half-widths (k̂ = k r_l, a box
-  represents r_l φ̃, as the tables of §3.12). The waves work in box widths u = v/2, with
+- **Units.** On a level the stored coefficients work in half-widths ("Level units":
+  k̂ = k r_l, a box represents r_l φ̃). The waves work in box widths u = v/2, with
   κ = k w_l = 2k̂ and, for complex λ and t = √(λ² + κ²), the unit vector
   ŝ = (t cos α, t sin α, iλ)/κ (ŝ·ŝ = 1, complex):
 
@@ -1666,7 +1715,10 @@ e^{i\kappa\hat{\mathbf s}\cdot\mathbf u} = e^{-\lambda u_z + i t (u_x\cos\alpha 
   or `nd_fmm_ref`'s generator (CH6.1b), with
   e^{iκ|u|}/|u| ≈ Σₖ (wₖ/Nₖ) Σ_{j<Nₖ} e^{iκŝₖⱼ·u}, αⱼ = 2πj/Nₖ, on 1 ≤ u_z ≤ 4,
   |u_x|, |u_y| ≤ 4: a V pair whose offset along its direction is 2 or 3 boxes, as in §3.14.
-  Its error is absolute, in box widths.
+  Its error is absolute, in box widths. **Fₖ is node k's largest order**: a source keeps
+  the orders |m| ≤ Fₖ at λₖ (`Quadrature::fourier_counts`; FMM3D's Helmholtz counts, with
+  Σₖ (2Fₖ + 1) Fourier coefficients per direction). §3.14's Fₖ, from FMM3D's Laplace
+  tables, is a count of orders (m < Fₖ), so the same orders are Fₖ + 1 there.
 - **The representation.** e^{iκ|u|}/|u| = iκ h₀(κ|u|), and the solid harmonics of
   ∇/(iκ) (Hobson's theorem) give, for u_z > 0,
 
@@ -1691,7 +1743,9 @@ P_k(n, m) = i^{-n}\, c_{nm}\, \bar{\mathcal P}_n^m\!\left(\tfrac{s}{\kappa}\, i\
 
   finite as κ → 0 (|s/κ| = √3/2 on levels with s < 1).
 - **Up waves** (target above the source) of a stored multipole of degree p represent its
-  r_l φ̃: r_l φ̃(c + w_l u) = Σₖ Σⱼ X(λₖ, αⱼ) e^{iκŝₖⱼ·u}, with Fₖ' = min(Fₖ, p) and
+  r_l φ̃: r_l φ̃(c + w_l u) = Σₖ Σⱼ X(λₖ, αⱼ) e^{iκŝₖⱼ·u}, with Fₖ' = min(Fₖ, p), the
+  largest order at degree p (the orders 0 ≤ m ≤ Fₖ', min(Fₖ, p) + 1 of them; in §3.14's
+  form m < min(Fₖ + 1, p + 1)), and
 
 ```math
 X(\lambda_k, \alpha_j) = 2\pi e^{\beta}\, \frac{w_k}{N_k} \sum_{m=0}^{F_k'}
@@ -1735,27 +1789,92 @@ B_k(m) = \sum_{n=m}^{p} P_k(n, m)\, \hat M_n^{-m}
 
 ### Signatures
 
-Reserved. The high-frequency levels' signatures are fixed by their tasks (S6 in CH0.6,
-S9 in CH0.9, CH4.1), and the change that fixes them bumps `CONVENTION_VERSION`. Proposed
-so far (proposal §5.4, §6.7) and not yet tested: a (θ, φ) grid per level, Gauss–Legendre
-in cos θ and uniform in φ, N_l = (2P − 1)(4P − 3) samples with P = p_l + 1 and the φ
-count padded to a multiple of 4 for the reflection classes; interleaved complex samples on
-the host and split planes on the device; the index permutations of the 34 classes; the
-transforms S → F and F → R; the diagonal transfer function with bandwidth 2P − 2.
+The diagonal form of the M2L on high-frequency levels (proposal §3.6, §5.4; spike S6 of
+Helmholtz CH0.6, whose proposal this is; Helmholtz CH1.3d1, CH1.3d2).
+`nd_fmm_ref::helmholtz::diagonal` implements it, the trusted path of the fast forms, and
+`tools/fixtures/check_3_15.py` checks the identities below. It computes the M2L of
+"Coaxial translations" another way, from a stored multipole to a stored local of the same
+degree p (the form is square): exactly in exact arithmetic, so its error is rounding, which
+grows on the nearest classes at small k a. Which levels and classes use it, and the bound
+E that decides, are not conventions (proposal §3.6; CH4.2, CH4.3).
+
+- **The identity.** With the plane-wave expansion
+
+```math
+e^{ik\hat{\mathbf s}\cdot\mathbf r} = 4\pi \sum_{n} i^n j_n(k|\mathbf r|) \sum_{m} Y_n^m(\hat{\mathbf r})\, Y_n^m(\hat{\mathbf s})
+```
+
+  and a shift t = c_t − c_s, the M2L of degree p in "Coaxial translations" is, degree by
+  degree,
+
+```math
+L_n^m = 4\pi ik\; i^n \int_{S^2} Y_n^m(\hat{\mathbf s})\, T(\hat{\mathbf s})\, F(\hat{\mathbf s})\, d\hat{\mathbf s},
+\quad F(\hat{\mathbf s}) = \sum_{n'\le p} (-i)^{n'} \sum_{m'} M_{n'}^{m'} Y_{n'}^{m'}(\hat{\mathbf s}),
+\quad T(\hat{\mathbf s}) = \sum_{l=0}^{2p} (2l+1)\, i^l h_l(k|\mathbf t|)\, P_l(\hat{\mathbf s}\cdot\hat{\mathbf t})
+```
+
+  exactly, since the (S|R) coefficient of degrees n, n′ ≤ p involves hₗ for l ≤ n + n′
+  only. It is the truncated form of e^{ik|x−y|}/|x − y| =
+  (ik/4π) ∫ e^{ik ŝ·(x − c_t)} T(ŝ) e^{−ik ŝ·(y − c_s)} dŝ. For charges qⱼ at yⱼ,
+  4π F(ŝ) = Σⱼ qⱼ e^{−ik ŝ·(yⱼ − c_s)} up to the truncation.
+- **The grid** of degree p, P = p + 1: 2P − 1 rings at the Gauss–Legendre nodes
+  uᵢ = cos θᵢ on [−1, 1] in ascending order (ring 0 nearest the south pole), weights wᵢ;
+  N_φ azimuths φⱼ = 2πj/N_φ, N_φ a multiple of 4 and at least 4P − 3. Sample (i, j) has the
+  index i N_φ + j, the direction ŝᵢⱼ = (sin θᵢ cos φⱼ, sin θᵢ sin φⱼ, cos θᵢ) and the
+  weight wᵢ 2π/N_φ. The rule is exact for spherical polynomials of degree ≤ 4P − 4 = 4p,
+  the degree of Yₙᵐ T F above. N_φ is a per-level choice (proposal §6.7: sizes suited to
+  an FFT on the host or the device); `nd-fmm-ref` takes the smallest, 4P − 3 rounded up
+  to a multiple of 4, which is 4P, and a fast form records the N_φ it uses.
+  The nodes are symmetric (u_{2p−i} = −uᵢ). Nodes, weights and azimuths are computed in
+  extended precision and rounded once.
+- **Stored form**, with the level's s and β ("Radial functions and scaling"), z = k|t|:
+
+```text
+F̂(ŝ)  = Σₙ (−i)ⁿ sⁿ Σₘ M̂ₙᵐ Yₙᵐ(ŝ)  = e^{−β} F(ŝ)                     S → F
+T̂(ŝ)  = e^{Im z} Σ_{l ≤ 2p} (2l + 1) iˡ hₗ(z) Pₗ(ŝ · t̂)                transfer function
+G(ŝ)  = 4π ik e^{2β − Im(k)|t|} T̂(ŝ) F̂(ŝ)                               the diagonal step
+L̂ₙᵐ  += sⁿ iⁿ Σᵢⱼ wᵢ (2π/N_φ) Yₙᵐ(ŝᵢⱼ) G(ŝᵢⱼ)                          F → R
+```
+
+  T̂ carries the factor e^{Im z} of the stored (S|R) table, and G the scalar factor of the
+  RCR M2L, so both forms take the same stored coefficients. Every sample of T̂ comes from
+  extended precision (at least double-double) and is rounded to the working precision,
+  never summed in it (proposal §3.6). In level units k̂_l replaces k ("Level units"); the
+  signature, a sum of multipole coefficients, does not depend on the unit.
+- **Classes.** An offset o = (a, b, c) of the 316 of §3.12 (t = w_l o) belongs to the class
+  of its representative (min(|a|, |b|), max(|a|, |b|), |c|): 34 classes. The symmetry S of
+  o flips its negative components, then swaps x and y if |a| > |b|, so S o is the
+  representative; since T depends on ŝ · t̂ alone, T_o(ŝ) = T_rep(S ŝ). S maps samples onto
+  samples: x → −x maps the azimuth j to (N_φ/2 − j) mod N_φ, y → −y maps j to −j mod N_φ,
+  z → −z maps ring i to 2p − i, and x ↔ y maps j to (N_φ/4 − j) mod N_φ, applied in that
+  order; T̂_o at sample (i, j) is T̂_rep at the sample of S ŝᵢⱼ.
+- **Not fixed here**: the signature buffers' layout in memory (interleaved complex or split
+  planes, the alignment per box, chunks), as the leaf chunks (§3.13) are not; the fast
+  transforms (the φ step as a product or an FFT, the device's); how T̂ is computed in
+  extended precision (sample by sample, as `nd-fmm-ref` does with hₗ by the upward
+  recursion and Pₗ by the three-term recurrence, or interpolated in ŝ · t̂ from an
+  extended-precision table, proposal §5.4); the choice per level and class. CH4.1, CH4.2,
+  CH4.3 and CH7.x fix them in their crates' documentation; a change to them does not bump
+  the version.
 
 ### Precision and range
 
-f64 only. f32 is reserved: decision D3 (prepared by CH0.6) sets its scope, and the task
-that adds it (CH7.1 at the earliest) states its ranges here, with a version bump. Tested
-so far, by the spikes:
+f64 only. f32 is reserved: decision D3 (signed off 2026-11-06, CH0.6) sets its scope, and
+the task that adds it (CH7.1 at the earliest) states its ranges here, with a version bump.
+Tested so far, by the spikes:
 
 - rotation blocks to n = 1000 (S1);
 - coaxial coefficients to p = 371 and k a = 300, real, complex and imaginary k (S2);
 - radial functions to order 1482 and |z| from 10⁻¹² to 4550 (S3);
+- the diagonal form against RCR in double-double at k a 2.83–400 (S6);
 - the degrees p_l of S7 (spikes/truncation/results/summary.md) and the two-point check
   and fixtures of CH1.4.
 
-`nd-fmm-math` (CH1.2) states the ranges of its own tests, as §3.9 does for Laplace.
+`nd-fmm-math` (CH1.2) and `nd-fmm-ref` (CH1.3) state the ranges of their own tests, as
+§3.9 does for Laplace. The diagonal form of "Signatures" is tested in `nd-fmm-ref`
+(CH1.3d1) for real k at k a 2.83–54 and p 7–82, for weakly damped k (Im k = Re k/10) at
+k a = 8, and in f32 at k a ≈ 16, p = 30 (the reference's own test, not the f32 scope);
+complex k beyond weak damping and Yukawa are not tested.
 
 ### Inputs and outputs
 
@@ -1790,7 +1909,16 @@ for real, complex and imaginary k and real and complex charges:
 - P2M → M2L → L2P on the axis with the stored (S|R) table, 4π ik and
   e^{2β_l − Im(k)|t|}, and P2M → M2M → M2P and P2L → L2L → L2P with the stored (S|S) and
   (R|R) and the power scales alone, against the direct sum;
-- Yukawa's stored forms from î and k̂.
+- Yukawa's stored forms from î and k̂;
+- "Signatures" (Helmholtz CH1.3d2): the plane-wave expansion; the signature of charges in
+  stored form; N_φ = 4P, the symmetric rings and the grid exact for the products of
+  harmonics to degree 4P − 4; the 34 classes and, for every symmetry of an offset, the
+  sample of S ŝ equal to S ŝ; the diagonal M2L in stored form equal to the (S|R) M2L above
+  on the axis (to 10⁻²⁵), and against the direct sum off it, for real, complex and
+  imaginary k;
+- "Level units": P2M the same numbers and P2L r times them in units of r, M2P and L2P
+  giving r φ̃; L2L from a parent's units to a child's with the factor ½, and P2L from a
+  coarser leaf with its charges times r_t/r_s, against the direct sum.
 
 `nd-fmm-math` (CH1.2) confirms these identities in its own tests, and `nd-fmm-ref` (CH1.3)
 the addition theorems, the limit k → 0, Yukawa two ways and the direct sum against the

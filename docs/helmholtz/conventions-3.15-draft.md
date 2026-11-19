@@ -19,5 +19,6 @@ What §3.15 decides that the draft left open, or states differently:
   for L without that factor; the two agree).
 - **Coaxial generators**: (R|R) by the recursion where stable, the outer-sphere
   projection for (S|R) and (S|S) only (S7's sign-off, 2026-10-29).
-- **Signatures** (draft item 7): reserved, fixed by their tasks with a version bump.
+- **Signatures** (draft item 7): reserved at version 3, fixed at version 4 (Helmholtz
+  CH1.3d2), the buffers' layout in memory left to CH4.1.
 - **Dipoles**: not in the first release (D5, signed off 2026-10-29).

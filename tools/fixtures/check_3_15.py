@@ -3,7 +3,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["mpmath==1.4.1"]
 # ///
-"""Numerical check of the identities of docs/CONVENTIONS.md §3.15 (Helmholtz CH1.1).
+"""Numerical check of the identities of docs/CONVENTIONS.md §3.15 (Helmholtz CH1.1, CH1.3d2).
 
 Every check works from the definitions written in §3.15, in mpmath at DPS digits, on
 seeded random points, for real, complex and imaginary k, and fails (exit 1) above its
@@ -32,10 +32,24 @@ tolerance. It checks:
  10. P2M -> M2M -> M2P and P2L -> L2L -> L2P on the z-axis in stored form, child and
      parent (|t| = a_child), with the stored (S|S) and (R|R) and the power scales alone;
  11. the recursions of item 6 (start column, in n, in m) against the projected tables;
- 12. Yukawa's stored forms with i^ and k^.
+ 12. Yukawa's stored forms with i^ and k^;
+ 13. the plane-wave expansion e^{ik s.r} = 4 pi sum_n i^n j_n(kr) sum_m Y(r^) Y(s)
+     ("Signatures"; Helmholtz CH1.3d2);
+ 14. the signature of charges in stored form: 4 pi e^beta F^(s) = sum q e^{-ik s.(y - c)};
+ 15. the signature grid: the reference's N_phi = 4P, the symmetric rings, the quadrature exact for the
+     products of harmonics to degree 4P - 4;
+ 16. the 34 classes of the 316 offsets and their sample permutations: the sample of S s
+     is S s for every symmetry of an offset;
+ 17. the diagonal M2L in stored form on the grid (G = 4 pi ik e^{2 beta - Im(k)|t|} T^ F^,
+     L^ = s^n i^n sum w Y G): equal to check 9's (S|R) M2L on the axis, and against the
+     direct sum off it;
+ 18. the level units ("Level units"): in units of r with k^ = k r, P2M gives the same
+     numbers and P2L r times them, M2P and L2P give r phi~; L2L from the parent's units
+     to the child's with the factor 1/2, and P2L from a coarser source leaf with its
+     charges times r_t / r_s.
 
 Run from the repository root:  uv run tools/fixtures/check_3_15.py
-(or python3 with mpmath==1.4.1). It takes about three minutes.
+(or python3 with mpmath==1.4.1). It takes about five minutes.
 """
 import random
 import sys
@@ -725,6 +739,358 @@ def check_yukawa_scaled():
               err, mpf(10) ** -28)
 
 
+# --- 13-17. signatures and the diagonal form ("Signatures") -------------------------------
+
+
+def legendre_column(m, nmax, t):
+    """P_n^m(t), n = m..nmax, without the Condon-Shortley phase (§3.3), by one recursion."""
+    pmm = mp.fac2(2 * m - 1) * (1 - t * t) ** (mpf(m) / 2) if m > 0 else mpf(1)
+    out = [pmm]
+    if nmax > m:
+        out.append(t * (2 * m + 1) * pmm)
+    for nn in range(m + 2, nmax + 1):
+        out.append((t * (2 * nn - 1) * out[-1] - (nn + m - 1) * out[-2]) / (nn - m))
+    return out
+
+
+def y_all(p, x):
+    """{(n, m): Y_n^m(x^)} for n <= p, the harmonics of ylm by one recursion per order."""
+    _, t, phi = angles(x)
+    out = {}
+    for am in range(0, p + 1):
+        col = legendre_column(am, p, t)
+        for n in range(am, p + 1):
+            c = mp.sqrt((2 - (am == 0)) * (2 * n + 1) / (4 * mp.pi)
+                        * mp.factorial(n - am) / mp.factorial(n + am))
+            if am == 0:
+                out[(n, 0)] = c * col[n]
+            else:
+                out[(n, am)] = c * col[n - am] * mp.cos(am * phi)
+                out[(n, -am)] = c * col[n - am] * mp.sin(am * phi)
+    return out
+
+
+def azimuth_count(p):
+    """N_phi = 4P - 3 rounded up to a multiple of 4, P = p + 1."""
+    n = 4 * (p + 1) - 3
+    return n + (-n) % 4
+
+
+def grid(p):
+    """The signature grid of degree p: 2P - 1 Gauss-Legendre rings in cos(theta),
+    ascending, N_phi azimuths 2 pi j / N_phi; sample (i, j) at i N_phi + j. Returns the
+    rings (u_i, w_i), N_phi and the list of (direction, weight w_i 2 pi / N_phi)."""
+    rings = sorted(zip(*mp.gauss_quadrature(2 * p + 1, "legendre")), key=lambda r: r[0])
+    nphi = azimuth_count(p)
+    samples = []
+    for u, w in rings:
+        st = mp.sqrt(1 - u * u)
+        for j in range(nphi):
+            ph = 2 * mp.pi * j / nphi
+            samples.append(([st * mp.cos(ph), st * mp.sin(ph), u], w * 2 * mp.pi / nphi))
+    return rings, nphi, samples
+
+
+def check_plane_wave_expansion():
+    print("13. e^{ik s.r} = 4 pi sum_n i^n j_n(kr) sum_m Y_n^m(r^) Y_n^m(s) (Signatures)")
+    for label, k in KS.items():
+        err = mpf(0)
+        for _ in range(3):
+            r, s = rand_point(0.2, 1.5), rand_unit()
+            yr, ys = y_all(45, r), y_all(45, s)
+            got = 4 * mp.pi * sum(I**n * sph_j(n, k * norm(r))
+                                  * sum(yr[(n, m)] * ys[(n, m)] for m in range(-n, n + 1))
+                                  for n in range(46))
+            want = mp.exp(I * k * sum(s[i] * r[i] for i in range(3)))
+            err = max(err, abs(got - want) / abs(want))
+        check(f"plane-wave expansion, {label} k", err, mpf(10) ** -28)
+
+
+def signature(p, s_l, m_hat, direction):
+    """F^(s) = sum_n (-i)^n s^n sum_m M^_n^m Y_n^m(s), the stored signature."""
+    ys = y_all(p, direction)
+    return sum((-I) ** n * s_l**n * sum(m_hat[(n, m)] * ys[(n, m)] for m in range(-n, n + 1))
+               for n in range(p + 1))
+
+
+def check_signature_of_charges():
+    print("14. the signature of charges: 4 pi e^beta F^(s) = sum q e^{-ik s.(y - c)}")
+    p = 30
+    centre = [mpf("0.2"), mpf("-0.1"), mpf("0.3")]
+    # k a = 2 (s = 1) and 0.4 (s = 0.4 < 1, so the s^n of F^ is exercised).
+    cases = [(mpf("0.5"), "real", mpf("4")), (mpf("0.5"), "complex", mpc("4", "0.4")),
+             (mpf("0.5"), "yukawa", mpc(0, "4")), (mpf("0.1"), "real", mpf("4")),
+             (mpf("0.1"), "complex", mpc("4", "0.4"))]
+    for a, label, k in cases:
+        for cplx in [False, True]:
+            q = charges(4, cplx)
+            inside = [(rand_point(0, a, centre), qq) for qq in q]
+            m_hat = stored_p2m(k, a, centre, inside, p, [])
+            s_l, beta = scale(k, a), mp.im(k) * a
+            err = mpf(0)
+            for _ in range(3):
+                d = rand_unit()
+                got = 4 * mp.pi * mp.exp(beta) * signature(p, s_l, m_hat, d)
+                want = sum(qq * mp.exp(-I * k * sum(d[i] * (y[i] - centre[i]) for i in range(3)))
+                           for y, qq in inside)
+                err = max(err, abs(got - want) / max(abs(qq) for _, qq in inside))
+            tag = f"{label} k, k a = {mp.nstr(abs(k) * a, 2)}, {'complex' if cplx else 'real'} q"
+            # Truncation at p = 30 with |k| a <= 2: j_31(2)-sized, below 1e-30.
+            check(f"signature of charges, {tag}", err, mpf(10) ** -25)
+
+
+def check_grid():
+    print("15. the signature grid: N_phi, the ring symmetry, exact to degree 4P - 4")
+    for p in range(0, 9):
+        n = azimuth_count(p)
+        assert n % 4 == 0 and n == 4 * (p + 1), (p, n)
+    check("N_phi = 4P - 3 rounded up to a multiple of 4 = 4P, p <= 8", mpf(0), mpf(0))
+    p = 3
+    rings, nphi, samples = grid(p)
+    e_sym = max(abs(rings[i][0] + rings[2 * p - i][0]) for i in range(2 * p + 1))
+    check("nodes symmetric, u_{2P-2-i} = -u_i (z -> -z maps ring i to 2p - i)", e_sym,
+          mpf(10) ** -35)
+    ys = [(y_all(2 * p, d), w) for d, w in samples]
+    keys = [(n, m) for n in range(2 * p + 1) for m in range(-n, n + 1)]
+    err = mpf(0)
+    for a_ in keys:
+        for b_ in keys:
+            g = sum(w * y[a_] * y[b_] for y, w in ys)
+            err = max(err, abs(g - (1 if a_ == b_ else 0)))
+    check(f"Y_n^m orthonormal on the grid for n, n' <= 2p (degree 4P - 4), p = {p}", err,
+          mpf(10) ** -35)
+
+
+def offsets():
+    return [(i, j, k) for i in range(-3, 4) for j in range(-3, 4) for k in range(-3, 4)
+            if max(abs(i), abs(j), abs(k)) >= 2]
+
+
+def symmetry_of(o):
+    """S of an offset: flip its negative components, then swap x and y if |o_x| > |o_y|."""
+    return [o[0] < 0, o[1] < 0, o[2] < 0], abs(o[0]) > abs(o[1])
+
+
+def apply_symmetry(sym, x):
+    flip, swap = sym
+    y = [-x[i] if flip[i] else x[i] for i in range(3)]
+    return [y[1], y[0], y[2]] if swap else y
+
+
+def sample_of(sym, rings, nphi, i, j):
+    """The sample of S s for sample (i, j): x -> -x maps j to (N/2 - j) mod N, y -> -y to
+    -j mod N, z -> -z ring i to rings - 1 - i, x <-> y j to (N/4 - j) mod N, in that order."""
+    flip, swap = sym
+    if flip[0]:
+        j = (nphi // 2 - j) % nphi
+    if flip[1]:
+        j = (-j) % nphi
+    if flip[2]:
+        i = rings - 1 - i
+    if swap:
+        j = (nphi // 4 - j) % nphi
+    return i, j
+
+
+def check_classes():
+    print("16. the 34 classes of the 316 offsets and their sample permutations")
+    reps = {}
+    e_rep = 0
+    for o in offsets():
+        sym = symmetry_of(o)
+        rep = tuple(apply_symmetry(sym, list(o)))
+        want = (min(abs(o[0]), abs(o[1])), max(abs(o[0]), abs(o[1])), abs(o[2]))
+        e_rep = max(e_rep, int(rep != want))
+        reps[rep] = reps.get(rep, 0) + 1
+    check("S o = (min(|a|,|b|), max(|a|,|b|), |c|) for every offset", mpf(e_rep), mpf(0))
+    check("34 classes of 316 offsets", mpf(abs(len(reps) - 34) + abs(sum(reps.values()) - 316)),
+          mpf(0))
+    p = 2
+    rings, nphi, samples = grid(p)
+    nr = len(rings)
+    err = mpf(0)
+    syms = {(tuple(f), s) for f, s in (symmetry_of(o) for o in offsets())}
+    for flip, swap in syms:
+        sym = (list(flip), swap)
+        for i in range(nr):
+            for j in range(nphi):
+                ii, jj = sample_of(sym, nr, nphi, i, j)
+                want = apply_symmetry(sym, samples[i * nphi + j][0])
+                got = samples[ii * nphi + jj][0]
+                err = max(err, max(abs(got[c] - want[c]) for c in range(3)))
+    check(f"the sample of S s is S s, every S of the offsets, p = {p} "
+          f"({len(syms)} symmetries)", err, mpf(10) ** -35)
+
+
+def transfer_coefficients(p, k, t):
+    """e^{Im z} (2l + 1) i^l h_l(z), l <= 2p, z = k|t|: T^(s) = sum_l c_l P_l(s . t^)."""
+    z = k * norm(t)
+    return [mp.exp(mp.im(z)) * (2 * l + 1) * I**l * sph_h(l, z) for l in range(2 * p + 1)]
+
+
+def transfer_stored(coeffs, t, direction):
+    """T^(s) = e^{Im z} sum_{l <= 2p} (2l + 1) i^l h_l(z) P_l(s . t^), z = k|t|."""
+    c = sum(direction[i] * t[i] for i in range(3)) / norm(t)
+    return sum(cl * mp.legendre(l, c) for l, cl in enumerate(coeffs))
+
+
+def diagonal_m2l(p, k, a, t, m_hat):
+    """The diagonal M2L in stored form on the grid of degree p:
+    G = 4 pi ik e^{2 beta - Im(k)|t|} T^ F^, L^_n^m = s^n i^n sum w Y_n^m G."""
+    s_l, beta = scale(k, a), mp.im(k) * a
+    _, _, samples = grid(p)
+    factor = 4 * mp.pi * I * k * mp.exp(2 * beta - mp.im(k) * norm(t))
+    coeffs = transfer_coefficients(p, k, t)
+    l_hat = {(n, m): mpf(0) for n in range(p + 1) for m in range(-n, n + 1)}
+    for d, w in samples:
+        ys = y_all(p, d)
+        f = sum((-I) ** n * s_l**n * sum(m_hat[(n, m)] * ys[(n, m)] for m in range(-n, n + 1))
+                for n in range(p + 1))
+        g = factor * transfer_stored(coeffs, t, d) * f
+        for (n, m), y in ys.items():
+            l_hat[(n, m)] += s_l**n * I**n * w * y * g
+    return l_hat
+
+
+def coaxial_m2l(p, k, a, t, m_hat):
+    """Check 9's M2L on the z-axis: the stored (S|R) table, 4 pi ik and e^{2 beta - Im(k) t}."""
+    s_l, beta = scale(k, a), mp.im(k) * a
+    scalar = mp.exp(2 * beta - mp.im(k) * t)
+    l_hat = {}
+    for m in range(0, p + 1):
+        sr = coaxial("SR", k, t, m, p, mpf("0.25"))
+        for slot in ([0] if m == 0 else [m, -m]):
+            for nn in range(m, p + 1):
+                acc = sum(mp.exp(mp.im(k * t)) * s_l ** (n + nn) * sr[(n, nn, slot)]
+                          * m_hat[(n, slot)] for n in range(m, p + 1))
+                l_hat[(nn, slot)] = 4 * mp.pi * I * k * scalar * acc
+    return l_hat
+
+
+def check_diagonal_m2l():
+    print("17. the diagonal M2L in stored form (Signatures)")
+    p = 6
+    for label, k in KS.items():
+        for cplx in [False, True]:
+            q = charges(3, cplx)
+            tag = f"{label} k, {'complex' if cplx else 'real'} q"
+            # On the axis it is the truncated (S|R) M2L of check 9, exactly.
+            a, t = mpf("0.3"), mpf("1.1")
+            src = [mpf(0)] * 3
+            inside = [(rand_point(0, a, src), qq) for qq in q]
+            m_hat = stored_p2m(k, a, src, inside, p, [])
+            got = diagonal_m2l(p, k, a, [mpf(0), mpf(0), t], m_hat)
+            want = coaxial_m2l(p, k, a, t, m_hat)
+            scale_ = max(abs(v) for v in want.values())
+            err = max(abs(got[key] - want[key]) for key in want) / scale_
+            check(f"diagonal = (S|R) M2L on the axis, p = {p}, {tag}", err, mpf(10) ** -25)
+            # Off the axis, a V offset (2, 1, -1) of boxes of half-width 1/4: against the
+            # direct sum, with charges and targets within 0.05 of the centres.
+            r = mpf(1) / 4
+            a = mp.sqrt(3) * r
+            t = [2 * r * c for c in (2, 1, -1)]
+            inside = [(rand_point(0, mpf("0.05"), src), qq) for qq in q]
+            m_hat = stored_p2m(k, a, src, inside, p, [])
+            l_hat = diagonal_m2l(p, k, a, t, m_hat)
+            err = mpf(0)
+            for _ in range(2):
+                x = rand_point(0, mpf("0.05"), t)
+                want = sum(qq * 4 * mp.pi * kernel(k, x, y) for y, qq in inside)
+                got = stored_l2p(k, a, t, l_hat, x, p, [])
+                err = max(err, abs(got - want) / max(abs(want), mpf(10) ** -30))
+            # Truncation (0.1/|t|)^7 with |t| = 1.22: about 2e-8.
+            check(f"diagonal M2L off the axis against the direct sum, {tag}", err,
+                  mpf(10) ** -6)
+
+
+# --- 18. level units ("Level units") ----------------------------------------------------
+
+
+def check_level_units():
+    print("18. level units: the forms in units of r, k^ = k r (Level units)")
+    p = 30
+    for label, k in KS.items():
+        for cplx in [False, True]:
+            tag = f"{label} k, {'complex' if cplx else 'real'} q"
+            q = charges(3, cplx)
+            # (a) P2M: the same stored numbers in units r; M2P there gives r phi~.
+            r = mpf("0.375")
+            a = mp.sqrt(3) * r
+            c = [mpf("0.1"), mpf("0.2"), mpf("-0.3")]
+            unit = lambda x: [v / r for v in x]  # noqa: E731
+            inside = [(rand_point(0, a, c), qq) for qq in q]
+            m_abs = stored_p2m(k, a, c, inside, p, [])
+            m_lev = stored_p2m(k * r, a / r, unit(c), [(unit(y), qq) for y, qq in inside], p, [])
+            e_m = max(abs(m_abs[key] - m_lev[key]) for key in m_abs) / max(
+                abs(v) for v in m_abs.values())
+            x = rand_point(4 * a, 5 * a, c)
+            want = r * sum(qq * 4 * mp.pi * kernel(k, x, y) for y, qq in inside)
+            got = stored_m2p(k * r, a / r, unit(c), m_lev, unit(x), p, [])
+            e_mp = abs(got - want) / abs(want)
+            # (b) P2L: r times the stored numbers; L2P there gives r phi~.
+            outside = [(rand_point(4 * a, 5 * a, c), qq) for qq in q]
+            l_abs = stored_p2l(k, a, c, outside, p, [])
+            l_lev = stored_p2l(k * r, a / r, unit(c), [(unit(y), qq) for y, qq in outside], p, [])
+            e_l = max(abs(r * l_abs[key] - l_lev[key]) for key in l_abs) / max(
+                abs(r * v) for v in l_abs.values())
+            x = rand_point(0, a, c)
+            want = r * sum(qq * 4 * mp.pi * kernel(k, x, y) for y, qq in outside)
+            got = stored_l2p(k * r, a / r, unit(c), l_lev, unit(x), p, [])
+            e_lp = abs(got - want) / abs(want)
+            check(f"P2M the same numbers in units r, {tag}", e_m, mpf(10) ** -30)
+            check(f"M2P in units r gives r phi~, {tag}", e_mp, mpf(10) ** -14)
+            check(f"P2L r times the numbers in units r, {tag}", e_l, mpf(10) ** -30)
+            check(f"L2P in units r gives r phi~, {tag}", e_lp, mpf(10) ** -14)
+            # (c) L2L from the parent's units to the child's carries 1/2: on the z-axis,
+            # parent at 0 with half-width r_p = 2 r_c, child at -r_c z (a corner direction
+            # is not needed: the factor is the units', not the shift's).
+            r_c = mpf("0.25")
+            r_p = 2 * r_c
+            a_c, a_p = mp.sqrt(3) * r_c, mp.sqrt(3) * r_p
+            parent, child = [mpf(0)] * 3, [mpf(0), mpf(0), -a_c]
+            far = [(rand_point(14, 16, parent), qq) for qq in q]
+            kp, kc = k * r_p, k * r_c
+            l_p = stored_p2l(kp, a_p / r_p, parent, [([v / r_p for v in y], qq) for y, qq in far],
+                             p, [])
+            s_c, s_p = scale(kc, a_c / r_c), scale(kp, a_p / r_p)
+            l_c = {}
+            pc = 14  # the projected table's degree (its 30-point rule resolves n + n' <= 28)
+            t_child = -a_c / r_c  # the shift c - P in the child's units
+            for m in range(0, pc + 1):
+                rr = coaxial("RR", kc, t_child, m, pc, a_c / r_c / 2)
+                damp = mp.exp(-mp.im(kc * a_c / r_c))
+                for slot in ([0] if m == 0 else [m, -m]):
+                    for nn in range(m, pc + 1):
+                        l_c[(nn, slot)] = mpf(1) / 2 * s_c**nn * sum(
+                            damp * rr[(n, nn, slot)] * s_p ** (-n) * l_p[(n, slot)]
+                            for n in range(m, pc + 1))
+            err = mpf(0)
+            for _ in range(2):
+                x = rand_point(0, a_c / 2, child)
+                want = r_c * sum(qq * 4 * mp.pi * kernel(k, x, y) for y, qq in far)
+                got = stored_l2p(kc, a_c / r_c, [v / r_c for v in child], l_c,
+                                 [v / r_c for v in x], pc, [])
+                err = max(err, abs(got - want) / abs(want))
+            # Truncation at degree 14, measured below 1e-16 but 2.6e-14 for Yukawa (whose
+            # field at the targets is e^{-35}); a wrong factor of the units errs by O(1).
+            check(f"L2L in level units with the factor 1/2 gives r_c phi~, {tag}", err,
+                  mpf(10) ** -12)
+            # (d) P2L from a coarser source leaf (r_s = 2 r_t) in the source's units, its
+            # charges scaled by r_t / r_s, gives the target box's r_t phi~.
+            r_t, r_s = mpf("0.25"), mpf("0.5")
+            a_t = mp.sqrt(3) * r_t
+            c_t = [mpf("0.1"), mpf("0"), mpf("0.2")]
+            srcs = [(rand_point(4 * a_t, 5 * a_t, c_t), qq) for qq in q]
+            l_t = stored_p2l(k * r_s, a_t / r_s, [v / r_s for v in c_t],
+                             [([v / r_s for v in y], qq * r_t / r_s) for y, qq in srcs], p, [])
+            x = rand_point(0, a_t, c_t)
+            want = r_t * sum(qq * 4 * mp.pi * kernel(k, x, y) for y, qq in srcs)
+            got = stored_l2p(k * r_t, a_t / r_t, [v / r_t for v in c_t], l_t,
+                             [v / r_t for v in x], p, [])
+            check(f"P2L in the source leaf's units with charges r_t/r_s gives r_t phi~, {tag}",
+                  abs(got - want) / abs(want), mpf(10) ** -14)
+
+
 def main():
     check_kernel()
     check_radial()
@@ -738,6 +1104,12 @@ def main():
     check_m2m_l2l_chain()
     check_recursions()
     check_yukawa_scaled()
+    check_plane_wave_expansion()
+    check_signature_of_charges()
+    check_grid()
+    check_classes()
+    check_diagonal_m2l()
+    check_level_units()
     if failures:
         print(f"{len(failures)} check(s) failed: {failures}")
         sys.exit(1)

@@ -1,7 +1,7 @@
 {
  "header": {
   "description": "FMM3D's Helmholtz direct sum, the potential and gradient of e^{ik|x-y|}/(4 pi |x-y|) (CONVENTIONS §3.15, Kernel and factors), for real, complex and imaginary k and real and complex charges (Helmholtz CH1.4)",
-  "convention_version": 3,
+  "convention_version": 4,
   "convention": "CONVENTIONS §3.15 (drafted in Helmholtz CH1.4, adopted in CH1.1)",
   "generator": "tools/fixtures/gen_helmholtz_fmm3d.py",
   "generator_version": 1,

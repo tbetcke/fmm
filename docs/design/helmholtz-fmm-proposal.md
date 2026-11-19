@@ -186,9 +186,12 @@ j_n and spherical Hankel functions of the first kind h_n = h_n^{(1)}:
 ```
 
 for |y| = r_< < r_> = |x| about a common centre. A multipole expansion of box b is
-Σ M_nm h_n(kρ) Y_n^m(ρ̂) about its centre, a local expansion Σ L_nm j_n(kρ) Y_n^m(ρ̂).
-The factors ik and 1/(4π) are applied once (Section 4, item 1), so no coefficient below
-carries them.
+4π ik Σ M_nm h_n(kρ) Y_n^m(ρ̂) about its centre, a local expansion Σ L_nm j_n(kρ) Y_n^m(ρ̂),
+both of φ̃ = 4πφ. The factor 1/(4π) is applied once, by `nd-fmm-exec`, at the output; the
+factor 4π ik by the three operators where a far-field contribution crosses from a singular
+to a regular representation, M2L, M2P and P2L, so the locals carry it
+(L_nm = 4π ik Σ q h_n Y_n^m) and the multipoles do not (CONVENTIONS §3.15, "Where the
+factors go"; amended at CH1.3d2).
 
 **Which quantities are real.** For real k, j_n is real and h_n is not:
 
@@ -254,16 +257,20 @@ blocks come from a recursion that is stable at large degree (Section 8, R1).
 
 Each level uses a scale s_l and scaled radial functions so that the scaled coefficients and
 the radial functions stay of moderate size at every degree used on that level. The model
-is FMM3D's: s_l = min(|k| r_l, 1) with r_l the half-width, multipoles divided and locals
-multiplied by s_lⁿ (or the reverse, with the radial functions scaled to match). At low
-frequency the scaled j_n still carry 1/(2n + 1)!!, about 10^{−101} at n = 60: harmless in
-f64, not in f32.
+is FMM3D's, on the circumradius: s_l = min(|k| a_l, 1) with a_l = √3 r_l the circumradius
+(r_l the half-width), multipoles divided and locals multiplied by s_lⁿ, and for Im k > 0 a
+per-box damping factor e^{∓β_l}, β_l = Im(k) a_l, on the stored multipoles and locals, so
+that every leaf operator applies only non-positive exponents (CONVENTIONS §3.15, "Radial
+functions and scaling"; amended at CH1.3d2). On a tree each level works in the units of its
+own boxes, k̂_l = k r_l (CONVENTIONS §3.15, "Level units"). At low frequency the scaled j_n
+still carry 1/(2n + 1)!!, about 10^{−101} at n = 60: harmless in f64, not in f32.
 
 For Yukawa above κ r_l ≈ 1 the power scaling does not control i_n and k_n, which grow and
-decay like e^{±κρ}. There the radial functions are stored with the exponential factor
-removed (e^{−κρ} i_n and e^{κρ} k_n, as in FMM-Yukawa) and the factor is carried by the
-translation coefficients. The exact definitions, and whether the double factorials are
-absorbed into the basis, are decided by spike S3 and fixed in §3.15.
+decay like e^{±κρ}. The radial functions are therefore stored with the exponential factor
+removed (e^{−κρ} i_n and e^{κρ} k_n, as in FMM-Yukawa), on every level and for every kind
+of k (the factor is 1 for real k), and the translation tables carry it in their stored
+normalisation. No double factorial is absorbed into the basis (spike S3; CONVENTIONS §3.15;
+amended at CH1.3d2).
 
 Test consequence: as k → 0 on a fixed tree, the scaled Helmholtz coefficients converge to
 the scaled Laplace coefficients of §3.7 under a fixed diagonal map (the orthonormal–Racah
@@ -562,13 +569,14 @@ The Helmholtz quantities get one new section, CONVENTIONS §3.15, and a bump of
    between the blocks of β and π − β used by M2M (S1).
 6. **Coaxial translations.** The (S|R), (S|S) and (R|R) coaxial coefficients per order |m|
    with rectangular truncation p_l → p_{l±1}, and their recursions. (S|S) = (R|R), real
-   for real k and for Yukawa; (S|R) complex for real and complex k; the index symmetry
-   that halves the tables, as confirmed by S2.
+   for real k; for Yukawa i^{n−n′} (E|F) is real (amended at CH1.3d2); (S|R) complex for
+   real and complex k; the index symmetry that halves the tables, as confirmed by S2.
 7. **Signatures.** The (θ, φ) grid of a high-frequency level (Gauss–Legendre in cos θ,
    uniform in φ with the count padded to a multiple of 4 for the reflection classes of
-   Section 5.4), their storage (interleaved complex on the host, split planes on the
-   device), the index permutations of the 34 classes on that grid, the transforms
-   S → F and F → R, the diagonal translation function and its bandwidth 2P − 2.
+   Section 5.4), the index permutations of the 34 classes on that grid, the transforms
+   S → F and F → R, the diagonal translation function and its bandwidth 2P − 2. Their
+   storage in memory (interleaved complex on the host, split planes on the device,
+   Section 3.3) is CH4.1's, not a convention (amended at CH1.3d2).
 8. **Precision and range.** The degrees and arguments at which each family is tested, in
    the spirit of §3.9.
 9. **Inputs and outputs.** k as (Re k, Im k) in f64; charges as split planes per vector,
@@ -1875,6 +1883,15 @@ these.
   review 2026-11-12, K3 and U1; signed off by the user at CHA.1's plan, "Keep all, none
   archived (Recommended)" and "One spikes workspace (Recommended)"): Section 6.1's `spikes/`
   row, the spikes a workspace of their own with their own lock file, out of the root's.
+- **Amended at CH1.3d2, 2026-11-19** (CONVENTIONS §3.15 at version 4,
+  `docs/helmholtz/tasks/CH1.3d2.md`; review 2026-11-12, M2, left to this task by question 5
+  of #209, the user, "I agree"; the corrections of CH1.1's sign-off 2 on #135, "1 and 2 as
+  recommended"; the signature storage by the user at CH1.3d2's plan, "Leave layout to CH4.1
+  (Recommended)"): Section 3.1, the locals carry 4π ik, applied by M2L, M2P and P2L;
+  Section 3.4, the scale on the circumradius, the per-box damping factor, the exponential
+  scaling on every level and no double factorial absorbed, and the level units; Section 4,
+  item 6 (Yukawa's tables real as i^{n−n′} (E|F)) and item 7 (the signatures' storage left
+  to CH4.1).
 
 ## Appendix B. The stability check behind Section 3.6
 
