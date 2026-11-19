@@ -209,7 +209,8 @@ signature buffers, scratch and driver, and `signed_permutation`).
   `tests/helmholtz/diagonal_level.rs` checks the alignment (f64 and f32, padded and not), the
   store conversions bit for bit, the level call against the sum of `nd_fmm_ref`'s
   `diagonal::m2l` over each target's pairs (256 u; p = 6 and 12, p = 17 ignored in release),
-  chunks of 1, 2, 3, 4, 5 and all bit for bit, the shapes by hand, the sizes without building,
+  chunks of 1, 2, 3, 4, 5, 7 and all bit for bit (f64, and a padded f32 stride), clones aligned,
+  the shapes by hand, the sizes without building,
   and ref's 316 offsets the tables' set with each of the 34 classes inside one of the 16.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).

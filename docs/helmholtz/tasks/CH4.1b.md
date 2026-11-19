@@ -122,7 +122,25 @@ No M6 timing (none needed: memory and counts only).
   states it, CH4.3's fallback and CH8.0 (per-node tables) are where it is answered.
 
 ## Pending runs
-(filled in step 6)
+None. Kathleen job 651903 (node-c11a-079, `singlenode`, 9 min 38 s; the memory baseline and
+the census) and job 653493 (the 40 × 1 census again after the self-review's fix: every V row
+a rank holds counted, the replicated top's included). Raw outputs in
+`~/projects/fmm-archive/kathleen/runs/ch4-1b/`.
 
 ## Open questions
-(filled when they arise)
+For sign-off on the PR (the report's §5): 1, the acceptance as read (within the budget at one
+rank per node; at 40 ranks per node levels 2 and 3 do not fit); 2, the buffers' layout; 3, the
+budget's default.
+
+## Results
+- Built as planned, with these deviations: `scratch_shape` takes p (it computes the tables'
+  and samples' sizes itself) where the plan listed `conversions_bytes` and `samples`; the test
+  level is a 6 × 6 × 2 block of boxes (six targets, one without pairs) where the plan said
+  4 × 4 × 4; the chunks tested are 1, 2, 3, 4, 5, 7 (a buffer larger than the targets) and all.
+- The self-review (a subagent, on the plan, the proposal's §2 and §10 row and the branch)
+  found nothing blocking; fixed in the branch: the census counted only the targets a rank
+  computes, not the replicated top's rows every rank holds and runs (the 40 × 1 census
+  rerun); no f64 stride is ever padded (N_φ = 4(p + 1)), so F → R and the level call are now
+  tested through a padded f32 stride; a clone of `Signatures` kept the original's offset (now
+  aligned on its own allocation); the source signatures' bytes reported for ranks over the
+  budget too; `rows[0] = 0` asserted.

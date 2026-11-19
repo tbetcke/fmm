@@ -9,13 +9,14 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11). CH4.1 is split; CH4.1a (the product
-conversions, measured: per box 1–3 RCR pairs, W1 at kD = 500's RCR levels 5–16× faster on one
-core, an FFT worth about 1–2 % of the run) is signed off (A5's stop): H4 goes on with the
-product, CH4.1b next, then CH4.2; the FFT track stays item 11. HR, H0 and H2 are still open; of H0,
-CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
-`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
-H1.G in `git show 8475009:docs/helmholtz/roadmap.md`.
+(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a (the product conversions,
+signed off: H4 goes on with the product). CH4.1b (the signature buffers, the level driver by
+chunks, the scratch under 8 GiB per node; W1 at kD = 1000 within it at one rank per node, not
+at 40 ranks per node on levels 2–3) waits for its questions 1–3; CH4.2 next, then CH4.3; the FFT
+track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7,
+CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
+(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+`git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
 
@@ -645,23 +646,14 @@ task's full line is in its record or report and its progress entry
   about 1–2 % of the run. *Sign-off:* the PR's questions 1–3 as recommended (the user on #234,
   2026-11-19: "Q1-3 as recommended. Merge when green"): H4 goes on with the product, the FFT track stays item 11; the
   acceptance met as read; proposal §6.7 amended.
-- [ ] **CH4.1b The signature buffers and the level's scratch.** Per-box aligned signature
-  buffers; source signatures kept per level call, target accumulators chunked under the node
-  budget. *Done when:* bits independent of the chunk size; scratch within the budget on W1 at
-  kD = 1000. Also, from the H3 gate (§5): the resident memory of the RCR FMM on W1 at kD = 500
-  at the calibrated degrees, the baseline the signature scratch is added to. Also (CH1.3d2, the
-  user at its plan): the signature buffers' layout in memory (interleaved or planes, alignment,
-  chunks) is fixed here, in the crate's documentation, not in CONVENTIONS (§3.15 "Signatures",
-  "Not fixed here"); the grid, sample order and stored form are §3.15's. Also (review
-  2026-11-19, C5, C7): ref's `diagonal::Symmetry` mapped onto the tables'
-  `SignedPermutation`, with a test that ref's `offsets()` and the tables' V offsets are one
-  set; `diagonal::Workspace` renamed before its first user. Also (CH4.1a's report §2): the
-  column kernel of `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core
-  (baseline SSE2 codegen, no fma) and 6–10 on a Grace core; measure the level's conversions
-  after CH4.2 and, if they matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1).
-  Also (CH4.1a's review): the Legendre tables hold (p + 1)²(p + 2) values per level (S → F and F
-  → R apart; 18.5 MB at p = 131, about 120 MB at p = 245 in f64), counted in the budget.
-  *Needs:* CH4.1a and its sign-off.
+- [x] **CH4.1b The signature buffers and the level's scratch.** Report:
+  `fmm-validate/results/helmholtz-ch4-1b.md`; record `docs/helmholtz/tasks/CH4.1b.md` (the second
+  half of CH4.1). `nd_fmm_tables::helmholtz::diagonal::level`: `Signatures` (each box on a 64-byte
+  line), `m2l_level` (sources kept, targets by chunks, every chunk size bit for bit), `scratch_shape`
+  under `DEFAULT_SIGNATURE_NODE_BUDGET` (8 GiB per node); C5 (`signed_permutation`) and C7
+  (`SignatureWorkspace`). W1 at kD = 500 peaks at 4.4 GB with RCR everywhere, 5.8 GB under the
+  defaults (10⁻⁶); at kD = 1000 every level fits at 1 × 40, levels 2–3 not at 40 × 1.
+  *Sign-off:* the PR's questions 1–3, pending.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
   deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
@@ -669,7 +661,13 @@ task's full line is in its record or report and its progress entry
   (C₀ u) f64 RCR rounds up to 2.4× more than the diagonal form (CH1.3d1's record), so a
   comparison with RCR there needs 2E. Also (review 2026-11-19, M11): an ignored release test
   of the trusted path at k a = 108 and 216 on a few classes (CH4.4's degrees; S6 about 5 s per
-  class at p = 256). *Needs:* CH4.1b, CH0.6.
+  class at p = 256). Also (CH4.1a's report §2, moved from CH4.1b): the column kernel of
+  `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core (baseline SSE2
+  codegen, no fma) and 6–10 on a Grace core; measure the level's conversions here and, if they
+  matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1). Also (CH4.1b): the threaded
+  level call keeps `m2l_level`'s order (each target's row in order, F → R after, the RCR pairs
+  added after F → R), the buffers' layout as signed off, and `scratch_shape`'s budget per rank
+  from `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node. *Needs:* CH4.1b, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
@@ -685,7 +683,10 @@ task's full line is in its record or report and its progress entry
   (`helmholtz_accuracy::Density`). Also (review 2026-11-19, A8, M12): the refit of the
   high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of the
   error on W1 at kD = 1000, 10⁻⁸); C₀ checked at p ≥ 72 against a double-double reference, or
-  raised, with the glibc margin. *Needs:* CH4.2.
+  raised, with the glibc margin. Also (CH4.1b's report §3, question 1): the whole-level
+  fallback to RCR decided from the largest need over the ranks (`scratch_shape` on every rank,
+  one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9); at 40 ranks
+  per node W1 at kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at
@@ -872,8 +873,11 @@ task's full line is in its record or report and its progress entry
   40 ranks per node on Kathleen; the resident memory per node at 40 × 1, 10 × 4 and 1 × 40
   against private copies; the evaluation at 40 × 1 against 4 × 10 and 1 × 40 on W1 at
   kD = 100 and 500 at 10⁻⁶, where the node budget now sends levels to Rotation; a default
-  proposed (the window on or off, the node budget with it). *Needs:* CH4.0. *Machines:*
-  Kathleen, locust. *Sign-off:* the `unsafe` exception and the default.
+  proposed (the window on or off, the node budget with it). Also (CH4.1b's report §3, question
+  1): a coarse level's source signatures of the diagonal form formed once per node and shared
+  (every rank's V rows on levels 2–3 need nearly every source: 413–433 MiB per rank at
+  kD = 1000), so that the diagonal form keeps those levels at many ranks per node. *Needs:*
+  CH4.0. *Machines:* Kathleen, locust. *Sign-off:* the `unsafe` exception and the default.
 - [ ] **CH8.1 Byte cap for the replicated top; exchange of the high-frequency levels.**
   *Done when:* bit for bit the one-rank output on P ranks; memory per rank and per node
   bounded. *Needs:* CH4.4, CHA.7. *Machines:* Kathleen.

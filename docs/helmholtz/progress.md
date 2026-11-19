@@ -3647,3 +3647,60 @@ request, using this template:
   self-review's fixes (a wrong scratch-size formula in the docs, two stray rows in the report,
   units of the count, the FFT bound's wording, the scale in f64, the batch test across two ring
   blocks, the tolerance 256 u) are in the branch.
+
+## 2026-11-19: CH4.1b The signature buffers and the level's scratch
+- Done: the second half of CH4.1. `nd_fmm_tables::helmholtz::diagonal::level`:
+  - `Signatures`, each box's signature on its own 64-byte line, the stride padded to whole
+    lines, interleaved complex in §3.15's order; the layout in the crate's docs, not
+    CONVENTIONS;
+  - `Conversions::{s2f_into, f2r_from}`, each box `s2f`'s and `f2r`'s bits;
+  - `m2l_level`, the serial level driver: S → F of the sources once per call, the targets by
+    chunks (accumulator zeroed, its row in order, F → R by blocks);
+  - `scratch_shape` and `LevelBuffers` under `DEFAULT_SIGNATURE_NODE_BUDGET` (8 GiB per node
+    over the ranks), the Legendre tables counted (`Conversions::bytes_for`).
+  
+  Also C5 (`signed_permutation`: ref's flips and swap as elements of O_h) and C7 (ref's
+  `diagonal::Workspace` renamed `SignatureWorkspace`). `helmholtz_accuracy`'s census
+  (`Row::signature_scratch`, the table "Diagonal-form scratch") and
+  `tools/helmholtz/ch4-1b-runs.sh`. Report `fmm-validate/results/helmholtz-ch4-1b.md`; record
+  `docs/helmholtz/tasks/CH4.1b.md`.
+- Tests: `fmm-tables/tests/helmholtz/diagonal_level.rs` (12 tests, 1 ignored):
+  - the level call against the sum of `nd_fmm_ref`'s `diagonal::m2l` per pair, within 256 u
+    (p = 6, 12; p = 17 in release);
+  - chunks 1–5, 7 and all bit for bit, f64 and a padded f32 stride (a deliberate missing zeroing
+    fails it);
+  - the store conversions bit for bit;
+  - alignment and clones, the shapes by hand, the sizes without building;
+  - C5's offset set and class nesting.
+  
+  `helmholtz_accuracy`'s `check_levels` checks the census on every run of its MPI test.
+- Measurements (Kathleen jobs 651903 and 653493, node-c11a-079, `singlenode`):
+  - W1 at kD = 500, 1 × 40, peak resident: 4.4 GB (RCR everywhere) and 5.8 GB (defaults) at
+    10⁻⁶; 5.1 and 7.9 GB at 10⁻⁸. With every pair diagonal, the scratch is 0.38–0.45 GB on
+    levels 2–3, about 8 % on the defaults' peak.
+  - W1 at kD = 1000: every level fits 8 GiB at 1 × 40 (levels 2–4 in 1.3–1.7 GiB, one chunk).
+    At 40 × 1, level 2 fits on no rank (413–433 MiB of sources against 205 MiB) and level 3
+    not on every rank (report §3).
+  - Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-1b/`.
+- Checks: `/verify` on the M6:
+  - fmt; Clippy (default, examples, workspace all-targets); rustdoc with `-D warnings`;
+  - the default and workspace tests at opt-level 1 (1,327 and 1,371 passed), and after the
+    self-review's fixes the three changed crates' again (621 passed);
+  - the new ignored test in release;
+  - the tables' Helmholtz test executable at opt-level 0: 58.6 s at load 16–22 (CH4.1a: 38.4 s;
+    the new tests about 2 s of it).
+  
+  Not run: the MPI list (no MPI crate's library code changed; nd-fmm-validate's census adds two
+  all-reduces to its own harness, run by its one-rank test); `cargo deny` (no manifest);
+  Laplace's fixtures and benchmarks beyond the workspace tests (no Laplace path changed).
+  Nothing pending.
+- Decisions: questions 1–3 of the PR for sign-off: 1, the acceptance as read (within the budget
+  at one rank per node; levels 2–3 not at 40 ranks per node, with Alsos on CH4.3 and CH8.0);
+  2, the buffers' layout; 3, the budget's default.
+- Laplace: not touched (a Helmholtz module of `nd-fmm-tables`, a rename in `nd-fmm-ref`'s
+  Helmholtz module, the validation harness).
+- Follow-ups:
+  - CH4.2's Also: the column kernel's rate (moved from CH4.1b), and the threaded level call in
+    `m2l_level`'s order;
+  - CH4.3's Also: the whole-level fallback from the largest need over the ranks;
+  - CH8.0's Also: coarse levels' source signatures shared per node.
