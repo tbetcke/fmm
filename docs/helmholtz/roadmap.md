@@ -8,11 +8,11 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j are merged (items 1–6),
-and of item 7 CHA.1 and CHA.2 (#224, #225). CHA.3 (the PR after #225) removes the M2L
-configuration Phase 6 T11's rule left unused (Phase 5N's node budget, constants and
-`resolve(p)`), `Auto`'s choices unchanged; it closes item 7. HR, H0, H1 and H2 are still open;
-of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CH1.3d.
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j and CHA.1–CHA.3 are
+merged (items 1–7). CH1.3d is split in two: CH1.3d1 (the PR after #227) adds the diagonal form
+in extended precision to `nd-fmm-ref`, the trusted path of CH4.1 and CH4.2; CH1.3d2, the
+§3.15 revision for sign-off, is next, then CH4.1. HR, H0, H1 and H2 are still open; of H7,
+CH7.5a–c are done, and of H0, CH0.4 and CH0.6.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -303,13 +303,10 @@ family, checked against FMM3D's fixtures.
   question 5 of #209, the user, 2026-11-12, on #209: "I agree": left to this task). *Needs:* CH0.6, CH1.3c. Split on 2026-11-19 into two
   sub-tasks (`docs/helmholtz/tasks/CH1.3d1.md`, "Split"): the code, then the convention,
   which needs the user's sign-off:
-- [ ] **CH1.3d1 The diagonal form in nd-fmm-ref.** `nd_fmm_ref::helmholtz::diagonal`: S6's grid,
-  S → F and F → R, the transfer function in double-double rounded once, the 34 classes and
-  their sample permutations, `m2l` from a stored multipole to a stored local, the bound E.
-  *Done when:* against CH1.3c's RCR on all 34 classes (and the 316 offsets through their
-  permutations) within the bound E of §3.6 (measured ≤ 2E, CH0.6's reading); S → F → R the
-  identity to round-off; the f32 chain within 2E in u = 2⁻²⁴. No convention changed.
-  *Needs:* CH0.6, CH1.3c.
+- [x] **CH1.3d1 The diagonal form in nd-fmm-ref.** Record `docs/helmholtz/tasks/CH1.3d1.md`.
+  `nd_fmm_ref::helmholtz::diagonal` (S6's grid, S → F, F → R, T̂ in double-double rounded once,
+  the 34 classes, `m2l`, the bound E): against RCR within 2E on the 34 classes at k a 2.83–54,
+  p 7–82, f64 and f32, and on the 316 offsets; at E's floor f64 RCR rounds more than it does.
 - [ ] **CH1.3d2 CONVENTIONS §3.15 revised.** "Signatures" as CH1.3d1 built it (S6's proposal,
   CH0.6's question 5), with the rest of CH1.3d's text above (M1, M3, M4, M10's §3.9; the
   proposal's §3.4 and §3.1, M2), one `CONVENTION_VERSION` bump; `tools/fixtures/check_3_15.py`
@@ -680,7 +677,10 @@ task's full line is in its record or report and its progress entry
   the signature scratch is added to. *Needs:* CH3.1, D6.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
-  deterministic with the RCR pairs added after F → R. *Needs:* CH4.1, CH0.6.
+  deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
+  `nd_fmm_ref::helmholtz::diagonal` (its transfer functions sample by sample); at E's floor
+  (C₀ u) f64 RCR rounds up to 2.4× more than the diagonal form (CH1.3d1's record), so a
+  comparison with RCR there needs 2E. *Needs:* CH4.1, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
