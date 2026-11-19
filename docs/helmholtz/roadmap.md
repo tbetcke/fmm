@@ -11,8 +11,7 @@ Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
 (CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a and CH4.1b (the product
 conversions, the signature buffers and the level's scratch). CH4.2 is split into CH4.2a (the
-transfer functions per class and the pair, against RCR within 2E; its PR awaits sign-off on the
-reading at E's floor at large p) and CH4.2b (the operator, threaded, opt-in), next; then CH4.3;
+transfer functions per class and the pair, against RCR within 2E; signed off on #237) and CH4.2b (the operator, threaded, opt-in), next; then CH4.3;
 the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and
 of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's
 history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
@@ -665,8 +664,9 @@ task's full line is in its record or report and its progress entry
   factor × ref's T̂ per stored class, each offset through its sample map, the pair one complex
   multiply-add per sample; against RCR within 2E on every case CI runs (≤ 0.77 E) and to k a 32,
   at E's floor (k a 54–216) by the projection or a regression limit (review M11's test in ref);
-  the RCR pairs after F → R bit for bit at every chunk size. *Sign-off:* pending (the PR's
-  questions 1–2).
+  the RCR pairs after F → R bit for bit at every chunk size. *Sign-off:* the PR's questions 1–2
+  (the user on #237, 2026-11-19: "Yes to both questions"): the acceptance as read, with the
+  reading at E's floor; W stored with RCR's factor folded in.
 - [ ] **CH4.2b The diagonal M2L in the operator.** `nd-fmm-exec`: the high-frequency levels'
   M2L by CH4.2a's tables, opt-in (the default unchanged until CH4.3), the classes by the bound
   E ≤ θ ε with S6's constants and RCR on the rest. *Done when:* the FMM against the direct sum

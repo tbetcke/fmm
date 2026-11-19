@@ -3744,8 +3744,9 @@ request, using this template:
   new ignored tests in release (tables 12 passed, 1 min 55 s; ref's M11 test 1 min 49 s);
   the tables' Helmholtz test executable at opt-level 0, 61.0 s at load 23–26 (CH4.1b: 58.6 s at load 16–22; the new tests about 4 s, 3.8 s alone), at the crate's one-minute budget under load. Not run: the MPI list (no MPI crate's code changed),
   `cargo deny` (no manifest), Laplace's benchmarks (no Laplace path changed). Nothing pending.
-- Decisions: questions for sign-off on the PR: 1, the acceptance as read, with the reading at
-  E's floor at large p; 2, W stored with RCR's factor folded in.
+- Decisions: signed off 2026-11-19 by the user on #237, "Yes to both questions": 1, the
+  acceptance as read, with the reading at E's floor at large p; 2, W stored with RCR's factor
+  folded in.
 - Laplace: not touched (a new Helmholtz module of `nd-fmm-tables`, Helmholtz tests of
   `nd-fmm-tables` and `nd-fmm-ref`).
 - Follow-ups: CH4.2b (roadmap; the transfer tables' build time per level among its Alsos);

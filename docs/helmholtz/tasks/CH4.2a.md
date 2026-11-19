@@ -133,6 +133,8 @@ For sign-off on the PR:
    alone: one complex multiply-add per sample in the pair; CONVENTIONS §3.15 leaves the
    storage to CH4.2 ("Not fixed here"). Recommended: accept.
 
+Signed off 2026-11-19 by the user on #237, both as recommended: "Yes to both questions".
+
 ## Results
 - Built as planned: `nd_fmm_tables::helmholtz::diagonal::{DiagonalM2l, OffsetMap,
   class_bounds, CLASS_COUNT}` (`diagonal/transfer.rs`), the tests
