@@ -9,13 +9,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a (the product conversions,
-signed off: H4 goes on with the product). CH4.1b (the signature buffers, the level driver by
-chunks, the scratch under 8 GiB per node; W1 at kD = 1000 within it at one rank per node, not
-at 40 ranks per node on levels 2–3) is signed off as recommended; CH4.2 next, then CH4.3; the FFT
-track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7,
-CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a and CH4.1b (the product
+conversions, the signature buffers and the level's scratch). CH4.2 is split into CH4.2a (the
+transfer functions per class and the pair, against RCR within 2E; its PR awaits sign-off on the
+reading at E's floor at large p) and CH4.2b (the operator, threaded, opt-in), next; then CH4.3;
+the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and
+of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's
+history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
@@ -660,21 +660,13 @@ task's full line is in its record or report and its progress entry
   permutations. *Done when:* against RCR on the same class within E(l, c); deterministic with
   the RCR pairs added after F → R. Split on 2026-11-19 into CH4.2a (the tables and the pair)
   and CH4.2b (the operator), by the size rule of `/next-task`.
-- [ ] **CH4.2a The transfer functions per (level, class) and the pair.**
-  `nd_fmm_tables::helmholtz::diagonal`: a level's transfer functions for the classes a caller
-  names, built in f64 from `nd_fmm_ref::helmholtz::diagonal::Transfer` (double-double, rounded
-  once) with RCR's factor 4π ik e^{2β − Im(k)|t|} folded in, rounded to T, one part per class;
-  each of the 316 offsets reads its class through the symmetry's sample map (no table per
-  offset); the pair G += W_σ F. *Done when:* the tables' level call against RCR on the same
-  class within E(l, c) (measured ≤ 2E, as CH1.3d1 measures it) on the 34 classes and the 316
-  offsets, real and weakly damped k, and f32 within its bound; its trusted path is
-  `nd_fmm_ref::helmholtz::diagonal` (its transfer functions sample by sample); a level with
-  the RCR pairs of each target added after F → R, in row order, bit for bit at every chunk
-  size. Also (CH1.3d1): at E's floor (C₀ u) f64 RCR rounds up to 2.4× more than the diagonal
-  form (CH1.3d1's record), so a comparison with RCR there needs 2E. Also (review 2026-11-19,
-  M11): an ignored release test of the trusted path at k a = 108 and 216 on a few classes
-  (CH4.4's degrees; S6 about 5 s per class at p = 256). Helmholtz only (`nd-fmm-tables`,
-  `nd-fmm-ref`'s tests). *Needs:* CH4.1b, CH0.6.
+- [x] **CH4.2a The transfer functions per (level, class) and the pair.** Record
+  `docs/helmholtz/tasks/CH4.2a.md`. `nd_fmm_tables::helmholtz::diagonal::DiagonalM2l`: W = RCR's
+  factor × ref's T̂ per stored class, each offset through its sample map, the pair one complex
+  multiply-add per sample; against RCR within 2E on every case CI runs (≤ 0.77 E) and to k a 32,
+  at E's floor (k a 54–216) by the projection or a regression limit (review M11's test in ref);
+  the RCR pairs after F → R bit for bit at every chunk size. *Sign-off:* pending (the PR's
+  questions 1–2).
 - [ ] **CH4.2b The diagonal M2L in the operator.** `nd-fmm-exec`: the high-frequency levels'
   M2L by CH4.2a's tables, opt-in (the default unchanged until CH4.3), the classes by the bound
   E ≤ θ ε with S6's constants and RCR on the rest. *Done when:* the FMM against the direct sum
@@ -704,7 +696,9 @@ task's full line is in its record or report and its progress entry
   (`helmholtz_accuracy::Density`). Also (review 2026-11-19, A8, M12): the refit of the
   high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of the
   error on W1 at kD = 1000, 10⁻⁸); C₀ checked at p ≥ 72 against a double-double reference, or
-  raised, with the glibc margin. Also (CH4.1b's report §3, question 1, signed off 2026-11-19 on #236): the whole-level
+  raised, with the glibc margin; at p = 131–245 no f64 reference resolves the floor (CH4.2a's
+record: the diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245,
+the projection rounding more than both). Also (CH4.1b's report §3, question 1, signed off 2026-11-19 on #236): the whole-level
   fallback to RCR decided from the largest need over the ranks (`scratch_shape` on every rank,
   one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9); at 40 ranks
   per node W1 at kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2b.
