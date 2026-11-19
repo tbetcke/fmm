@@ -1408,13 +1408,10 @@ pub fn points_to_morton<ArrayImpl: ValueArrayImpl<f64, 2>>(
     points
         .col_iter()
         .map(|point| {
-            let point = unsafe {
-                [
-                    point.get_value_unchecked([0]),
-                    point.get_value_unchecked([1]),
-                    point.get_value_unchecked([2]),
-                ]
-            };
+            // Checked reads (Helmholtz CHA.2: nd-octree forbids `unsafe_code`); the shape was
+            // asserted above, so every column has the indices 0, 1 and 2.
+            let point =
+                [0, 1, 2].map(|i| point.get_value([i]).expect("a point array of shape [3, n]"));
             morton::from_physical_point(point, bounding_box, max_level)
         })
         .collect_vec()

@@ -8,11 +8,11 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-19): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
-`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j are merged (items 1–6).
-CHA.1 (the PR after #223) takes the twelve spikes out of the root workspace into one of their own,
-`spikes/Cargo.toml` with its own lock file, all kept; the root's lock lost rlst 0.10.2 and
-green-kernels, no version changed. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done,
-and of H0, CH0.4 and CH0.6. Next: CHA.2, CHA.3, then CH1.3d.
+`docs/helmholtz/gates/H6.md`, 2026-11-12). Of the H4 list, CH4.0–CH4.0j are merged (items 1–6),
+and of item 7 CHA.1 (the spikes a workspace of their own, #224). CHA.2 (the PR after #224) makes
+the `unsafe` rule a compiler lint in the eight crates it covers (nd-octree now free of `unsafe`;
+one exception, an example's allocator in nd-fmm-plan). HR, H0, H1 and H2 are still open; of H7,
+CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: CHA.3, then CH1.3d.
 The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -919,12 +919,13 @@ item is removed only where the task names it.
   one `spikes/Cargo.lock`, the CubeCL pins repeated, green-kernels, pulp and the `[patch]` moved
   there); the root lock lost 30 packages, no version changed. Signed off 2026-11-19 (the user:
   "Keep all, none archived (Recommended)", "One spikes workspace (Recommended)").
-- [ ] **CHA.2 `unsafe` enforced.** Review C1. *Done when:* `#![forbid(unsafe_code)]` in
-  nd-fmm-math, -ref, -tables, -exec, -validate and -bench, `#![deny(unsafe_code)]` in
-  nd-fmm-plan and nd-octree; `octree/src/octree.rs:1411` made safe, or kept with its
-  `// SAFETY:` comment if the safe form is measurably slower; the counting allocator of
-  `fmm-plan/examples/plan_build_cost.rs` allowed in that file with its reason; the root
-  CLAUDE.md's rule names the exceptions.
+- [x] **CHA.2 `unsafe` enforced.** Review C1. Record: `docs/helmholtz/tasks/CHA.2.md`.
+  `[lints.rust] unsafe_code` in each `Cargo.toml` (every target): `forbid` in seven crates,
+  nd-octree included, `deny` in nd-fmm-plan, whose one exception (the example's counting
+  allocator) is allowed in its file, named in root CLAUDE.md. `points_to_morton` made safe (1–2 ms
+  per 10⁷ points). Signed off 2026-11-19 (the user: at the plan "[lints.rust] per crate
+  (Recommended)", "M6, now (Recommended)", "Skip D9 runs (Recommended)"; on #225 "Please go ahead
+  with forbid.").
 - [ ] **CHA.3 The superseded M2L configuration removed.** Review P1. *Done when:*
   `NodeContext`'s unused fields, `FmmBuilder::dense_node_budget`, the `AUTO_DENSE_*`
   constants, the deprecated `resolve(p)` and the harness's `--budget` are gone, with the

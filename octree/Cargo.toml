@@ -35,6 +35,10 @@ rlst = { version = "0.12.0", features = ["mpi"] }
 
 [build-dependencies]
 
+# No `unsafe` in any target of this crate (root CLAUDE.md, "Working rules"; Helmholtz CHA.2).
+[lints.rust]
+unsafe_code = "forbid"
+
 [lints.clippy]
 wildcard_imports = "forbid"
 
