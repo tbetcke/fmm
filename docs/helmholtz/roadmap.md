@@ -12,7 +12,7 @@ Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 (CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a (the product conversions,
 signed off: H4 goes on with the product). CH4.1b (the signature buffers, the level driver by
 chunks, the scratch under 8 GiB per node; W1 at kD = 1000 within it at one rank per node, not
-at 40 ranks per node on levels 2–3) waits for its questions 1–3; CH4.2 next, then CH4.3; the FFT
+at 40 ranks per node on levels 2–3) is signed off as recommended; CH4.2 next, then CH4.3; the FFT
 track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7,
 CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
@@ -653,7 +653,9 @@ task's full line is in its record or report and its progress entry
   under `DEFAULT_SIGNATURE_NODE_BUDGET` (8 GiB per node); C5 (`signed_permutation`) and C7
   (`SignatureWorkspace`). W1 at kD = 500 peaks at 4.4 GB with RCR everywhere, 5.8 GB under the
   defaults (10⁻⁶); at kD = 1000 every level fits at 1 × 40, levels 2–3 not at 40 × 1.
-  *Sign-off:* the PR's questions 1–3, pending.
+  *Sign-off:* the PR's questions 1–3 as recommended (the user on #236, 2026-11-19: "All
+  questions as recommended."): the acceptance met at one rank per node, with the Alsos on CH4.3
+  and CH8.0; the buffers' layout as built; the budget 8 GiB per node.
 - [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
   the class permutations. *Done when:* against RCR on the same class within E(l, c);
   deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
@@ -683,7 +685,7 @@ task's full line is in its record or report and its progress entry
   (`helmholtz_accuracy::Density`). Also (review 2026-11-19, A8, M12): the refit of the
   high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of the
   error on W1 at kD = 1000, 10⁻⁸); C₀ checked at p ≥ 72 against a double-double reference, or
-  raised, with the glibc margin. Also (CH4.1b's report §3, question 1): the whole-level
+  raised, with the glibc margin. Also (CH4.1b's report §3, question 1, signed off 2026-11-19 on #236): the whole-level
   fallback to RCR decided from the largest need over the ranks (`scratch_shape` on every rank,
   one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9); at 40 ranks
   per node W1 at kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2.
@@ -874,7 +876,7 @@ task's full line is in its record or report and its progress entry
   against private copies; the evaluation at 40 × 1 against 4 × 10 and 1 × 40 on W1 at
   kD = 100 and 500 at 10⁻⁶, where the node budget now sends levels to Rotation; a default
   proposed (the window on or off, the node budget with it). Also (CH4.1b's report §3, question
-  1): a coarse level's source signatures of the diagonal form formed once per node and shared
+  1, signed off 2026-11-19 on #236): a coarse level's source signatures of the diagonal form formed once per node and shared
   (every rank's V rows on levels 2–3 need nearly every source: 413–433 MiB per rank at
   kD = 1000), so that the diagonal form keeps those levels at many ranks per node. *Needs:*
   CH4.0. *Machines:* Kathleen, locust. *Sign-off:* the `unsafe` exception and the default.

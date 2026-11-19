@@ -232,6 +232,9 @@ task's:
 
 ## 5. Questions for sign-off
 
+Signed off 2026-11-19 by the user on #236, all three as recommended: "All questions as
+recommended."
+
 1. **The acceptance as read.** "Scratch within the budget on W1 at kD = 1000" is met at one rank
    per node: every level fits 8 GiB, levels 2–4 in 1.3–1.7 GiB. At 40 ranks per node, level 2
    fits on no rank and level 3 on 25 of 40, because coarse levels need nearly every source

@@ -130,7 +130,8 @@ a rank holds counted, the replicated top's included). Raw outputs in
 ## Open questions
 For sign-off on the PR (the report's §5): 1, the acceptance as read (within the budget at one
 rank per node; at 40 ranks per node levels 2 and 3 do not fit); 2, the buffers' layout; 3, the
-budget's default.
+budget's default. Signed off 2026-11-19 by the user on #236, all three as
+recommended: "All questions as recommended."
 
 ## Results
 - Built as planned, with these deviations: `scratch_shape` takes p (it computes the tables'

@@ -3694,9 +3694,10 @@ request, using this template:
   all-reduces to its own harness, run by its one-rank test); `cargo deny` (no manifest);
   Laplace's fixtures and benchmarks beyond the workspace tests (no Laplace path changed).
   Nothing pending.
-- Decisions: questions 1–3 of the PR for sign-off: 1, the acceptance as read (within the budget
-  at one rank per node; levels 2–3 not at 40 ranks per node, with Alsos on CH4.3 and CH8.0);
-  2, the buffers' layout; 3, the budget's default.
+- Decisions: signed off 2026-11-19 by the user on #236, "All questions as recommended.": 1, the
+  acceptance as read (within the budget at one rank per node; levels 2–3 not at 40 ranks per
+  node, with Alsos on CH4.3 and CH8.0); 2, the buffers' layout as built; 3, the budget's default
+  of 8 GiB per node.
 - Laplace: not touched (a Helmholtz module of `nd-fmm-tables`, a rename in `nd-fmm-ref`'s
   Helmholtz module, the validation harness).
 - Follow-ups:
