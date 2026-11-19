@@ -93,7 +93,7 @@
 //!
 //! let grid = diagonal::Grid::new(p);
 //! let transfer = diagonal::Transfer::new(&grid, &level, &source, &target);
-//! let mut dws = diagonal::Workspace::new(p);
+//! let mut dws = diagonal::SignatureWorkspace::new(p);
 //! let mut local = vec![0.0; 2 * (p + 1) * (p + 1)];
 //! diagonal::m2l(&grid, &level, &source, &target, &transfer, &mut dws, &multipole, &mut local);
 //!
@@ -130,19 +130,19 @@ use crate::Frame;
 /// only (the signature's length depends on it).
 ///
 /// ```
-/// use nd_fmm_ref::helmholtz::diagonal::Workspace;
+/// use nd_fmm_ref::helmholtz::diagonal::SignatureWorkspace;
 ///
-/// let ws = Workspace::<f64>::new(8);
+/// let ws = SignatureWorkspace::<f64>::new(8);
 /// assert_eq!(ws.degree(), 8);
 /// ```
-pub struct Workspace<T> {
+pub struct SignatureWorkspace<T> {
     p: usize,
     signature: Vec<Complex<T>>,
     accumulator: Vec<Complex<T>>,
     ring: Vec<Complex<T>>,
 }
 
-impl<T: RealScalar> Workspace<T> {
+impl<T: RealScalar> SignatureWorkspace<T> {
     /// The workspace for degree p.
     pub fn new(p: usize) -> Self {
         let zero = Complex::new(T::zero(), T::zero());
@@ -172,7 +172,7 @@ pub fn s2f<T: RealScalar>(
     grid: &Grid<T>,
     level: &Level<T>,
     multipole: &[T],
-    ws: &mut Workspace<T>,
+    ws: &mut SignatureWorkspace<T>,
     signature: &mut [Complex<T>],
 ) {
     let p = grid.degree();
@@ -193,7 +193,7 @@ pub fn f2r<T: RealScalar>(
     grid: &Grid<T>,
     level: &Level<T>,
     signature: &[Complex<T>],
-    ws: &mut Workspace<T>,
+    ws: &mut SignatureWorkspace<T>,
     local: &mut [T],
 ) {
     let p = grid.degree();
@@ -226,7 +226,7 @@ pub fn m2l<T: RealScalar>(
     from: &Frame<T>,
     to: &Frame<T>,
     transfer: &Transfer<T>,
-    ws: &mut Workspace<T>,
+    ws: &mut SignatureWorkspace<T>,
     multipole: &[T],
     local: &mut [T],
 ) {
@@ -255,7 +255,7 @@ pub fn m2l<T: RealScalar>(
     let distance = t[0].hypot(t[1]).hypot(t[2]);
     let factor = four_pi_ik(k) * (level.damping() + level.damping() - k.im * distance).exp();
     let s = level.scale();
-    let Workspace {
+    let SignatureWorkspace {
         signature,
         accumulator,
         ring,
@@ -402,7 +402,7 @@ fn times_minus_i_pow<T: RealScalar>(z: Complex<T>, n: usize) -> Complex<T> {
     times_i_pow(z, 3 * (n % 4))
 }
 
-fn check_workspace<T>(ws: &Workspace<T>, p: usize) {
+fn check_workspace<T>(ws: &SignatureWorkspace<T>, p: usize) {
     assert_eq!(ws.p, p, "the workspace has degree {}, the grid {p}", ws.p);
 }
 

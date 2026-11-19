@@ -11,7 +11,7 @@
 
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::Level;
-use nd_fmm_ref::helmholtz::diagonal::{self, Grid, Workspace};
+use nd_fmm_ref::helmholtz::diagonal::{self, Grid, SignatureWorkspace};
 use nd_fmm_tables::helmholtz::diagonal::{BLOCK_BOXES, ConversionScratch, Conversions};
 
 /// Deterministic values in [−1, 1).
@@ -61,7 +61,7 @@ fn check_s2f(p: usize, s_below_one: bool, boxes: usize) {
     conversions.s2f(&multipoles, &mut signatures, &mut scratch);
 
     let grid = Grid::<f64>::new(p);
-    let mut ws = Workspace::new(p);
+    let mut ws = SignatureWorkspace::new(p);
     let mut expected = vec![Complex::new(0.0, 0.0); samples];
     for b in 0..boxes {
         diagonal::s2f(
@@ -100,7 +100,7 @@ fn check_f2r(p: usize, s_below_one: bool, boxes: usize) {
     conversions.f2r(&signatures, &mut locals, &mut scratch);
 
     let grid = Grid::<f64>::new(p);
-    let mut ws = Workspace::new(p);
+    let mut ws = SignatureWorkspace::new(p);
     for b in 0..boxes {
         let mut expected = start[b * len..(b + 1) * len].to_vec();
         diagonal::f2r(
@@ -258,7 +258,7 @@ fn f32_against_the_reference() {
         let mut signature = vec![Complex::new(0.0f32, 0.0); samples];
         conversions.s2f(&narrow, &mut signature, &mut scratch);
         let grid = Grid::<f64>::new(p);
-        let mut ws = Workspace::new(p);
+        let mut ws = SignatureWorkspace::new(p);
         let mut expected = vec![Complex::new(0.0, 0.0); samples];
         let rounded: Vec<f64> = narrow.iter().map(|&v| v as f64).collect();
         diagonal::s2f(&grid, &level, &rounded, &mut ws, &mut expected);

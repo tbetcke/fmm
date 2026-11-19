@@ -42,7 +42,7 @@ use std::time::Instant;
 
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_ref::helmholtz::Level;
-use nd_fmm_ref::helmholtz::diagonal::{self, Grid, Workspace};
+use nd_fmm_ref::helmholtz::diagonal::{self, Grid, SignatureWorkspace};
 use nd_fmm_tables::geometry::M2L_OFFSET_COUNT;
 use nd_fmm_tables::helmholtz::diagonal::{ConversionScratch, Conversions};
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables, add_m2l_contribution};
@@ -229,7 +229,7 @@ fn check(conversions: &Conversions<f64>, k_hat: f64, multipole: &[f64]) -> (f64,
     let level = Level::new(Complex::new(k_hat, 0.0), 1.0);
     assert_eq!(level.scale(), 1.0, "a high-frequency level has scale 1");
     let grid = Grid::<f64>::new(p);
-    let mut ws = Workspace::new(p);
+    let mut ws = SignatureWorkspace::new(p);
     let mut scratch = ConversionScratch::new(conversions);
     let samples = conversions.samples();
     let mut ours = vec![Complex::new(0.0, 0.0); samples];
