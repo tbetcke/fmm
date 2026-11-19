@@ -73,7 +73,8 @@ Slash commands in `.claude/skills/`, for the Helmholtz work:
 - New dependencies of new crates only through [workspace.dependencies]; octree/
   declares its own directly until migrated (a separate decision). CubeCL only
   in nd-fmm-kernels and spikes/; it is pinned to `=0.11.0` (matmul: `cubek-matmul`
-  `=0.3.0`, with `cubek-std` `=0.3.0`) in [workspace.dependencies], the release (Phase 5S
+  `=0.3.0`, with `cubek-std` `=0.3.0`) in [workspace.dependencies] (repeated in
+  spikes/Cargo.toml's; move both together), the release (Phase 5S
   T1s) after the pre-release `=0.11.0-pre.4` chosen on 2026-10-03 for f64 on CUDA; see
   spikes/cubecl-gemm/SPIKE_REPORT.md.
 - `unsafe` only in nd-fmm-simd's `arch` modules and its ISA dispatch, in
@@ -86,10 +87,14 @@ Slash commands in `.claude/skills/`, for the Helmholtz work:
 - New crates: directories fmm-<name>, packages nd-fmm-<name>, library names
   nd_fmm_<name>. octree/ (package nd-octree, lib nd_octree) predates this rule.
 - Fixtures live in <crate>/fixtures/ and are regenerated only by tools/fixtures/.
-- spikes/ is excluded from default members and never built in CI.
-- `Cargo.lock` lives at the root and is committed; there are no crate-level lock files.
-  Commit lock-file changes with the manifest change that causes them.
-- The target directory is shared at the root; run every command from there.
+- spikes/ is a workspace of its own (`spikes/Cargo.toml`, Helmholtz CHA.1), excluded from
+  the root workspace: no check of the root builds it, and CI never does. Build a spike by
+  hand from `spikes/` (`spikes/README.md`), and rebuild the ones a task reruns or cites.
+- `Cargo.lock` lives at the root and is committed, and so does `spikes/Cargo.lock`, the
+  spikes workspace's; there are no crate-level lock files. Commit lock-file changes with
+  the manifest change that causes them.
+- The target directory is shared at the root; run every command from there (the spikes
+  workspace's commands from `spikes/`, into `target/spikes`).
 - `.gitignore` covers `target/` but not VTK output or `*.csv`; keep those out by hand.
 
 ## Build environment
@@ -324,7 +329,7 @@ which fails on a lookup error and lists the exact (`=`) pins' upgrades without f
 Prefer LSP tools (go-to-definition, find-references, symbols) over `grep`/`find` when
 chasing a symbol; they resolve through the real dependency graph. `rlst` 0.12.0 comes
 from crates.io, so its sources are in `~/.cargo/registry/src/*/rlst-0.12.0/` (the spikes'
-green-kernels alone builds 0.10.2 through the root `[patch]`); a `../rlst`
+green-kernels alone builds 0.10.2 through the `[patch]` of `spikes/Cargo.toml`); a `../rlst`
 checkout on the machine, if any, is an unrelated development tree and may differ. Use
 `grep` for what LSP does not index: comments, CI YAML, `Cargo.toml`. Read the
 implementation and tests rather than trusting prose when checking how an API behaves.

@@ -291,6 +291,14 @@ the default members), the reports `fmm-validate/results/phase6-<topic>.md` (one 
 and `phase6.md` (T11: the benchmarks on the three machines and the defaults), and in
 `tools/scaling/run.sh` the sweeps of every task (`t2-*` to `t13-*`, `t11-*`); no new crate.
 
+*As changed at Helmholtz CHA.1 (2026-11-19):* the spikes, twelve by then (the Helmholtz spikes
+S1–S4 and S6–S8 beside the five above), are no longer members of the root workspace. They are
+a workspace of their own, `spikes/Cargo.toml`, with its own lock file `spikes/Cargo.lock`,
+its own `[workspace.dependencies]` (the product crates by path, the CubeCL pins repeated,
+green-kernels and pulp) and green-kernels' `[patch]`, built by hand from `spikes/` into
+`target/spikes` (`spikes/README.md`). The root excludes `spikes/`, so its checks, its lock file
+and its dependency table hold the product crates alone (review 2026-11-12, K3 and U1).
+
 ### 3.1 Public surface per crate
 
 **`nd-fmm-math`**
@@ -886,6 +894,8 @@ manifests turn on its `persistence` feature (an empty store
 `target/environment/default.db` appears; accepted at the T4 sign-off). The workspace also has entries for
 every `nd-fmm-*` crate, `mpi`, `rlst`, `rand_chacha`, `rayon`, and for the spikes only
 `green-kernels` and `pulp`; `nd-fmm-kernels` is in `members`, not `default-members`.
+*As of Helmholtz CHA.1* `green-kernels`, `pulp` and the `[patch]` of green-kernels' rlst
+are in `spikes/Cargo.toml`, the spikes' own workspace, and the root has `exclude = ["spikes"]`.
 
 ```toml
 [workspace]
