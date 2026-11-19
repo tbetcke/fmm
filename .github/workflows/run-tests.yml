@@ -44,6 +44,11 @@ concurrency:
 # release (the cache key holds the rustc version) took 4 minutes to install Rust and 25 to
 # build, and main's run of #188 was cancelled at 30 a minute into its tests, no test failed;
 # its warm runs over Helmholtz H6 took 5.8–10.3 minutes.
+# run-tests-kernels rose from 20 to 40 on 2026-11-19: since #231 (the H1 gate) built and ran
+# nd-fmm-exec's device tests in it, its warm runs grew from 5–9 to 11–17 minutes (16.2 on
+# #234, 16.9 on main after #233: about 6 to build nd-fmm-exec's tests, 6 to run the kernel
+# tests and 2 for the device operator tests), above two thirds of the limit; no run was
+# cancelled at 20.
 # Test builds at opt-level 1 (2026-10-31): the tests ran unoptimised, which made the
 # numeric tests 2–20 times slower (M6: mpi_exec 160 s → 8–11 s, invariance 71 → 14 s at
 # one rank). `CARGO_PROFILE_DEV_OPT_LEVEL=1` keeps the dev profile's debug assertions and
@@ -203,7 +208,7 @@ jobs:
   run-tests-kernels:
     name: run-tests-kernels (CPU runtime)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       APT_PACKAGES: libclang-dev openmpi-bin libopenmpi-dev
     steps:
