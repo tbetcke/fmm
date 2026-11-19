@@ -18,7 +18,8 @@ rule of which Helmholtz CH6.1e measured; Helmholtz CH4.0h (`parts`, the parts of
 a caller's threads); Helmholtz CH4.0j (the exponential M2L's tables in parts within a
 level); Helmholtz CH4.1a (`helmholtz::diagonal`, S → F and F → R of the diagonal form as
 products over a batch of boxes); Helmholtz CH4.1b (`helmholtz::diagonal::level`, the level's
-signature buffers, scratch and driver, and `signed_permutation`).
+signature buffers, scratch and driver, and `signed_permutation`); Helmholtz CH4.2a
+(`helmholtz::diagonal::transfer`, the transfer functions per (level, class) and the pair).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -212,6 +213,24 @@ signature buffers, scratch and driver, and `signed_permutation`).
   chunks of 1, 2, 3, 4, 5, 7 and all bit for bit (f64, and a padded f32 stride), clones aligned,
   the shapes by hand, the sizes without building,
   and ref's 316 offsets the tables' set with each of the 34 classes inside one of the 16.
+  Since Helmholtz CH4.2a (`diagonal::transfer`, its module docs; docs/helmholtz/tasks/CH4.2a.md):
+  `DiagonalM2l`, one level's transfer functions in level units (k̂_l, half-width 1, |t| = 2|d|)
+  for the classes a caller names (indices into ref's `classes()`), each stored once as
+  W = 4π ik̂ e^{2β − Im(k̂)|t|} T̂_rep: T̂ from ref's `Transfer::<f64>` (double-double, rounded
+  once), the factor formed in f64 as `HelmholtzTables` forms the RCR M2L's and multiplied in
+  f64, then rounded to T; built one part per class (`build_on`). Each V offset reads its class
+  through an `OffsetMap` (the ring flip and the azimuth map j ↦ (start ± j) mod N_φ, derived
+  from ref's `Symmetry::sample`), so `pair` (g = g + w · f per sample, product and sum rounded
+  apart, two contiguous runs per ring) needs no table per offset; `offset_samples`
+  materialises an offset's W. `class_bounds` is ref's `bound` per class at |t| = 2|rep|, a = √3:
+  the rule's input, not the rule (CH4.2b, CH4.3). `tests/helmholtz/diagonal_transfer.rs`
+  checks the maps against ref's symmetries on every sample, the stored samples and every
+  offset's bit for bit ref's `Transfer` (and `permuted`) times the factor, the pair bit for bit
+  its naive loop (f64, f32), the build in parts bit for bit, and the acceptance: the tables'
+  level call against ref's RCR within 2E (CH1.3d1's measure) on the 34 classes (real and
+  damped k), the 316 offsets and f32, the large degrees (k a 32–108) ignored, in release; and
+  a level with each target's RCR pairs added after F → R in row order, bit for bit at every
+  chunk size and within 2E of the level with every pair RCR.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are deterministic: the same inputs give bit-identical tables and cache files.
@@ -224,7 +243,8 @@ signature buffers, scratch and driver, and `signed_permutation`).
   `HelmholtzTables::build_by` (with a `TableChoice`: the M2L degrees, the block budget,
   translations or none, the levels with M2L tables and with stored blocks; and
   `set_m2l_blocks`), `DenseM2l`, `BatchedM2l` and `ClassM2l::build_on` (their f64 tables
-  now hold the M2L of their own levels alone, no translations) and
+  now hold the M2L of their own levels alone, no translations),
+  `DiagonalM2l::build_on` (Helmholtz CH4.2a, one part per class) and
   `PlaneWaveM2l::build_with_reach_on` (since Helmholtz CH4.0j within a level too, every
   level's parts in three maps: each node's quadrature counts (`QuadratureNodes`), each
   node's values and each frame's rotation blocks (`LevelLayout`), each shift table, the

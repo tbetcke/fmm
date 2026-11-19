@@ -67,6 +67,8 @@
 //! box after box. The level's buffers ([`Signatures`]: each box on its own 64-byte line), the
 //! level driver ([`m2l_level`]) and its scratch under a budget ([`scratch_shape`]) are the
 //! module [`level`]'s (Helmholtz CH4.1b), the layout fixed there.
+//! The transfer functions per offset class and the pair step the driver applies
+//! ([`DiagonalM2l`]) are the module [`transfer`]'s (Helmholtz CH4.2a).
 //!
 //! # Example
 //!

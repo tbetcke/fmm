@@ -53,6 +53,9 @@ Helmholtz CH4.1a: `diagonal::Grid::theta` and `Grid::azimuth_tables` public, the
 `nd_fmm_tables::helmholtz::diagonal`'s tables are built from (no value changed).
 Helmholtz CH4.1b: `diagonal::Workspace` renamed `diagonal::SignatureWorkspace` (review
 2026-11-19, C7: the crate's third public `Workspace`), no value changed.
+Helmholtz CH4.2a: the ignored `m2l_against_rcr_at_the_degrees_of_kd_1000` in
+`tests/helmholtz/diagonal.rs` (review 2026-11-19, M11): `diagonal::m2l` against `rcr::m2l`
+within 2E at k a = 108 (p = 131) and 216 (p = 245) on three classes, in release.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
