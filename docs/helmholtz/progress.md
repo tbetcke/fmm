@@ -3705,3 +3705,49 @@ request, using this template:
     `m2l_level`'s order;
   - CH4.3's Also: the whole-level fallback from the largest need over the ranks;
   - CH8.0's Also: coarse levels' source signatures shared per node.
+
+## 2026-11-19: CH4.2a The transfer functions per (level, class) and the pair
+- Done: CH4.2 split into CH4.2a (the tables) and CH4.2b (the operator).
+  `nd_fmm_tables::helmholtz::diagonal::transfer`:
+  - `DiagonalM2l`: one level's transfer functions in level units for the classes a caller
+    names, each stored once as W = 4π ik̂ e^{2β − Im(k̂)|t|} T̂_rep (ref's `Transfer::<f64>`,
+    double-double rounded once, times RCR's factor in f64, rounded to T); built one part per
+    class (`build_on`);
+  - `OffsetMap`: each of the 316 offsets reads its class through the ring flip and the azimuth
+    map j ↦ (start ± j) mod N_φ, derived from ref's `Symmetry::sample`;
+  - `pair`: g = g + w · f per sample, two contiguous runs per ring, no table per offset;
+    `offset_samples`; `class_bounds` (ref's `bound` per class, the rule's input).
+
+  Review 2026-11-19, M11: ref's ignored `m2l_at_the_degrees_of_kd_1000`. Record
+  `docs/helmholtz/tasks/CH4.2a.md` (no report: no timing).
+- Tests: `fmm-tables/tests/helmholtz/diagonal_transfer.rs` (12, 2 ignored):
+  - the maps against ref's symmetries on every sample (p = 3, 8);
+  - the stored samples and every offset's bit for bit ref's `Transfer` (and `permuted`) times
+    the factor, within 4 ε of ref's transfer function of the offset itself;
+  - the pair bit for bit its naive loop (f64, f32), the build in parts bit for bit;
+  - the acceptance against ref's RCR within 2E (CH1.3d1's measure): the 34 classes at k a 2.83,
+    8 and damped 8 (largest 0.55 E), the 316 offsets at k a 5 (0.77 E), f32 at k a 8 (0.14 E);
+    ignored k a 16 (0.64 E; f32 at p = 30 0.09 E) and k a 32–108;
+  - the RCR pairs after F → R: a mixed level bit for bit at chunks 1–5, 7 and all, 1.5·10⁻¹⁵
+    from the all-RCR level (max E 2.3·10⁻¹⁴).
+
+  A reversed azimuth map fails 5 of the tests.
+- At E's floor at large p (the record's "Results"): f64 RCR rounds more than the diagonal form.
+  - k a 54, p 82: 2.42 E against RCR.
+  - k a 108, p 131: 2.86–3.7 E against RCR. The diagonal form is nearer the projection
+    `direct::m2l` than RCR on every such class, within max(2E, RCR's error) of it.
+  - k a 216, p 245: 0.70, 1.29, 5.84 E against RCR (at most 2.3·10⁻¹³). The projection rounds
+    more than both there and takes over 20 minutes a class, so the test holds a regression
+    limit (5·10⁻¹³).
+- Checks: `/verify` on the M6: fmt; Clippy (default, examples, workspace all-targets); rustdoc
+  with `-D warnings`; the default and workspace tests at opt-level 1 (1,340 and 1,384 passed); the
+  new ignored tests in release (tables 12 passed, 1 min 55 s; ref's M11 test 1 min 49 s);
+  the tables' Helmholtz test executable at opt-level 0, 61.0 s at load 23–26 (CH4.1b: 58.6 s at load 16–22; the new tests about 4 s, 3.8 s alone), at the crate's one-minute budget under load. Not run: the MPI list (no MPI crate's code changed),
+  `cargo deny` (no manifest), Laplace's benchmarks (no Laplace path changed). Nothing pending.
+- Decisions: signed off 2026-11-19 by the user on #237, "Yes to both questions": 1, the
+  acceptance as read, with the reading at E's floor at large p; 2, W stored with RCR's factor
+  folded in.
+- Laplace: not touched (a new Helmholtz module of `nd-fmm-tables`, Helmholtz tests of
+  `nd-fmm-tables` and `nd-fmm-ref`).
+- Follow-ups: CH4.2b (roadmap; the transfer tables' build time per level among its Alsos);
+  CH4.3's Also on C₀ at p ≥ 72 extended with this floor (the roadmap's CH4.3 line).

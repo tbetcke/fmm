@@ -28,7 +28,7 @@ use super::{assert_same, input};
 /// A map that computes the parts in reverse order, spread over three threads, and puts
 /// them back in order: a build on it is the serial build's only if no part depends on
 /// another, on the thread or on the order.
-struct Threads;
+pub(super) struct Threads;
 
 impl Parts for Threads {
     fn map<R: Send>(&self, n: usize, f: &(dyn Fn(usize) -> R + Sync)) -> Vec<R> {

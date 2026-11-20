@@ -9,13 +9,12 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a (the product conversions,
-signed off: H4 goes on with the product). CH4.1b (the signature buffers, the level driver by
-chunks, the scratch under 8 GiB per node; W1 at kD = 1000 within it at one rank per node, not
-at 40 ranks per node on levels 2–3) is signed off as recommended; CH4.2 next, then CH4.3; the FFT
-track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7,
-CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a and CH4.1b (the product
+conversions, the signature buffers and the level's scratch). CH4.2 is split into CH4.2a (the
+transfer functions per class and the pair, against RCR within 2E; signed off on #237) and CH4.2b (the operator, threaded, opt-in), next; then CH4.3;
+the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and
+of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's
+history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
@@ -88,7 +87,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2, CH4.3, CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b; split on 2026-11-19), CH4.3, CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -656,20 +655,32 @@ task's full line is in its record or report and its progress entry
   *Sign-off:* the PR's questions 1–3 as recommended (the user on #236, 2026-11-19: "All
   questions as recommended."): the acceptance met at one rank per node, with the Alsos on CH4.3
   and CH8.0; the buffers' layout as built; the budget 8 GiB per node.
-- [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
-  the class permutations. *Done when:* against RCR on the same class within E(l, c);
-  deterministic with the RCR pairs added after F → R. Also (CH1.3d1): its trusted path is
-  `nd_fmm_ref::helmholtz::diagonal` (its transfer functions sample by sample); at E's floor
-  (C₀ u) f64 RCR rounds up to 2.4× more than the diagonal form (CH1.3d1's record), so a
-  comparison with RCR there needs 2E. Also (review 2026-11-19, M11): an ignored release test
-  of the trusted path at k a = 108 and 216 on a few classes (CH4.4's degrees; S6 about 5 s per
-  class at p = 256). Also (CH4.1a's report §2, moved from CH4.1b): the column kernel of
-  `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core (baseline SSE2
-  codegen, no fma) and 6–10 on a Grace core; measure the level's conversions here and, if they
-  matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1). Also (CH4.1b): the threaded
-  level call keeps `m2l_level`'s order (each target's row in order, F → R after, the RCR pairs
-  added after F → R), the buffers' layout as signed off, and `scratch_shape`'s budget per rank
-  from `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node. *Needs:* CH4.1b, CH0.6.
+- CH4.2 Diagonal M2L per (level, class). Transfer functions per class, read through the class
+  permutations. *Done when:* against RCR on the same class within E(l, c); deterministic with
+  the RCR pairs added after F → R. Split on 2026-11-19 into CH4.2a (the tables and the pair)
+  and CH4.2b (the operator), by the size rule of `/next-task`.
+- [x] **CH4.2a The transfer functions per (level, class) and the pair.** Record
+  `docs/helmholtz/tasks/CH4.2a.md`. `nd_fmm_tables::helmholtz::diagonal::DiagonalM2l`: W = RCR's
+  factor × ref's T̂ per stored class, each offset through its sample map, the pair one complex
+  multiply-add per sample; against RCR within 2E on every case CI runs (≤ 0.77 E) and to k a 32,
+  at E's floor (k a 54–216) by the projection or a regression limit (review M11's test in ref);
+  the RCR pairs after F → R bit for bit at every chunk size. *Sign-off:* the PR's questions 1–2
+  (the user on #237, 2026-11-19: "Yes to both questions"): the acceptance as read, with the
+  reading at E's floor; W stored with RCR's factor folded in.
+- [ ] **CH4.2b The diagonal M2L in the operator.** `nd-fmm-exec`: the high-frequency levels'
+  M2L by CH4.2a's tables, opt-in (the default unchanged until CH4.3), the classes by the bound
+  E ≤ θ ε with S6's constants and RCR on the rest. *Done when:* the FMM against the direct sum
+  on W1 within RCR's errors (1.1×); every output bit for bit at every thread count, chunk size
+  and rank count (constraint 2). Also (CH4.1b): the threaded level call keeps `m2l_level`'s
+  order (each target's row in order, F → R after, the RCR pairs added after F → R), the
+  buffers' layout as signed off, and `scratch_shape`'s budget per rank from
+  `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node. Also (CH4.1a's report §2, moved from
+  CH4.1b): the column kernel of `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a
+  Kathleen core (baseline SSE2 codegen, no fma) and 6–10 on a Grace core; measure the level's
+  conversions here and, if they matter, propose a dispatched kernel (`nd-fmm-simd`:
+  constraint 1). Also: the transfer tables' build time per level (one part per class), against
+  the interpolated build of proposal §5.4 if it dominates. *Needs:* CH4.2a. *Machines:*
+  Kathleen, locust.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
@@ -685,10 +696,12 @@ task's full line is in its record or report and its progress entry
   (`helmholtz_accuracy::Density`). Also (review 2026-11-19, A8, M12): the refit of the
   high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of the
   error on W1 at kD = 1000, 10⁻⁸); C₀ checked at p ≥ 72 against a double-double reference, or
-  raised, with the glibc margin. Also (CH4.1b's report §3, question 1, signed off 2026-11-19 on #236): the whole-level
+  raised, with the glibc margin; at p = 131–245 no f64 reference resolves the floor (CH4.2a's
+record: the diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245,
+the projection rounding more than both). Also (CH4.1b's report §3, question 1, signed off 2026-11-19 on #236): the whole-level
   fallback to RCR decided from the largest need over the ranks (`scratch_shape` on every rank,
   one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9); at 40 ranks
-  per node W1 at kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2.
+  per node W1 at kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2b.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at
@@ -741,7 +754,7 @@ task's full line is in its record or report and its progress entry
   when:* against the host operators within error. *Needs:* CH3.1. *Machines:* locust.
 - [ ] **CH7.4 Diagonal M2L and the transforms on the device.** cubek-fft where D10 adopted it,
   else the transform as a GEMM. *Done when:* as CH4.2 on the device; device locals against
-  the host's within error. *Needs:* CH4.2, CH7.1, CH0.5, D10. *Machines:* locust.
+  the host's within error. *Needs:* CH4.2b, CH7.1, CH0.5, D10. *Machines:* locust.
 - CH7.5 Plane-wave M2L on the device: Laplace's first. Added on 2026-11-05 at the user's
   request, splitting CH7.5: the device kernels of merge and shift (the complex products over
   a box's waves, the merge lists per parent, the shifts to the children), built first on
