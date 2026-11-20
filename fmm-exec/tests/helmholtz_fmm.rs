@@ -1722,10 +1722,130 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
     assert_eq!(fmm.degrees(), raised, "{name}: Auto's degrees");
     assert_same(&format!("{name}, Auto"), &auto, &output, comm);
     drop(fmm);
+    if matches!(scenario.layout, Layout::Cube) {
+        check_time_rule_raised(scenario, comm);
+    }
     if rank == 0 {
         println!("{name}: {:.1?}", start.elapsed());
     }
     deep
+}
+
+/// Costs under which RCR beats every other M2L (the diagonal pair and the waves dear).
+const FREE_RCR: DiagonalCosts = DiagonalCosts {
+    pair: [1e9, 1e9],
+    rotation: [0.0, 0.0],
+    ..FREE_DIAGONAL
+};
+
+/// The diagonal form's time rule at matched accuracy (Helmholtz CH4.3b2a) on a scenario whose
+/// levels raised by the defaults' waves lie in the rule's range (the cubes of
+/// [`check_resolving_degree`] at kD = 20 + 2i, level 2 at k a 4.3, where no class passes at p_w;
+/// [`time_rule_scenario`] at kD = 40 + 2i, level 2 at k a 8.7, where some do), under the
+/// defaults: at the machine's costs, at free form costs (the form where a class passes at p_w,
+/// else RCR) and at free RCR costs (RCR), the degrees and translation degrees the defaults',
+/// some raised level with waves under the defaults taken from them by the free costs, the errors
+/// within [`DIAGONAL_RATIO`] of the defaults' (or of ε/100 where the defaults err less:
+/// rounding's regime), 2 threads and on P ranks the one-rank FMM bit for bit. Returns the most
+/// classes a raised level took from the waves at free form costs.
+fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
+    let Degrees::Tolerance(epsilon) = scenario.degrees else {
+        panic!("{}: the rule reads a tolerance", scenario.name);
+    };
+    let inputs = &Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let defaults = default_builder(scenario);
+    let (fmm, auto) = run(&defaults, inputs, kind, comm);
+    let nlevels = fmm.nlevels();
+    let op = fmm.operator();
+    let waves: Vec<bool> = (0..nlevels)
+        .map(|l| op.m2l_on(l) == HelmholtzM2l::PlaneWave)
+        .collect();
+    let translations: Vec<usize> = (0..nlevels).map(|l| op.translation_degree(l)).collect();
+    let given: Vec<usize> = (0..nlevels).map(|l| op.base_degree(l)).collect();
+    let raised = fmm.degrees().to_vec();
+    drop(fmm);
+    let plain = errors(scenario, inputs, &auto, 0, comm);
+    let mut most = 0;
+    for (costs_name, costs) in [
+        ("its machine's costs", None),
+        ("free form costs", Some(FREE_DIAGONAL)),
+        ("free RCR costs", Some(FREE_RCR)),
+    ] {
+        let what = format!(
+            "{}: the time rule at the resolving degree, {costs_name}",
+            scenario.name
+        );
+        let rule = defaults
+            .clone()
+            .diagonal(HelmholtzDiagonal::Auto)
+            .diagonal_costs(costs);
+        let (fmm, want) = run(&rule, inputs, kind, comm);
+        let op = fmm.operator();
+        assert_eq!(fmm.degrees(), &raised[..], "{what}: the degrees");
+        let got: Vec<usize> = (0..nlevels).map(|l| op.translation_degree(l)).collect();
+        assert_eq!(got, translations, "{what}: the translation degrees");
+        let taken: Vec<(usize, usize, usize)> = (0..nlevels)
+            .filter(|&l| waves[l] && op.m2l_on(l) != HelmholtzM2l::PlaneWave)
+            .map(|l| {
+                let classes = op.diagonal_classes(l).map_or(0, |c| c.len());
+                (l, raised[l], classes)
+            })
+            .collect();
+        drop(fmm);
+        if costs.is_some() {
+            assert!(
+                taken.iter().any(|&(l, p_w, _)| p_w > given[l]),
+                "{what}: no raised level taken from the waves: {taken:?}"
+            );
+        }
+        if costs == Some(FREE_DIAGONAL) {
+            most = taken.iter().map(|&(_, _, c)| c).max().unwrap_or(0);
+        }
+        let errors = errors(scenario, inputs, &want, 0, comm);
+        if comm.rank() == 0 {
+            println!(
+                "{what}: (level, p_w, classes) taken from the waves {taken:?}; φ {:.3e} against \
+                 the defaults' {:.3e} ({:.3}×), ∇φ {:.3e} against {:.3e}",
+                errors.0,
+                plain.0,
+                errors.0 / plain.0,
+                errors.1,
+                plain.1
+            );
+        }
+        // Where the defaults err two decades below ε (the cube at 10⁻⁸: 0.011× and 0.005×
+        // Rotation's at the degrees given, ∇φ 1.8e-12, RCR at p_w 2.1e-12) rounding sets the
+        // errors, not the degree: there within ε/100.
+        let within = |got: f64, want: f64| got <= DIAGONAL_RATIO * want.max(epsilon / 100.0);
+        assert!(
+            within(errors.0, plain.0) && within(errors.1, plain.1),
+            "{what}: errors {errors:?} against the defaults' {plain:?}"
+        );
+        if costs.is_some() {
+            let (_, threaded) = run(&rule.clone().threads(2), inputs, kind, comm);
+            assert_same(&format!("{what}, 2 threads"), &threaded, &want, comm);
+            check_one_rank(&what, &rule, inputs, kind, &want, comm);
+        }
+    }
+    most
+}
+
+/// The scenario of [`check_time_rule_raised`] whose raised level passes classes at p_w: the
+/// cube at kD = 40 + 2i, ε = 10⁻⁷ (level 2 at k a 8.7, p_l 20 raised to 28).
+fn time_rule_scenario() -> Scenario {
+    Scenario {
+        name: "cube, kD = 40 + 2i, ε = 1e-7, complex charges",
+        layout: Layout::Cube,
+        n: (1000, None),
+        k: (40.0, 2.0),
+        degrees: Degrees::Tolerance(1e-7),
+        bound: ERROR_FACTOR * 1e-7,
+        charges: ChargeKind::Complex,
+        gradients: false,
+        debug: true,
+        empty_rank0: false,
+    }
 }
 
 /// The named `PlaneWaveRaise` forms (CH6.1h) on a scenario of [`check_resolving_degree`],
@@ -3755,6 +3875,9 @@ fn helmholtz_fmm() {
         .map(|scenario| check_diagonal(scenario, &comm))
         .sum();
     assert!(mixed > 0, "no level mixed the diagonal form and RCR");
+    // The time rule at matched accuracy (CH4.3b2a): the form on a raised level.
+    let classes = check_time_rule_raised(&time_rule_scenario(), &comm);
+    assert!(classes > 0, "no raised level took the form");
     check_errors(&comm);
     if comm.rank() == 0 {
         println!(

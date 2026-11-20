@@ -35,8 +35,8 @@ use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_f
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    BUILD_PARTS, Case, Density, Oracle, PLANE_WAVE_DIRECTION, Problem, Row, checksum, complex_k,
-    run, run_output, sweep_crossovers,
+    BUILD_PARTS, Case, Density, FORM_COSTS, Oracle, PLANE_WAVE_DIRECTION, Problem, RCR_COSTS, Row,
+    checksum, complex_k, run, run_output, sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_boxes::{Errors, Reference, box_sample};
 use nd_fmm_validate::helmholtz_calibration::Curve;
@@ -1295,5 +1295,61 @@ fn check_diagonal(world: &SimpleCommunicator) {
             "time rule: classes {:?}, model {:?}, errors {:?}",
             row_a.diagonal_classes, row_a.diagonal_model, row_a.errors
         );
+    }
+    // The time rule at matched accuracy (Helmholtz CH4.3b2a): under Auto at 10⁻⁷, where the
+    // waves raise their levels, at the costs that force the form and RCR. The costs reported,
+    // the degrees the defaults', some level taken from the waves, within 1.1× the defaults'
+    // errors.
+    let epsilon = 1e-7;
+    let defaults = Case {
+        m2l: HelmholtzM2l::Auto,
+        degrees: Degrees::Tolerance(epsilon),
+        diagonal_build: TransferBuild::Interpolated,
+        ..off.clone()
+    };
+    let problem = Problem::new(&defaults);
+    let oracle = Oracle::sharded(complex_k(&defaults), &problem, defaults.gradients, 2, world);
+    let row_d = run(&defaults, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert!(
+        row_d.plane_wave.iter().any(Option::is_some),
+        "the defaults run waves"
+    );
+    for (name, costs) in [("form", FORM_COSTS), ("rcr", RCR_COSTS)] {
+        let forced = Case {
+            diagonal: HelmholtzDiagonal::Auto,
+            diagonal_costs: Some(costs),
+            ..defaults.clone()
+        };
+        let row = run(&forced, &problem, &oracle, 1, world).expect("the FMM runs");
+        assert_eq!(row.diagonal_costs, costs, "{name}");
+        assert_eq!(row.degrees, row_d.degrees, "{name}: the defaults' degrees");
+        assert!(
+            row.taken_from_waves.iter().any(|&t| t),
+            "{name}: no level taken from the waves"
+        );
+        for l in 0..row.levels {
+            if row.taken_from_waves[l] {
+                assert!(row_d.plane_wave[l].is_some(), "{name}, level {l}");
+                assert!(row.plane_wave[l].is_none(), "{name}, level {l}");
+                assert!(
+                    name == "form" || row.diagonal_classes[l] == 0,
+                    "{name}, level {l}"
+                );
+            }
+        }
+        for (got, want) in row.errors.iter().zip(&row_d.errors) {
+            let within = |g: f64, w: f64| g <= 1.1 * w.max(epsilon / 100.0);
+            assert!(
+                within(got[0], want[0]) && within(got[1], want[1]),
+                "{name}: {got:?} against the defaults' {want:?}"
+            );
+        }
+        if world.rank() == 0 {
+            println!(
+                "time rule at {name} costs, ε {epsilon:e}: taken from the waves {:?}, classes \
+                 {:?}, errors {:?} against the defaults' {:?}",
+                row.taken_from_waves, row.diagonal_classes, row.errors, row_d.errors
+            );
+        }
     }
 }

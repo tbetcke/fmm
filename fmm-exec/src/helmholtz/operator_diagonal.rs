@@ -388,6 +388,50 @@ pub fn diagonal_beats_plane_waves(
         && costs.diagonal_level(p, shape, classes) < costs.plane_wave_level(p_w, shape)
 }
 
+/// The M2L the time rule ([`HelmholtzDiagonal::Auto`]) gives a level that the exponential M2L
+/// would run under [`HelmholtzM2l::Auto`](super::HelmholtzM2l::Auto) (Helmholtz CH4.3b2a;
+/// [`wave_level_choice`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaveLevelChoice {
+    /// The exponential M2L, as without the time rule.
+    PlaneWave,
+    /// The diagonal form with the bound's classes, RCR on the others.
+    Diagonal,
+    /// RCR on every pair.
+    Rotation,
+}
+
+/// The time rule's choice on a level that the exponential M2L would run, at the level's
+/// resolving degree `p_w` (the degree the waves give it, which it keeps whatever M2L runs, so
+/// that the three options run at matched accuracy; Helmholtz CH4.3b2a), with its agreed V lists
+/// `shape` and the bound's `classes` at `p_w` (empty where none passes or the form's scratch does
+/// not fit the budget): the cheapest of the waves ([`DiagonalCosts::plane_wave_level`]), the form
+/// ([`DiagonalCosts::diagonal_level`]) and RCR ([`DiagonalCosts::rcr_level`]), a tie keeping the
+/// waves and, between the form and RCR, RCR (as [`diagonal_beats_rcr`]). A function of its
+/// arguments alone (constraint 9).
+pub fn wave_level_choice(
+    costs: &DiagonalCosts,
+    p_w: usize,
+    shape: &DiagonalShape,
+    classes: &[usize],
+) -> WaveLevelChoice {
+    let waves = costs.plane_wave_level(p_w, shape);
+    let rcr = costs.rcr_level(p_w, shape);
+    let (other, choice) = if diagonal_beats_rcr(costs, p_w, shape, classes) {
+        (
+            costs.diagonal_level(p_w, shape, classes),
+            WaveLevelChoice::Diagonal,
+        )
+    } else {
+        (rcr, WaveLevelChoice::Rotation)
+    };
+    if other < waves {
+        choice
+    } else {
+        WaveLevelChoice::PlaneWave
+    }
+}
+
 /// The counts of the diagonal level calls since the operator's M2L was last chosen
 /// ([`HelmholtzOperator::diagonal_counts`]; Helmholtz CH4.2b1), per level.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1097,6 +1141,61 @@ mod tests {
         assert!(diagonal_beats_plane_waves(&waves, 1, 1, &sparse, &[0]));
         assert!(!diagonal_beats_plane_waves(&waves, 1, 1, &dense, &[0]));
         assert!(!diagonal_beats_plane_waves(&waves, 1, 1, &sparse, &[]));
+    }
+
+    /// The time rule's choice on a level with waves (Helmholtz CH4.3b2a), by hand: each of the
+    /// three options the cheapest in turn, a tie to the waves, and without classes the form out.
+    #[test]
+    fn the_three_way_choice_by_hand() {
+        use WaveLevelChoice::{Diagonal, PlaneWave, Rotation};
+        // p = 1: q² = 4, q³ = 8. 10 boxes at 5 + 1 each and 2 per pair; the waves 20 per box.
+        let costs = DiagonalCosts {
+            s2f: [1.25, 0.0],
+            f2r: [0.0, 0.125],
+            pair: [0.5, 0.0],
+            rotation: [0.0, 3.0],
+            plane_wave: [5.0, 0.0],
+        };
+        let shape = |pairs: u64| {
+            let mut shape = DiagonalShape {
+                targets: 10,
+                ..DiagonalShape::default()
+            };
+            shape.class_pairs[0] = pairs;
+            shape
+        };
+        let (sparse, dense) = (shape(60), shape(80));
+        // The form 180 against the waves' 200 and RCR's 1,440; 220 against 200 and 1,920.
+        assert_eq!(wave_level_choice(&costs, 1, &sparse, &[0]), Diagonal);
+        assert_eq!(wave_level_choice(&costs, 1, &dense, &[0]), PlaneWave);
+        assert_eq!(wave_level_choice(&costs, 1, &sparse, &[]), PlaneWave);
+        // RCR at 0.8 per pair: 48 on the sparse level, below the form's 180; without classes too.
+        let cheap = DiagonalCosts {
+            rotation: [0.0, 0.1],
+            ..costs
+        };
+        assert_eq!(wave_level_choice(&cheap, 1, &sparse, &[0]), Rotation);
+        assert_eq!(wave_level_choice(&cheap, 1, &sparse, &[]), Rotation);
+        // A tie keeps the waves: RCR 60 × 4 = 240, the waves 10 × 24 = 240.
+        let tie = DiagonalCosts {
+            rotation: [0.0, 0.5],
+            plane_wave: [6.0, 0.0],
+            ..costs
+        };
+        assert_eq!(wave_level_choice(&tie, 1, &sparse, &[]), PlaneWave);
+        // The form and RCR tied below the waves: RCR (as `diagonal_beats_rcr`). The form
+        // 60 + 60 n, RCR 8 × 0.5 × 60 = 240 at n = 3: equal.
+        let even = DiagonalCosts {
+            pair: [0.75, 0.0],
+            rotation: [0.0, 0.5],
+            plane_wave: [100.0, 0.0],
+            ..costs
+        };
+        assert_eq!(
+            even.diagonal_level(1, &sparse, &[0]),
+            even.rcr_level(1, &sparse)
+        );
+        assert_eq!(wave_level_choice(&even, 1, &sparse, &[0]), Rotation);
     }
 
     /// The per-class crossover (proposal §10 CH4.3): on both machine classes the diagonal pair

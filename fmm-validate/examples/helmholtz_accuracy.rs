@@ -171,6 +171,14 @@
 //!   (`interpolated`, the rule at C_T = 0.23; the library's default since CH4.2c2's sign-off),
 //!   each `--diagonal` run other than `off` with each build in turn; the column "M2L" ends
 //!   with `/interp` for the interpolated build.
+//! - `--diagonal-costs machine|form|rcr,…` (Helmholtz CH4.3b2a,
+//!   `HelmholtzFmmBuilder::diagonal_costs`): the time rule's costs, the machine class's
+//!   (`machine`, the default), or costs that force one option on every level the rule reaches
+//!   (`form`: the diagonal form where a class passes, else RCR, `helmholtz_accuracy::FORM_COSTS`;
+//!   `rcr`: RCR, `RCR_COSTS`), each `--diagonal auto` run with each in turn; the column "M2L"
+//!   ends `/diagauto:form` or `/diagauto:rcr` for them. With `auto` under the defaults the levels
+//!   the rule takes from the waves keep their resolving degree, so the three time the options at
+//!   matched accuracy.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
 //!   touches the buffers, which on a large exponential M2L's waves costs seconds).
@@ -201,9 +209,9 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, DIAGONAL_AUTO_MIN_KA, Degrees, HelmholtzDiagonal,
-    HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild,
-    VNear, Wavenumber, WxNear, s7_degree,
+    ChargeKind, DEFAULT_DENSE_BUDGET, DIAGONAL_AUTO_MIN_KA, Degrees, DiagonalCosts,
+    HelmholtzDiagonal, HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit,
+    TransferBuild, VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -212,7 +220,8 @@ use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, domain_of};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    BUILD_PARTS, Case, Density, Oracle, Problem, Row, complex_k, run, sweep_crossovers,
+    BUILD_PARTS, Case, Density, FORM_COSTS, Oracle, Problem, RCR_COSTS, Row, complex_k, run,
+    sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_workloads::Workload;
 use nd_fmm_validate::scaling::resident_memory;
@@ -240,6 +249,7 @@ struct Arguments {
     rcr_splits: Vec<Option<RcrSplit>>,
     diagonals: Vec<HelmholtzDiagonal>,
     diagonal_builds: Vec<TransferBuild>,
+    diagonal_costs: Vec<Option<DiagonalCosts>>,
     raises: Vec<Option<PlaneWaveRaise>>,
     terms: Vec<bool>,
     blocks: Vec<Option<usize>>,
@@ -349,6 +359,7 @@ fn arguments() -> Arguments {
         rcr_splits: vec![None],
         diagonals: vec![HelmholtzDiagonal::Off],
         diagonal_builds: vec![TransferBuild::Direct],
+        diagonal_costs: vec![None],
         raises: vec![None],
         terms: vec![true],
         blocks: vec![None],
@@ -520,6 +531,17 @@ fn arguments() -> Arguments {
                         })
                         .collect::<Option<Vec<_>>>()
                         .map(|d| parsed.diagonals = d)
+                        .is_some(),
+                    "--diagonal-costs" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "machine" => Some(None),
+                            "form" => Some(Some(FORM_COSTS)),
+                            "rcr" => Some(Some(RCR_COSTS)),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|c| parsed.diagonal_costs = c)
                         .is_some(),
                     "--diagonal-build" => value
                         .split(',')
@@ -835,8 +857,9 @@ fn setting_name(row: &Row) -> String {
 }
 
 /// For a row with the diagonal M2L `/diag` (at the FMM's tolerance), `/diag<ε>` (Helmholtz
-/// CH4.2b2) or `/diagauto` (the time rule, Helmholtz CH4.3b1), followed by `/interp` for the
-/// interpolated build (Helmholtz CH4.2c2); else empty.
+/// CH4.2b2) or `/diagauto` (the time rule, Helmholtz CH4.3b1; `/diagauto:form` and
+/// `/diagauto:rcr` at `FORM_COSTS` and `RCR_COSTS`, Helmholtz CH4.3b2a), followed by `/interp`
+/// for the interpolated build (Helmholtz CH4.2c2); else empty.
 fn diagonal_suffix(row: &Row) -> String {
     let build = match row.diagonal_build_kind {
         TransferBuild::Direct => "",
@@ -846,7 +869,16 @@ fn diagonal_suffix(row: &Row) -> String {
         HelmholtzDiagonal::Off => String::new(),
         HelmholtzDiagonal::Rule => format!("/diag{build}"),
         HelmholtzDiagonal::Tolerance(e) => format!("/diag{e:e}{build}"),
-        HelmholtzDiagonal::Auto => format!("/diagauto{build}"),
+        HelmholtzDiagonal::Auto => {
+            let costs = if row.diagonal_costs == FORM_COSTS {
+                ":form"
+            } else if row.diagonal_costs == RCR_COSTS {
+                ":rcr"
+            } else {
+                ""
+            };
+            format!("/diagauto{costs}{build}")
+        }
     }
 }
 
@@ -1232,30 +1264,37 @@ fn main() {
             };
             // `--levels`: the rows of the table "Time rule" (Helmholtz CH4.3b1), a row per level
             // with V pairs of a run with the diagonal form.
-            let time_lines = |row: &Row| -> Vec<String> {
-                if row.diagonal == HelmholtzDiagonal::Off {
-                    return Vec::new();
-                }
-                (2..row.levels)
+            let time_lines =
+                |row: &Row| -> Vec<String> {
+                    if row.diagonal == HelmholtzDiagonal::Off {
+                        return Vec::new();
+                    }
+                    (2..row.levels)
                     .filter(|&l| row.v_pairs[l] > 0)
                     .map(|l| {
                         let [ka, bound, diagonal, rcr, waves] = row.diagonal_model[l];
                         let ran = level_m2l(row, l);
                         // The operator's choice from the model, without the scratch budget:
-                        // the form only from k a = 2.8 and only from Auto's waves; a level the
-                        // rule took from the waves has no precision in the row and compares
-                        // with RCR.
-                        let waves_level =
-                            row.m2l == HelmholtzM2l::Auto && row.plane_wave[l].is_some();
-                        let other = if waves_level { waves } else { rcr };
-                        let choice =
-                            if bound > 0.0 && ka >= DIAGONAL_AUTO_MIN_KA && diagonal < other {
-                                if diagonal < rcr { "diagonal" } else { "rcr" }
-                            } else if row.plane_wave[l].is_some() {
-                                "waves"
-                            } else {
-                                "other"
-                            };
+                        // nothing below k a = 2.8; the form against RCR (a tie to RCR); on a
+                        // level with Auto's waves, or one the rule took from them (Helmholtz
+                        // CH4.3b2a), the cheaper of those against the waves (a tie to the
+                        // waves), all at the level's degree as run.
+                        let waves_level = row.m2l == HelmholtzM2l::Auto
+                            && (row.plane_wave[l].is_some() || row.taken_from_waves[l]);
+                        let (cheaper, name) = if bound > 0.0 && diagonal < rcr {
+                            (diagonal, "diagonal")
+                        } else {
+                            (rcr, "rcr")
+                        };
+                        let choice = if ka < DIAGONAL_AUTO_MIN_KA {
+                            if row.plane_wave[l].is_some() { "waves" } else { "other" }
+                        } else if waves_level && cheaper >= waves {
+                            "waves"
+                        } else if waves_level || name == "diagonal" {
+                            name
+                        } else {
+                            "other"
+                        };
                         format!(
                             "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {} | {l} | {} \
                              | {ka:.2} | {bound:.0} | {} | {ran} | {:.6} | {diagonal:.6} \
@@ -1272,7 +1311,7 @@ fn main() {
                         )
                     })
                     .collect()
-            };
+                };
             // The row of the table "Empty boxes" (Helmholtz CH4.0d1).
             let left_out_line = |row: &Row| -> String {
                 let [boxes, v, x, w, l2l, v_sources, w_sources, m2m] = row.left_out;
@@ -1503,21 +1542,33 @@ fn main() {
                 .collect();
             // `--rcr-split` outermost (Helmholtz CH4.0i): no bit depends on it.
             // `--diagonal` outside it (Helmholtz CH4.2b2), each with each `--diagonal-build`
-            // (Helmholtz CH4.2c2; `off` once, with the first build).
+            // (Helmholtz CH4.2c2; `off` once, with the first build), and `auto` with each
+            // `--diagonal-costs` (Helmholtz CH4.3b2a).
             let mut diagonals = Vec::new();
             for &diagonal in &arguments.diagonals {
                 if diagonal == HelmholtzDiagonal::Off {
-                    diagonals.push((diagonal, arguments.diagonal_builds[0]));
+                    diagonals.push((diagonal, arguments.diagonal_builds[0], None));
                 } else {
-                    diagonals.extend(arguments.diagonal_builds.iter().map(|&b| (diagonal, b)));
+                    for &build in &arguments.diagonal_builds {
+                        if diagonal == HelmholtzDiagonal::Auto {
+                            diagonals.extend(
+                                arguments
+                                    .diagonal_costs
+                                    .iter()
+                                    .map(|&c| (diagonal, build, c)),
+                            );
+                        } else {
+                            diagonals.push((diagonal, build, None));
+                        }
+                    }
                 }
             }
             let mut runs_by_rule = Vec::new();
-            for &(diagonal, build) in &diagonals {
+            for &(diagonal, build, costs) in &diagonals {
                 for &rcr in &arguments.rcr_splits {
                     for &tree in &trees {
                         for &rule in &rules {
-                            runs_by_rule.push((diagonal, build, rcr, tree, rule));
+                            runs_by_rule.push((diagonal, build, costs, rcr, tree, rule));
                         }
                     }
                 }
@@ -1526,6 +1577,7 @@ fn main() {
             for (
                 diagonal,
                 diagonal_build,
+                diagonal_costs,
                 rcr_split,
                 (leaf_size, c_leaf),
                 (empty_boxes, near_v, near_wx),
@@ -1533,6 +1585,7 @@ fn main() {
             {
                 case.diagonal = diagonal;
                 case.diagonal_build = diagonal_build;
+                case.diagonal_costs = diagonal_costs;
                 case.rcr_split = rcr_split;
                 case.max_points_per_leaf = leaf_size;
                 case.c_leaf = c_leaf;
