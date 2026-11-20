@@ -19,13 +19,14 @@ decides at matched accuracy"). This task keeps that degree.
    and 500, at 10⁻³, 10⁻⁶, 10⁻⁷ and 10⁻⁸; at 10⁻⁸ 0.993–1.000×, where CH4.3b1 measured 1.07–2.2×.
 3. **The order on a level with waves** (§4): the waves unless the form beats them at p_w, then the
    cheaper of the form and RCR. The plan's rule of three (RCR against the waves too) ran first: on
-   the seven levels where it put RCR against the waves, RCR lost 0.45 s and gained 0.11 s on the two
-   machines, RCR's constant (fitted at the degrees given) under-predicting RCR at p_w on sparse
+   the seven levels where it put RCR against the waves, RCR lost 0.47 s on three sparse W1 levels
+   (1.07–1.52× the waves) and gained 0.11 s on four, RCR's constant (fitted at the degrees given) under-predicting RCR at p_w on sparse
    levels. Question 2.
 4. **The choices** (final runs, §5): within 1.05× of the fastest option on 81 of 83 levels on
    Kathleen (0.54 s lost of 48.0 s at the best) and 82 of 92 on locust (0.28 s of 13.8 s). Every
    miss keeps the waves where the form was faster, all but two on W3's dense levels (CH4.3b1's misses,
-   CH4.3b2c's Also).
+   CH4.3b2c's Also). The score does not time RCR on a level with waves where no class passes (the
+   rule never takes RCR there); on two such levels the first runs had RCR faster (0.09 s, §4).
 5. **The evaluation** under the time rule: 0.38–1.12× the defaults' on Kathleen, 0.43–0.99× on
    locust; at 10⁻⁸ 0.71–1.03× and 0.71–0.98×. On Kathleen W3 at kD = 200 runs 1.03–1.12× although its
    choices are within 1.05×: the same waves level ran 1.18–1.37× slower in the time rule's run of the
@@ -140,13 +141,15 @@ RCR against the waves (no class passing, or RCR modelled below both), RCR was:
 | locust | W3, kD = 500, 10⁻³ | 6 | 13 | 6.77 | 0.018 | 0.002 | RCR | 1.00 |
 | locust | W3, kD = 500, 10⁻⁶ | 6 | 16 | 6.77 | 0.005 | 0.001 | RCR | 1.00 |
 
-0.45 s lost and 0.11 s gained against keeping the waves: RCR's constant, fitted in CH4.3b1 at the
+0.47 s lost (1.07–1.52× on three levels) and 0.11 s gained (four levels) against keeping the waves: RCR's constant, fitted in CH4.3b1 at the
 degrees given, under-predicts RCR at p_w on these sparse, low-k a levels. The rule as built keeps
 the waves unless the form beats them (both at p_w), then runs the cheaper of the form and RCR
 (`wave_level_choice`; a tie to the waves, then to RCR), so RCR is taken only where the model has it
 below the form and the form below the waves (locust's W3 at kD = 500, level 6, in the final runs:
 1.00×). In the first runs' summary the rule of three lost 0.71 s of 45.2 s (Kathleen, 79/83 within
-1.05×) and 0.66 s of 13.6 s (locust, 82/92); the final runs §5. Question 2.
+1.05×) and 0.66 s of 13.6 s (locust, 82/92); the final runs §5. The order as built gives up the two
+levels where RCR beat the waves with no class passing at p_w (Kathleen, W1 at kD = 100, level 4 at
+10⁻⁷ and 10⁻⁸: 0.074 and 0.095 s against the waves' 0.129 and 0.127 s, 0.09 s in all). Question 2.
 
 ## 5. The choices
 
@@ -155,7 +158,9 @@ below the form and the form below the waves (locust's W3 at kD = 500, level 6, i
 Per level with V pairs in the rule's range (k a ≥ 2.8) and not Batched's, the options timed in the
 same launch at the level's degree as run: the waves (the defaults' run), the form (the `form` run,
 where a class passes) and RCR (the defaults' run on an RCR level, the `rcr` run on a level with waves
-where a class passes); the choice scored by the option it took as timed there (CH4.3b1 §4.3).
+where a class passes); the choice scored by the option it took as timed there (CH4.3b1 §4.3). RCR
+is not timed on a level with waves where no class passes, so the score cannot see RCR's wins there
+(two levels in the first runs, 0.09 s, §4).
 
 | machine | ε | levels | within 1.05× | seconds lost | seconds at the best | taken from the waves: form, RCR |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -220,12 +225,14 @@ crossover on a level the form takes from the waves); its roadmap line now names 
    (the degrees and translation degrees the defaults', tested); the defaults with the time rule err
    0.990–1.037× the defaults' on every case of W1 and W3 at 10⁻³–10⁻⁸ on both machines (§3.1); the
    choices within 1.05× on 81/83 (Kathleen) and 82/92 (locust) levels, every miss the waves kept
-   (§5.1); bit for bit at every thread count, chunk and rank count (tests). *Recommended: accept.*
+   (§5.1; RCR not timed on a level with waves where no class passes: §4's two levels, 0.09 s); bit
+   for bit at every thread count, chunk and rank count (tests, a raised level taken from the waves
+   included). *Recommended: accept.*
 2. **The order on a level with waves** (§4): the waves unless the form beats them at p_w, then the
    cheaper of the form and RCR; RCR never against the waves alone. This departs from the plan's and
    the roadmap's "cheapest of three" as split on this branch. *Recommended: as built, the roadmap's
    CH4.3b2a line amended in this PR.* *Alternative:* the rule of three, with RCR's constant refitted
-   at the raised degree (the first runs: 0.45 s lost, 0.11 s gained).
+   at the raised degree (the first runs: 0.47 s lost, 0.11 s gained).
 3. **CH4.3b1's sparse level** (§6): closed here as a plan effect, carried to CH4.3b2b (the V rule's
    crossover), whose line names it. *Recommended: accept.*
 4. **W3 at kD = 200 on Kathleen** (§5.2): the evaluation 1.03–1.12× the defaults' with every choice

@@ -11,7 +11,7 @@ matched accuracy as its line says (the form at the raised degree on such a level
 kept below 10⁻⁷ where they are the more accurate)").
 
 ## Goal
-Make the diagonal form's time rule (`HelmholtzDiagonal::Auto`) give up no accuracy against the
+(As planned; the order as built is in "As built" below.) Make the diagonal form's time rule (`HelmholtzDiagonal::Auto`) give up no accuracy against the
 defaults: a level with waves keeps its resolving degree p_w whatever M2L the rule gives it, and
 the rule takes the cheapest of the waves, the form and RCR at that degree.
 
@@ -117,7 +117,7 @@ Helmholtz executable at opt-level 0 against their budget; `nd-fmm-validate`'s
 
 ## As built: the order on a level with waves
 The plan took the cheapest of three, RCR included (c02d2b3). The first runs (Kathleen job 653691,
-locust) put RCR against the waves on seven levels: 0.45 s lost and 0.11 s gained against keeping
+locust) put RCR against the waves on seven levels: 0.47 s lost and 0.11 s gained against keeping
 the waves, RCR's constant (CH4.3b1's, fitted at the degrees given) under-predicting RCR at p_w on
 sparse, low-k a levels (the report §4). As built (a4bc1c2): the waves unless the form beats them at
 p_w, then the cheaper of the form and RCR (`wave_level_choice`); RCR never against the waves alone.

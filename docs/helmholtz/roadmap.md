@@ -777,7 +777,7 @@ task's full line is in its record or report and its progress entry
   `fmm-validate/results/helmholtz-ch4-3b2a.md`; record `docs/helmholtz/tasks/CH4.3b2a.md`. Under
   `HelmholtzDiagonal::Auto` a level with waves keeps its resolving degree p_w, and keeps the waves
   unless the form beats them at p_w, then runs the cheaper of the form and RCR (`wave_level_choice`;
-  RCR never against the waves alone: a rule of three lost 0.45 s, gained 0.11 s). W1 and W3 at
+  RCR never against the waves alone: a rule of three lost 0.47 s, gained 0.11 s). W1 and W3 at
   10⁻³–10⁻⁸ on Kathleen and locust: errors 0.990–1.037× the defaults' (CH4.3b1: 1.07–2.2× at 10⁻⁸);
   choices within 1.05× on 81/83 and 82/92 levels; evaluation 0.38–1.12× and 0.43–0.99×.
   *Sign-off:* the report's questions 1–4 (pending).

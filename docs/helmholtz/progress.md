@@ -4071,16 +4071,16 @@ request, using this template:
   - `tools/helmholtz/ch4-3b2a-runs.sh` and `ch4-3b2a-tables.py`. Report
     `fmm-validate/results/helmholtz-ch4-3b2a.md`; record `docs/helmholtz/tasks/CH4.3b2a.md`.
   - The plan took the cheapest of three, RCR included; the first runs refuted it (RCR against the
-    waves on seven levels: 0.45 s lost, 0.11 s gained; RCR's constant under-predicts RCR at p_w on
+    waves on seven levels: 0.47 s lost, 0.11 s gained; RCR's constant under-predicts RCR at p_w on
     sparse levels), so RCR never competes with the waves alone. Question 2.
 - Tests: unit `the_choice_on_a_level_with_waves_by_hand`; `tests/helmholtz/diagonal.rs`
   `the_time_rule_against_the_waves` (10⁻⁴, 10⁻⁷, 10⁻⁸; free form, free RCR, dear, a tight budget,
   below k a 2.8: the defaults' degrees and translation degrees under every costs, the classes at
   p_w); `check_time_rule_raised` in `tests/helmholtz_fmm.rs` (a cube at kD = 40 + 2i, 10⁻⁷, level 2
   taking 15 classes at p_w = 28; in release also the cubes at kD = 20 + 2i at 10⁻⁷ and 10⁻⁸): the
-  defaults' degrees, the errors within `DIAGONAL_RATIO` of the defaults' (or of ε/100 in rounding's
-  regime), 2 threads and the one-rank FMM bit for bit; `fmm-validate`'s `check_diagonal` both forced
-  costs at 10⁻⁷ on W1 at kD = 30.
+  defaults' degrees, the form at free form costs and RCR on the same levels at free RCR costs, the
+  errors within `DIAGONAL_RATIO` of the defaults', 2 threads, chunks of 3 and the one-rank FMM bit
+  for bit; `fmm-validate`'s `check_diagonal` both forced costs at 10⁻⁷ on W1 at kD = 30.
 - Measurements (final: Kathleen job 653702, node-c11a-018, `singlenode`, 1 × 40; locust 1 × 72, the
   load sampled; first runs Kathleen job 653691, locust): W1 at kD = 100–500 (and 1000 at 10⁻⁶) and W3
   at N = 10⁶, kD = 200 and 500, at 10⁻³, 10⁻⁶, 10⁻⁷, 10⁻⁸, the defaults against the time rule at the

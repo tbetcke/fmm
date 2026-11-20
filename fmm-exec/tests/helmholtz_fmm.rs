@@ -1747,15 +1747,12 @@ const FREE_RCR: DiagonalCosts = DiagonalCosts {
 /// in release builds;
 /// [`time_rule_scenario`] at kD = 40 + 2i, level 2 at k a 8.7, where some do), under the
 /// defaults: at the machine's costs, at free form costs (the form where a class passes at p_w)
-/// and at free RCR costs (RCR there), the degrees and translation degrees the defaults', the
-/// errors within [`DIAGONAL_RATIO`] of the defaults' (or of ε/100 where the defaults err less:
-/// rounding's regime), 2 threads and on P ranks the one-rank FMM bit for bit. Returns the most
-/// classes a raised level took from the waves at free form costs (0 on the cubes at
-/// kD = 20 + 2i, whose levels keep their waves).
+/// and at free RCR costs (RCR on the same levels, no other), the degrees and translation degrees
+/// the defaults', the errors within [`DIAGONAL_RATIO`] of the defaults', 2 threads, chunks of 3
+/// at free form costs and on P ranks the one-rank FMM bit for bit; on the cubes at kD = 20 + 2i
+/// no level taken and the defaults' output bit for bit. Returns the most classes a raised level
+/// took from the waves at free form costs.
 fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
-    let Degrees::Tolerance(epsilon) = scenario.degrees else {
-        panic!("{}: the rule reads a tolerance", scenario.name);
-    };
     let inputs = &Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
     let defaults = default_builder(scenario);
@@ -1771,6 +1768,7 @@ fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usi
     drop(fmm);
     let plain = errors(scenario, inputs, &auto, 0, comm);
     let mut most = 0;
+    let mut form_levels: Option<Vec<usize>> = None;
     // In debug builds the forced costs alone, and 2 threads at free form costs alone (each build
     // at p_w = 28 costs seconds at opt-level 0).
     let debug = cfg!(debug_assertions);
@@ -1800,13 +1798,35 @@ fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usi
                 (l, raised[l], classes)
             })
             .collect();
+        let any_form = (0..nlevels).any(|l| op.diagonal_classes(l).is_some());
         drop(fmm);
+        // These scenarios run at 10⁻⁷ and 10⁻⁸ with p_l below 28: every level with waves raised.
         assert!(
             taken.iter().all(|&(l, p_w, _)| p_w > given[l]),
             "{what}: a level taken from the waves not raised: {taken:?}"
         );
+        let levels: Vec<usize> = taken.iter().map(|&(l, ..)| l).collect();
         if costs == Some(FREE_DIAGONAL) {
+            // The form where a class passes at p_w, the waves where none does.
+            assert!(
+                taken.iter().all(|&(_, _, c)| c > 0),
+                "{what}: a level taken without a class: {taken:?}"
+            );
             most = taken.iter().map(|&(_, _, c)| c).max().unwrap_or(0);
+            form_levels = Some(levels.clone());
+        }
+        if costs == Some(FREE_RCR) {
+            // RCR on the levels the form would take, never against the waves alone.
+            assert!(
+                taken.iter().all(|&(_, _, c)| c == 0),
+                "{what}: the form at free RCR costs: {taken:?}"
+            );
+            if let Some(form) = &form_levels {
+                assert_eq!(&levels, form, "{what}: not the form's levels");
+            }
+        }
+        if taken.is_empty() && !any_form {
+            assert_same(&format!("{what}: no level changed"), &want, &auto, comm);
         }
         let errors = errors(scenario, inputs, &want, 0, comm);
         if comm.rank() == 0 {
@@ -1820,17 +1840,17 @@ fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usi
                 plain.1
             );
         }
-        // Where the defaults err two decades below ε (the cube at 10⁻⁸: 0.011× and 0.005×
-        // Rotation's at the degrees given, ∇φ 1.8e-12, RCR at p_w 2.1e-12) rounding sets the
-        // errors, not the degree: there within ε/100.
-        let within = |got: f64, want: f64| got <= DIAGONAL_RATIO * want.max(epsilon / 100.0);
         assert!(
-            within(errors.0, plain.0) && within(errors.1, plain.1),
+            errors.0 <= DIAGONAL_RATIO * plain.0 && errors.1 <= DIAGONAL_RATIO * plain.1,
             "{what}: errors {errors:?} against the defaults' {plain:?}"
         );
         if costs == Some(FREE_DIAGONAL) || (costs.is_some() && !debug) {
             let (_, threaded) = run(&rule.clone().threads(2), inputs, kind, comm);
             assert_same(&format!("{what}, 2 threads"), &threaded, &want, comm);
+        }
+        if costs == Some(FREE_DIAGONAL) {
+            let (_, chunked) = run(&rule.clone().diagonal_chunk(Some(3)), inputs, kind, comm);
+            assert_same(&format!("{what}, chunks of 3"), &chunked, &want, comm);
         }
         if costs.is_some() {
             check_one_rank(&what, &rule, inputs, kind, &want, comm);

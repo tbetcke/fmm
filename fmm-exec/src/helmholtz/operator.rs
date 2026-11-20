@@ -1505,9 +1505,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// Builds the M2L tables of the setting, the budget and (under Auto) the crossover, and
-    /// the scratch sized for them; under [`HelmholtzM2l::PlaneWave`]'s rule with a tolerance
-    /// below 10⁻⁶, and under [`HelmholtzM2l::Auto`] at 10⁻⁸ ≤ ε < 10⁻⁷, the RCR tables at
-    /// the raised degrees (Helmholtz CH6.1g), or again at the degrees given where an earlier
+    /// the scratch sized for them; under [`HelmholtzM2l::PlaneWave`]'s rule and under
+    /// [`HelmholtzM2l::Auto`] with a tolerance below 10⁻⁶, the RCR tables at the raised degrees
+    /// of the levels with waves (Helmholtz CH6.1g, CH6.1h) and of those the diagonal form's time
+    /// rule took from them (Helmholtz CH4.3b2a), or again at the degrees given where an earlier
     /// setting raised them.
     fn select_tables(&mut self) {
         if self.unbuilt {
@@ -1538,9 +1539,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             &base,
         );
         // Under the time rule (Helmholtz CH4.3b1, CH4.3b2a) a level with waves in its range
-        // runs the cheapest of the waves, the form and RCR at its resolving degree p_w, which
-        // it keeps whatever M2L runs (matched accuracy): the form's classes are the bound's at
-        // p_w, and its scratch budget's whole-level fallback comes first (constraint 7).
+        // keeps the waves unless the form beats them, then runs the cheaper of the form and RCR
+        // (`wave_level_choice`), at its resolving degree p_w, which it keeps whatever M2L runs
+        // (matched accuracy): the form's classes are the bound's at p_w, and its scratch
+        // budget's whole-level fallback comes first (constraint 7).
         let mut from_waves = vec![false; base.len()];
         if let (HelmholtzDiagonal::Auto, HelmholtzM2l::Auto, Some(epsilon), Some(levels)) = (
             kernel.diagonal_settings.choice,

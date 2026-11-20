@@ -411,9 +411,9 @@ pub enum WaveLevelChoice {
 /// not fit the budget): the waves unless the form beats them
 /// ([`diagonal_beats_plane_waves`] at `p_w`), and then the cheaper of the form and RCR
 /// ([`diagonal_beats_rcr`], a tie to RCR). RCR never competes with the waves alone: at the
-/// resolving degree on the sparse levels of W1 RCR's constant (fitted at the degrees given)
-/// under-predicts RCR, which ran 1.0–1.5× the waves where a rule of three took it
-/// (fmm-validate/results/helmholtz-ch4-3b2a.md). A function of its arguments alone
+/// resolving degree on sparse W1 levels RCR's constant (fitted at the degrees given)
+/// under-predicts RCR: where a rule of three took RCR it ran 1.07–1.52× the waves on three levels
+/// and won on four, 0.47 s lost against 0.11 s gained (fmm-validate/results/helmholtz-ch4-3b2a.md). A function of its arguments alone
 /// (constraint 9).
 pub fn wave_level_choice(
     costs: &DiagonalCosts,

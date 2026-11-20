@@ -787,17 +787,19 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   p_w, translations as `PlaneWaveRaise` gives the waves); by `wave_level_choice`
   (`WaveLevelChoice`) it keeps the waves unless the form (the bound's classes at p_w, its scratch
   at p_w within the budget) beats them, and then runs the cheaper of the form and RCR (ties to
-  the waves, then to RCR); RCR never against the waves alone (a rule of three lost 0.45 s and
+  the waves, then to RCR); RCR never against the waves alone (a rule of three lost 0.47 s and
   gained 0.11 s on the report's runs: RCR's constant under-predicts RCR at the raised degree on
   sparse levels); below k a 2.8 the waves stay. `HelmholtzOperator::taken_from_waves` reports the levels taken.
   `the_time_rule_against_the_waves` (10⁻⁴, 10⁻⁷, 10⁻⁸; free form, free RCR, dear and a tight
   budget: the defaults' degrees and translation degrees under every costs) and the unit test
-  `the_choice_on_a_level_with_waves_by_hand`; `check_time_rule_raised` in `tests/helmholtz_fmm.rs` (the
-  cubes of `check_resolving_degree` at kD = 20 + 2i and a cube at kD = 40 + 2i, 10⁻⁷, whose
-  level 2 takes 15 classes at p_w = 28): the machine's, free form and free RCR costs, the
-  defaults' degrees, the errors within `DIAGONAL_RATIO` of the defaults' (or of ε/100 where the
-  defaults err less, rounding's regime: the cube at 10⁻⁸ errs 0.005× Rotation's), 2 threads and
-  the one-rank FMM bit for bit.
+  `the_choice_on_a_level_with_waves_by_hand`; `check_time_rule_raised` in `tests/helmholtz_fmm.rs` (a
+  cube at kD = 40 + 2i, 10⁻⁷, whose level 2 takes 15 classes at p_w = 28; in release builds also
+  the cubes of `check_resolving_degree` at kD = 20 + 2i, which pass no class at p_w and keep the
+  defaults' bits): the machine's (release), free form and free RCR costs, the defaults' degrees,
+  the form at free form costs and RCR on the same levels at free RCR costs, the errors within
+  `DIAGONAL_RATIO` of the defaults', 2 threads, chunks of 3 and the one-rank FMM bit for bit. Its
+  debug cost: the one-rank run at opt-level 0 646 s at load 2–7 (CH4.2c2 611 s), 34.6 s at
+  opt-level 1.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

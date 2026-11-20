@@ -1331,14 +1331,15 @@ fn check_diagonal(world: &SimpleCommunicator) {
             if row.taken_from_waves[l] {
                 assert!(row_d.plane_wave[l].is_some(), "{name}, level {l}");
                 assert!(row.plane_wave[l].is_none(), "{name}, level {l}");
-                assert!(
-                    name == "form" || row.diagonal_classes[l] == 0,
-                    "{name}, level {l}"
+                assert_eq!(
+                    row.diagonal_classes[l] > 0,
+                    name == "form",
+                    "{name}, level {l}: the form at form costs, RCR at RCR costs"
                 );
             }
         }
         for (got, want) in row.errors.iter().zip(&row_d.errors) {
-            let within = |g: f64, w: f64| g <= 1.1 * w.max(epsilon / 100.0);
+            let within = |g: f64, w: f64| g <= 1.1 * w;
             assert!(
                 within(got[0], want[0]) && within(got[1], want[1]),
                 "{name}: {got:?} against the defaults' {want:?}"
