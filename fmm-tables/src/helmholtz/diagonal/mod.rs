@@ -117,7 +117,10 @@ pub use level::{
     m2l_level, scratch_shape,
 };
 pub use symmetry::signed_permutation;
-pub use transfer::{CLASS_COUNT, DiagonalM2l, OffsetMap, class_bounds};
+pub use transfer::{
+    CLASS_COUNT, DiagonalM2l, INTERPOLATION_OVERSAMPLING, INTERPOLATION_TERMS, OffsetMap,
+    TransferBuild, class_bounds, interpolation_steps,
+};
 
 /// The number of boxes converted together: the columns of the Legendre product are the four
 /// real planes of this many boxes. A box's bits do not depend on it.

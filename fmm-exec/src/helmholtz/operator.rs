@@ -1849,7 +1849,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         &self.diagonal_buffer.times
     }
 
-    /// The wall time of building `level`'s transfer functions (one part per class on the
+    /// The wall time of building `level`'s transfer functions (one part per (class, ring) on the
     /// pool) and its conversions when the tables were last chosen (Helmholtz CH4.2b2), or
     /// `None` where the level has no diagonal form. This rank's.
     pub fn diagonal_build_time(&self, level: usize) -> Option<(Duration, Duration)> {

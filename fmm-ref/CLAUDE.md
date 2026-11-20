@@ -58,6 +58,13 @@ Helmholtz CH4.2a: the ignored `m2l_at_the_degrees_of_kd_1000` in `tests/helmholt
 classes, against `rcr::m2l` within 2E, or else, at 108, no farther than max(2E, RCR's error)
 from the projection `direct::m2l`, and at 216 within a regression limit (5·10⁻¹³; no f64
 reference resolves E's floor at p = 245: docs/helmholtz/tasks/CH4.2a.md). In release.
+Helmholtz CH4.2c1: `diagonal::AngleTable` (T̂ of a shift on a uniform grid in the angle ψ
+between ŝ and t̂, each value double-double rounded once, and each grid sample's position on it
+in double-double, S6's `angle`), the double-double parts of `nd_fmm_tables`' interpolated build;
+the interpolation itself sums in f64 and lives there. `Transfer::ring_samples`, one ring of
+`Transfer::new` bit for bit (the series shared, `transfer::Series`; `Transfer::new`'s samples
+the same bits before and after, checked by hash against `main`). Unit tests in `angles.rs` and
+`transfer.rs`.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.

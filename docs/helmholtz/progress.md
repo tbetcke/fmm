@@ -3857,3 +3857,55 @@ request, using this template:
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness).
 - Follow-ups: CH4.2c (roadmap, item 10, before CH4.3) and CH4.2d (roadmap, off the list);
   CH4.3's Also on the order against the exponential M2L.
+
+## 2026-11-20: CH4.2c1 The transfer functions interpolated, and built by ring
+- Done: CH4.2c split into CH4.2c1 (the build) and CH4.2c2 (the operator and W1 on Kathleen), by
+  the size rule.
+  - `nd_fmm_ref::helmholtz::diagonal`: `AngleTable`, T̂ of a shift at M steps of [0, π] in ψ
+    (double-double, rounded once), and each sample's position on it in double-double, δ from the
+    nearest node by an f64 arcsine correction (S6's `angle`, a double-double sine and cosine per
+    sample, kept as the test's trusted path: the same (n, f) on every sample tested);
+    `Transfer::ring_samples` (one ring, bit for bit `Transfer::new`'s; the series shared).
+  - `nd_fmm_tables::helmholtz::diagonal`: `TransferBuild::{Direct, Interpolated}` with
+    `bound_constants` (F64, F64_INTERPOLATED's C_T = 0.23, F32 for f32 tables either way);
+    `DiagonalM2l::build_by`, one part per (class, ring), the interpolated build first one part
+    per class for its angle tables; S6's Gaussian-regularised sinc series (M = 6p + 1, 36 terms
+    each side) in f64. `build` and `build_on` stay direct, now by ring (so `nd-fmm-exec`'s level
+    build splits by ring with no code change there; three doc lines updated).
+
+  Record `docs/helmholtz/tasks/CH4.2c1.md` (no report: no FMM timing).
+- Tests: `fmm-tables/tests/helmholtz/diagonal_transfer.rs` (5 new, 2 of them ignored):
+  - every interpolated sample against the direct build within 32 ε of the class's largest
+    (3.3–4.1 ε);
+  - the interpolated M2L against RCR within 2E at C_T = 0.23 (34 classes at k a 2.83, 8 and
+    damped 8; 316 offsets at k a 5; f32 within `F32`'s 2E): at most 1.35 E, at S6's worst case
+    (k a 2.83, p = 7);
+  - the interpolated M2L against the direct build's within 2E (at most 0.75 E);
+  - both builds on the reversed three-thread map bit for bit serial, the direct build by ring
+    CH4.2a's by class, f32 the f64 tables rounded;
+  - ignored: k a 16–108 in release (at E's floor at p = 82 and 131 nearer the projection than
+    RCR, as the direct build), and `time_one_class`.
+
+  ref's unit tests: the rings bit for bit, positions against S6's (n, f) from p = 1 to 40 (largest
+  difference 0), the table's values, the arcsine correction. A mutation to 4 interpolation terms
+  fails the three interpolated tests. `Transfer::new`'s samples hashed on `main` and the branch:
+  the same.
+- Measurements (locust, one Grace core, release, idle; `time_one_class`, class (0, 0, 2)): one
+  class's build direct against interpolated, 0.020/0.008 s at p = 41, 0.096/0.026 at 72,
+  0.538/0.089 at 131 and 3.43/0.358 at 245 (2.3–9.6×; S6 5.4× at 128 and 11× at 256 against its
+  slower direct build). S6's `angle` had been half the interpolated build (1.2–5.3× before).
+- Checks: `/verify` on the M6 (load 2–6): fmt; Clippy (default, examples, workspace all-targets);
+  rustdoc with `-D warnings`; the default and workspace tests at opt-level 1 (1,361 and 1,405
+  passed); the tables' and ref's ignored diagonal tests in release (3 and 3 passed, 85 and 63 s);
+  the MPI list at 2 and 4 ranks at opt-level 1 (every executable passed; `helmholtz_fmm` 33 and
+  30 s; exec's level build now by ring); the tables' Helmholtz executable at opt-level 0 in 41 s
+  at load about 9 (CH4.2b1: 67 s at load 22–42), under its minute. Not run: `cargo deny` (no
+  manifest), Laplace's benchmarks (no Laplace path changed), 8 ranks (no distributed code).
+  Nothing pending.
+- Decisions: signed off 2026-11-20 by the user on #240, "Sign off Q1 as recommended": question 1,
+  the acceptance as read.
+- Laplace: not touched (Helmholtz modules of `nd-fmm-ref` and `nd-fmm-tables`; doc comments of
+  `nd-fmm-exec`'s Helmholtz operator).
+- Follow-ups: CH4.2c2 (roadmap: the operator's build setting and the rule's constants by the
+  build, the harness, W1's tables timed at 1 × 40 and 40 × 1 on Kathleen, the default build for
+  sign-off).

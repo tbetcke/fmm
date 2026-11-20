@@ -13,19 +13,55 @@
 //! W_c(ŝᵢⱼ) = 4π ik̂ e^{2β − Im(k̂)|t_c|} · T̂_c(ŝᵢⱼ)
 //! ```
 //!
-//! with T̂_c the stored transfer function of the class representative
-//! (`nd_fmm_ref::helmholtz::diagonal::Transfer`: each sample in double-double, rounded once to
-//! f64) and the scalar factor of the diagonal step, formed in f64 as
+//! with T̂_c the stored transfer function of the class representative (by either build of
+//! "Two builds" below, in f64) and the scalar factor of the diagonal step, formed in f64 as
 //! [`HelmholtzTables`](crate::helmholtz::HelmholtzTables) forms the RCR M2L's and multiplied in
 //! f64; the product is rounded to `T` (an f32 table is the f64 table rounded). The factor
 //! depends on |t| alone, which is the class's, so it is folded in as the RCR tables fold it,
-//! and the pair is one complex multiply-add per sample. Nothing of T̂ is summed in the working
-//! precision (proposal §3.6). This storage is the crate's: CONVENTIONS §3.15 leaves how T̂ is
-//! computed and stored to CH4.2 ("Not fixed here"). Classes that run RCR store nothing
-//! (proposal §5.4).
+//! and the pair is one complex multiply-add per sample. The series of T̂ is never summed in the
+//! working precision (proposal §3.6; the interpolated build sums S6's interpolation of
+//! double-double values in f64, the variant S6 measured and CH0.6 signed off). This storage is
+//! the crate's: CONVENTIONS §3.15 leaves how T̂ is computed and stored to CH4.2 ("Not fixed
+//! here"). Classes that run RCR store nothing (proposal §5.4).
 //!
 //! The classes are `nd_fmm_ref::helmholtz::diagonal::classes()`'s 34, by their index there
 //! (ordered by |t|², then by the representative).
+//!
+//! # Two builds
+//!
+//! T̂_c comes from `nd-fmm-ref` in one of two ways ([`TransferBuild`]; proposal §5.4, "per
+//! sample in O(p³) per class at build time, or interpolated in ŝ · t̂ from an
+//! extended-precision table in O(p²) per class"):
+//!
+//! - **direct** (CH4.2a): each sample is ref's `Transfer`, the series summed in double-double
+//!   at the sample's ŝ · t̂ and rounded once;
+//! - **interpolated** (CH4.2c1, S6's `Interp`): T̂ depends on ŝ through ψ = arccos(ŝ · t̂)
+//!   alone and is a cosine polynomial of degree L = 2p in ψ, so ref's `AngleTable` holds it at
+//!   M = [`interpolation_steps`]`(p)` = 3L + 1 steps of [0, π] (each value double-double, rounded
+//!   once), and each sample reads it by the Gaussian-regularised sinc series of Qian (2003),
+//!   [`INTERPOLATION_TERMS`] terms on each side of its position, which ref computes in
+//!   double-double; the series is summed in f64. Its rounding is S6's 0.3–6× that of the direct
+//!   build (median 1.2), and the bound E holds with C_T = 0.23 in place of 0.15
+//!   ([`TransferBuild::bound_constants`]; signed off at CH0.6, question 3). The table costs
+//!   O(M p) double-double operations per class, a sample O(1) (its position in double-double
+//!   from the nearest node, then 72 f64 terms with an `exp` each), against O(p) double-double
+//!   operations per sample directly: on one core of locust 2.3× faster at p = 41, 6.1× at 131
+//!   and 9.6× at 245 (`time_one_class`; S6: 11× at p = 256).
+//!
+//! Both fold the same factor in the same way. The interpolated tables call libm's `atan2`,
+//! `sin` and `exp`, so they are a function of the machine's libm as well as of p, k̂ and the
+//! class: the same on every thread and rank of a run, not bit for bit between libms.
+//!
+//! # The build in parts
+//!
+//! [`DiagonalM2l::build_by`] cuts the build into parts of one ring of one class (Helmholtz
+//! CH4.2c1; one part per class before), (2p + 1) parts per class, and the interpolated build
+//! first into one part per class for its angle tables: on a node's threads a level's build
+//! then costs about its classes' work over the threads, not one class's (CH4.2b2's report §5,
+//! 2.3 s at p = 131 on Kathleen at 1 × 40). Each part is a function of the build's inputs and
+//! its number, and the parts are put together in (class, ring) order, so every map gives the
+//! serial build's bits; ref's `Transfer::ring_samples` is its `Transfer::new` ring for ring bit
+//! for bit, so the direct build is CH4.2a's tables bit for bit.
 //!
 //! # Reading a class through an offset's symmetry
 //!
@@ -74,7 +110,7 @@ use nd_fmm_math::{Complex, RealScalar};
 use nd_fmm_ref::Frame;
 use nd_fmm_ref::helmholtz::Level;
 use nd_fmm_ref::helmholtz::diagonal::{
-    BoundConstants, Grid, Transfer, azimuth_count, bound, class_of, classes,
+    AngleTable, BoundConstants, Grid, Transfer, azimuth_count, bound, class_of, classes,
 };
 
 use crate::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
@@ -164,38 +200,166 @@ fn factor(level: &Level<f64>, t: f64) -> Complex<f64> {
     Complex::new(-(c * k.im), c * k.re) * (beta + beta - k.im * t).exp()
 }
 
-/// The f64 samples W of class c (module documentation, "What is stored").
-fn class_samples(grid: &Grid<f64>, level: &Level<f64>, class: usize) -> Vec<Complex<f64>> {
+/// The frames of class c's representative in the level's units: from the origin to 2 rep.
+fn class_frames(class: usize) -> (Frame<f64>, Frame<f64>) {
     let rep = classes()[class].representative;
-    let from = Frame::new([0.0; 3], 1.0);
-    let to = Frame::new(rep.map(|x| 2.0 * f64::from(x)), 1.0);
-    let transfer = Transfer::new(grid, level, &from, &to);
-    let f = factor(level, distance(class));
-    transfer.samples().iter().map(|&s| s * f).collect()
+    (
+        Frame::new([0.0; 3], 1.0),
+        Frame::new(rep.map(|x| 2.0 * f64::from(x)), 1.0),
+    )
+}
+
+/// How [`DiagonalM2l`] builds its transfer functions T̂ (proposal §5.4; module documentation,
+/// "Two builds"). Both compute in double-double what they take from `nd-fmm-ref` and round it
+/// once; neither sums T̂ in the working precision.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TransferBuild {
+    /// Each sample from ref's `Transfer`: O(p) double-double operations per sample, O(p³) per
+    /// class (Helmholtz CH4.2a). The rule's constants are S6's for T rounded per sample.
+    #[default]
+    Direct,
+    /// Each sample interpolated in ψ = arccos(ŝ · t̂) from ref's `AngleTable` (Helmholtz
+    /// CH4.2c1; S6's `Interp`): O(p²) double-double operations per class for the table, and per
+    /// sample [`INTERPOLATION_TERMS`] · 2 terms in f64 at a position from double-double. The
+    /// rule's constants are S6's for T interpolated (C_T = 0.23).
+    Interpolated,
+}
+
+impl TransferBuild {
+    /// The constants of the bound E for tables of this build (S6, signed off at CH0.6): in f64
+    /// `BoundConstants::F64` (direct) or `F64_INTERPOLATED` (interpolated); for a 4-byte table
+    /// (`single`) `F32` either way, since an f32 table is the f64 table rounded and the
+    /// interpolation's error in f64 lies about 2²⁹ times below f32's rounding.
+    pub fn bound_constants(self, single: bool) -> BoundConstants {
+        match (single, self) {
+            (true, _) => BoundConstants::F32,
+            (false, Self::Direct) => BoundConstants::F64,
+            (false, Self::Interpolated) => BoundConstants::F64_INTERPOLATED,
+        }
+    }
+}
+
+/// The interpolated build's oversampling σ: the angle grid has M = σ L + 1 steps of [0, π] for
+/// the bandwidth L = 2p (S6's 3).
+pub const INTERPOLATION_OVERSAMPLING: usize = 3;
+
+/// The interpolated build's terms on each side of a sample (S6's 36).
+pub const INTERPOLATION_TERMS: usize = 36;
+
+/// The steps M of the interpolated build's angle grid at degree p: σ · 2p + 1.
+pub const fn interpolation_steps(p: usize) -> usize {
+    INTERPOLATION_OVERSAMPLING * 2 * p + 1
+}
+
+/// T̂ read from an angle table by S6's Gaussian-regularised sinc series (Qian 2003): 2h terms of
+/// the table's even, 2π-periodic extension, the window e^{−d²/(2r²)} with
+/// r² = (h − 2)/(π − δ), δ = Lπ/M the band in radians per step, in f64.
+struct Interpolator<'a> {
+    values: &'a [Complex<f64>],
+    steps: usize,
+    inv_two_r2: f64,
+}
+
+impl<'a> Interpolator<'a> {
+    fn new(table: &'a AngleTable) -> Self {
+        let steps = table.steps();
+        let band = (2 * table.degree()) as f64 * core::f64::consts::PI / steps as f64;
+        debug_assert!(
+            band < core::f64::consts::PI,
+            "the angle grid must oversample the bandwidth 2p: {steps} steps at p = {}",
+            table.degree()
+        );
+        let r2 = (INTERPOLATION_TERMS as f64 - 2.0).max(1.0) / (core::f64::consts::PI - band);
+        Self {
+            values: table.values(),
+            steps,
+            inv_two_r2: 0.5 / r2,
+        }
+    }
+
+    /// Entry k of the even, 2π-periodic extension of the table.
+    fn at(&self, k: isize) -> Complex<f64> {
+        let period = 2 * self.steps as isize;
+        let mut k = k.rem_euclid(period);
+        if k > self.steps as isize {
+            k = period - k;
+        }
+        self.values[k as usize]
+    }
+
+    /// T̂ at the position n + f on the grid (0 ≤ f < 1).
+    fn eval(&self, n: isize, f: f64) -> Complex<f64> {
+        if f == 0.0 {
+            return self.at(n);
+        }
+        // sin(π(f − d)) = (−1)^d sin(πf); for f near 1 as sin(π(1 − f)), 1 − f exact, since
+        // πf rounds next to π and sin would lose its relative accuracy there.
+        let g = if f > 0.5 { 1.0 - f } else { f };
+        let s = (core::f64::consts::PI * g).sin() / core::f64::consts::PI;
+        let half = INTERPOLATION_TERMS as isize;
+        let mut acc = Complex::new(0.0, 0.0);
+        for d in 1 - half..=half {
+            let dist = f - d as f64;
+            let sign = if d % 2 == 0 { 1.0 } else { -1.0 };
+            let w = sign * s / dist * (-dist * dist * self.inv_two_r2).exp();
+            acc += self.at(n + d) * w;
+        }
+        acc
+    }
+}
+
+/// T̂ of ring `ring` read from class `table` (its positions on `grid`).
+fn interpolated_ring(grid: &Grid<f64>, table: &AngleTable, ring: usize) -> Vec<Complex<f64>> {
+    let interpolator = Interpolator::new(table);
+    (0..grid.azimuths())
+        .map(|j| {
+            let (n, f) = table.position(grid, ring, j);
+            interpolator.eval(n, f)
+        })
+        .collect()
 }
 
 impl<T: RealScalar> DiagonalM2l<T> {
     /// The transfer functions of degree p for the wavenumber `k_hat` in the level's units, of
     /// the classes `stored` (indices into `nd_fmm_ref::helmholtz::diagonal::classes()`,
-    /// ascending), built on the calling thread ([`build_on`](Self::build_on)).
+    /// ascending), built directly ([`TransferBuild::Direct`]) on the calling thread
+    /// ([`build_by`](Self::build_by)).
     ///
     /// # Panics
     ///
-    /// As [`build_on`](Self::build_on).
+    /// As [`build_by`](Self::build_by).
     pub fn build(p: usize, k_hat: Complex<f64>, stored: &[usize]) -> Self {
-        Self::build_on(p, k_hat, stored, &Serial)
+        Self::build_by(p, k_hat, stored, TransferBuild::Direct, &Serial)
     }
 
-    /// As [`build`](Self::build), one part per stored class on `parts` (`crate::parts`): each
-    /// class a function of p, k̂ and the class alone, put together in class order, so the
-    /// tables are the serial build's bit for bit on any map. A class costs O(p³)
-    /// double-double operations (ref's `Transfer`).
+    /// As [`build`](Self::build), on `parts` ([`build_by`](Self::build_by) with
+    /// [`TransferBuild::Direct`]).
+    ///
+    /// # Panics
+    ///
+    /// As [`build_by`](Self::build_by).
+    pub fn build_on(p: usize, k_hat: Complex<f64>, stored: &[usize], parts: &impl Parts) -> Self {
+        Self::build_by(p, k_hat, stored, TransferBuild::Direct, parts)
+    }
+
+    /// The transfer functions of the classes `stored` by `build`, on `parts` (`crate::parts`;
+    /// module documentation, "Two builds" and "The build in parts"): under
+    /// [`TransferBuild::Interpolated`] first one part per stored class (its angle table), then
+    /// under both one part per (class, ring), each a function of p, k̂, the class and the ring
+    /// alone, put together in (class, ring) order, so the tables are the serial build's bit for
+    /// bit on any map.
     ///
     /// # Panics
     ///
     /// If `stored` is not ascending without repeats or names a class beyond
     /// [`CLASS_COUNT`], or k̂ = 0.
-    pub fn build_on(p: usize, k_hat: Complex<f64>, stored: &[usize], parts: &impl Parts) -> Self {
+    pub fn build_by(
+        p: usize,
+        k_hat: Complex<f64>,
+        stored: &[usize],
+        build: TransferBuild,
+        parts: &impl Parts,
+    ) -> Self {
         assert!(k_hat.norm() > 0.0, "the diagonal form needs k ≠ 0");
         assert!(
             stored.windows(2).all(|w| w[0] < w[1]),
@@ -207,15 +371,36 @@ impl<T: RealScalar> DiagonalM2l<T> {
         );
         let level = level(k_hat);
         let grid = Grid::<f64>::new(p);
-        let parts_out = parts.map(stored.len(), &|i| {
-            class_samples(&grid, &level, stored[i])
+        let rings = grid.rings();
+        let tables: Vec<AngleTable> = match build {
+            TransferBuild::Direct => Vec::new(),
+            TransferBuild::Interpolated => parts.map(stored.len(), &|i| {
+                let (from, to) = class_frames(stored[i]);
+                AngleTable::new(p, &level, &from, &to, interpolation_steps(p))
+            }),
+        };
+        let ring_parts = parts.map(stored.len() * rings, &|part| {
+            let (i, ring) = (part / rings, part % rings);
+            let class = stored[i];
+            let samples = match build {
+                TransferBuild::Direct => {
+                    let (from, to) = class_frames(class);
+                    Transfer::ring_samples(&grid, &level, &from, &to, ring)
+                }
+                TransferBuild::Interpolated => interpolated_ring(&grid, &tables[i], ring),
+            };
+            let f = factor(&level, distance(class));
+            samples
                 .into_iter()
-                .map(|w| Complex::new(T::from_f64(w.re), T::from_f64(w.im)))
+                .map(|s| {
+                    let w = s * f;
+                    Complex::new(T::from_f64(w.re), T::from_f64(w.im))
+                })
                 .collect::<Vec<_>>()
         });
         assert_eq!(
-            parts_out.len(),
-            stored.len(),
+            ring_parts.len(),
+            stored.len() * rings,
             "the map gives one result per part"
         );
         let mut positions = [None; CLASS_COUNT];
@@ -225,10 +410,10 @@ impl<T: RealScalar> DiagonalM2l<T> {
         Self {
             p,
             k_hat,
-            rings: grid.rings(),
+            rings,
             azimuths: grid.azimuths(),
             stored: positions,
-            values: parts_out.concat(),
+            values: ring_parts.concat(),
             maps: offset_maps(p),
         }
     }

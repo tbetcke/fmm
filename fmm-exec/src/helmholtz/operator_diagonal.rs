@@ -7,15 +7,15 @@
 //! is RCR's under the operator's M2L setting (no waves, no Dense, Classes or Batched tables)
 //! takes the offset classes c with E(l, c) ≤ θ ε (`nd_fmm_tables::helmholtz::diagonal::
 //! class_bounds` at the level's degree and wavenumber, θ = `nd_fmm_ref`'s `THETA` = 1/2) to the
-//! diagonal form, by [`diagonal_rule_classes`]: S6's constants of f64, or of f32 at
-//! ε ≥ [`DIAGONAL_F32_MIN_TOLERANCE`] only (decision D3). Every other class stays on RCR. A
-//! level holds the transfer functions of its classes (`DiagonalM2l`, one part per class on the
-//! pool) and its conversions (`Conversions`) only where some class passes and its scratch fits
-//! the budget: the conversions, one thread's scratch, the signatures of the level's distinct V
-//! sources for every charge vector and a chunk of accumulators (`scratch_shape`), the sources
-//! counted as the largest count over the ranks ([`with_diagonal_sources`]), so that every rank
-//! takes the same levels (constraints 2, 7 and 9). A function of k, the level's width, its
-//! degree, ε and T, and of the agreed count.
+//! diagonal form, by [`diagonal_rule_classes`]: S6's constants of f64, or of f32 at ε ≥
+//! [`DIAGONAL_F32_MIN_TOLERANCE`] only (decision D3). Every other class stays on RCR. A level holds
+//! the transfer functions of its classes (`DiagonalM2l`, one part per (class, ring) on the pool)
+//! and its conversions (`Conversions`) only where some class passes and its scratch fits the
+//! budget: the conversions, one thread's scratch, the signatures of the level's distinct V sources
+//! for every charge vector and a chunk of accumulators (`scratch_shape`), the sources counted as
+//! the largest count over the ranks ([`with_diagonal_sources`]), so that every rank takes the same
+//! levels (constraints 2, 7 and 9). A function of k, the level's width, its degree, ε and T,
+//! and of the agreed count.
 //!
 //! # The level call
 //!
@@ -242,7 +242,7 @@ impl<T: SimdScalar> DiagonalLevel<T> {
 /// rule"): for each level l ≥ 2 with `rcr[l]` (its M2L RCR's), degree `degrees[l]` and
 /// wavenumber `k_hat(l)` in its units, the classes of [`diagonal_rule_classes`] at the
 /// setting's tolerance, where some class passes and the scratch fits the budget; `None`
-/// elsewhere. The transfer functions are built on `parts`, one part per class.
+/// elsewhere. The transfer functions are built on `parts`, one part per (class, ring).
 pub(super) fn select<T: SimdScalar>(
     settings: &DiagonalSettings,
     fmm_tolerance: Option<f64>,
