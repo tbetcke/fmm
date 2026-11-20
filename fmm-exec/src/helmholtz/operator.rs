@@ -1244,11 +1244,15 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// Gives [`PlaneWavePrecision::Rule`] the FMM's tolerance ε (`Degrees::Tolerance`'s;
     /// `None`, the default, for named degrees, when the rule reads each level's degree),
-    /// before or after [`with_m2l`](Self::with_m2l). Under PlaneWave the levels' tables are
-    /// built again.
+    /// before or after [`with_m2l`](Self::with_m2l); [`HelmholtzDiagonal::Rule`] reads it too
+    /// (Helmholtz CH4.2b1). Under PlaneWave, Auto with waves and the diagonal rule the levels'
+    /// tables are built again.
     pub fn with_plane_wave_tolerance(mut self, tolerance: Option<f64>) -> Self {
         self.kernel.plane_wave_tolerance = tolerance;
-        if self.kernel.m2l == HelmholtzM2l::PlaneWave || self.kernel.auto_takes_plane_waves() {
+        if self.kernel.m2l == HelmholtzM2l::PlaneWave
+            || self.kernel.auto_takes_plane_waves()
+            || self.kernel.diagonal_settings.choice == HelmholtzDiagonal::Rule
+        {
             self.select_tables();
         }
         self
