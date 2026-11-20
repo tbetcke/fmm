@@ -738,6 +738,18 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   multiply-adds. `check_diagonal_times` (in `check_diagonal`, after every run) checks the parts
   timed exactly where they ran, within the passes and the level's M2L time, `back` against the
   plan's V rows, the build times on the diagonal levels alone.
+  Since Helmholtz CH4.2c2 (docs/helmholtz/tasks/CH4.2c2.md; fmm-validate/results/helmholtz-ch4-2c2.md)
+  the transfer functions' build is a setting: `TransferBuild` (re-exported from
+  `nd_fmm_tables::helmholtz::diagonal`; `Direct`, the default, or `Interpolated`, CH4.2c1's
+  table in ŝ · t̂), `HelmholtzOperator::{with_diagonal_build, diagonal_build}`,
+  `HelmholtzFmmBuilder::diagonal_build`; the rule reads the build's constants
+  (`diagonal_rule_classes(p, k̂, ε, build)`: `TransferBuild::bound_constants`, C_T = 0.15
+  direct, 0.23 interpolated, F32's for f32 by either), so the interpolated build takes at most
+  the direct build's classes. `tests/helmholtz/diagonal.rs` checks the classes per build (a
+  subset, fewer on some level) and the pair body with interpolated tables within 2E of its
+  constants; `check_interpolated` (in `check_diagonal`, under Rotation) the FMM's errors within
+  `DIAGONAL_RATIO` of Rotation's, the classes within the direct build's and the same on every
+  rank, 2 threads and the one-rank FMM bit for bit.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

@@ -608,6 +608,15 @@ loop; the column "M2L" listing `; diagonal l:c,…` and ending `/diag`, `--level
 runs the task's stages, `ch4-2b2-tables.py` makes the report's tables. Its report is
 `results/helmholtz-ch4-2b2.md`.
 
+Helmholtz CH4.2c2 (the interpolated transfer build in the operator; docs/helmholtz/tasks/CH4.2c2.md)
+added `helmholtz_accuracy::Case::diagonal_build` (`HelmholtzFmmBuilder::diagonal_build`,
+`TransferBuild::Direct` in `Case::new`, named always) and `Row::diagonal_build_kind` (as built),
+and to the example `--diagonal-build direct|interpolated,…` (each `--diagonal` run but `off` with
+each build; the column "M2L" ending `/interp`). `tests/helmholtz_accuracy.rs` (`check_diagonal`)
+checks the interpolated row on W1 at kD = 30. `tools/helmholtz/ch4-2c2-runs.sh` runs the task's
+stages, `ch4-2c2-tables.py` makes the report's tables. Its report is
+`results/helmholtz-ch4-2c2.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
