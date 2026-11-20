@@ -262,12 +262,12 @@ and the build by ring).
   rounded; the ignored `interpolated_at_large_degrees` (k a 16–108, release) and
   `time_one_class` (one class's build, direct against interpolated, at p = 41–245; prints).
   Since Helmholtz CH4.3a (docs/helmholtz/tasks/CH4.3a.md; fmm-validate/results/helmholtz-ch4-3a.md)
-  the ignored `the_bound_on_the_fmms_levels` (release, about 9 minutes on the M6, one case per
+  the ignored `the_bound_on_the_fmms_levels` (release, 9–15 minutes on a loaded M6, one case per
   thread): the 34 classes at the (k a, p) of the FMM's levels (k a 1.35–108, the calibrated
   degree restated from nd-fmm-exec's `DegreeRule::CALIBRATED` at 10⁻³–10⁻⁸; real k, η = 0.1, and
   η = 1 to k a 21.65), both builds, against RCR within 2E per pair (`against`'s measure and floor
-  reading) asserted in S6's range k a ≥ 2.8 (`S6_MIN_KA`; below it a class above 2E is printed as a
-  finding), and the input-relative error (over the field of the same charges at Re k, the direct
+  reading) asserted for real k everywhere and for damped k in S6's range k a ≥ 2.8 (`S6_MIN_KA`;
+  below it a damped class above 2E is printed as a finding), and the input-relative error (over the field of the same charges at Re k, the direct
   sum) over E with and without the damping factor printed. A change to the degree rule's
   constants changes `calibrated_degree` here too.
 - Matrices are column-major with output = A · input. Every application accumulates

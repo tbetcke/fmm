@@ -729,9 +729,10 @@ task's full line is in its record or report and its progress entry
   `fmm-validate/results/helmholtz-ch4-3a.md`; record `docs/helmholtz/tasks/CH4.3a.md`. C_T (0.15
   direct, 0.23 interpolated) and θ = 1/2 hold in the FMM: every case 1.000–1.007× Rotation's errors
   on W1 (kD = 100–1000), W3 (N = 10⁶, kD = 200, 500), 10⁻³–10⁻⁸, the smooth densities and damped
-  W1; margin 16 at 10⁻⁸, none needed at ε ≥ 10⁻⁶; per pair within 2E on the FMM's levels
-  (k a ≥ 2.8); the damping factor conservative in the FMM (1.006× at 1024θ) and in the
-  input-relative measure, its removal unsafe. *Sign-off:* pending (the PR's questions 1–4).
+  W1; margin 16 at 10⁻⁸, none needed at ε ≥ 10⁻⁶; per pair within 2E on the FMM's levels but at
+  k a = 108 (E's floor, C₀ CH4.3c's) and one damped class below S6's k a 2.8; the damping factor
+  conservative in the FMM (1.006× at 1024θ) and in the input-relative measure, its removal unsafe.
+  *Sign-off:* pending (the PR's questions 1–4).
 - [ ] **CH4.3b The time rule, and the diagonal form by default.** *Done when:* the time
   crossover per class and per level, the conversions included, against RCR and against the
   exponential M2L at matched accuracy, and the order between the two per level (CH4.2b2's report
@@ -743,7 +744,7 @@ task's full line is in its record or report and its progress entry
   constraints 2 and 9; built in CH4.2b1; at 40 ranks per node W1 at kD = 1000's levels 2–3 do
   not fit a rank's 205 MiB); the diagonal form on by default (`HelmholtzDiagonal`, `Off` until
   here) for sign-off, the FMM within 1.1× the defaults' errors on W1 and W3. Also (CH4.3a's
-  report §4, its question 3): whether the time rule takes the diagonal form at k a < 2.8 at all,
+  report §4, its question 3, recommended, pending sign-off): whether the time rule takes the diagonal form at k a < 2.8 at all,
   below S6's calibrated range, where one damped class measured 2.9 E per pair (direct build,
   η = 0.1, k a 1.69); if it does, the rule bounded to k a ≥ 2.8 or C_T raised there. *Needs:* CH4.3a.
   *Machines:* Kathleen, locust. *Sign-off:* the default.
@@ -790,9 +791,10 @@ task's full line is in its record or report and its progress entry
 
 - [ ] **CH5.1 Classifier and pruning for Im k > 0.** *Done when:* regimes as §3.6 with S6's
   damped results; the error within target over a grid of (Re kD, Im kD) on W1. Also (CH4.3a's
-  report §5, its question 2): a damping factor of the bound fitted in the input-relative measure
-  (CH1.3c's weighting; e^{Im(k)(|t| + 2a)} over-predicts by up to 10¹⁴ at η = 0.1 and 10²⁵ at
-  η = 1, none under-predicts by up to 1.6·10⁶), confirmed in the FMM on damped W1. *Needs:*
+  report §5, its question 2, recommended, pending sign-off): a damping factor of the bound fitted
+  in the input-relative measure (CH1.3c's weighting; with e^{Im(k)(|t| + 2a)} E over-predicts by
+  up to 10¹⁴ at η = 0.1 and 10²⁵ at η = 1, without it E under-predicts by up to 3.4·10⁶),
+  confirmed in the FMM on damped W1. *Needs:*
   CH2.3, CH4.3.
 - [ ] **CH5.2 Damping-dependent truncation and bound.** *Done when:* the error within target
   for weakly damped cases. *Needs:* CH5.1, CH0.6.

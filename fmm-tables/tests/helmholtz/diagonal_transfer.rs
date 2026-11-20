@@ -1290,23 +1290,25 @@ fn study_row(build: TransferBuild, ka: f64, eta: f64, eps: f64, seed: u64) -> St
     row
 }
 
+/// The smallest k a of S6's sweep (2.83, `spikes/diagonal/SPIKE_REPORT.md` §2), on which C_T
+/// was fitted.
+const S6_MIN_KA: f64 = 2.8;
+
 /// CH4.3a's pair evidence (docs/helmholtz/tasks/CH4.3a.md): the 34 classes at the (k a, p) of
 /// the FMM's levels on W1 and W3 at kD = 100, 200, 500 and 1000 (k a = kD √3 / 2^{l+1} for the
 /// levels l ≥ 2 down to k a ≈ 1.35; 216 at kD = 1000's level 2 is CH4.3c's), the calibrated p at
 /// ε = 10⁻³, 10⁻⁴, 10⁻⁶ and 10⁻⁸, real k and η = Im k / Re k = 0.1 (every k a: W1 at
 /// kD = 500 + 50i) and 1 (k a ≤ 21.65, kD = 100 + 100i's levels; at k a = 108 and η = 1 the
-/// transfer functions leave f64's range), both builds of the transfer functions. Asserted, in S6's
-/// calibrated range k a ≥ 2.8 (`S6_MIN_KA`): every class within 2E per pair against RCR (read
-/// against ref's projection at E's floor, p ≥ 72); everywhere: the RCR chain against the direct
-/// sum at real k within 10⁻⁴ at 10⁻⁸ (the units of the input-relative measure). Below k a = 2.8 a
-/// class above 2E is printed as a finding (on the M6: the direct build's (0, 0, 3) at k a = 1.69,
-/// η = 0.1, 10⁻⁴, 2.9 E with E ≪ ε; CH4.3a's record). Printed per row: the largest measured over E
-/// per pair and input-relative (over the undamped field, CH1.3c's input-side weighting), also over
-/// E without the damping factor, and the classes each would take. Release, one case per thread on
-/// the machine's threads; about nine minutes on the M6.
-/// The smallest k a of S6's sweep (2.83, `spikes/diagonal/SPIKE_REPORT.md` §2), on which C_T
-/// was fitted.
-const S6_MIN_KA: f64 = 2.8;
+/// transfer functions leave f64's range), both builds of the transfer functions. Asserted: every
+/// class within 2E per pair against RCR (read against ref's projection at E's floor, p ≥ 72), for
+/// real k at every k a and for damped k in S6's calibrated range k a ≥ 2.8 (`S6_MIN_KA`; below it
+/// a damped class above 2E is printed as a finding: on the M6 the direct build's (0, 0, 3) at
+/// k a = 1.69, η = 0.1, 10⁻⁴, 2.9 E with E ≪ ε, CH4.3a's record); and the RCR chain against the
+/// direct sum at real k within 10⁻⁴ at 10⁻⁸ (the units of the input-relative measure; a single
+/// pair's truncation at the box corners, up to 4.1·10⁻⁵ measured). Printed per row: the largest
+/// measured over E per pair and input-relative (over the undamped field, CH1.3c's input-side
+/// weighting), also over E without the damping factor, and the classes each would take. Release,
+/// one case per thread on the machine's threads; 9–15 minutes on a loaded M6.
 
 #[test]
 #[ignore = "a study on the FMM's levels: run in release by hand"]
@@ -1385,7 +1387,7 @@ fn the_bound_on_the_fmms_levels() {
             },
         );
         for f in &r.failures {
-            if r.ka < S6_MIN_KA {
+            if r.eta > 0.0 && r.ka < S6_MIN_KA {
                 println!(
                     "FINDING below S6's range: {:?} k a {:.2} η {} ε {:e}: {f}",
                     r.build, r.ka, r.eta, r.eps

@@ -76,8 +76,10 @@ factor.
   projection), both builds, asserted; the damped rows' ratios printed, the per-pair relative
   measure within 2E asserted (S6's fit); at η = 0 the undamped direct field against the RCR
   chain's within 10⁻⁶ (the units of the input-relative measure checked).
-- FMM (Kathleen, below): every case at s = 1 within 1.1× Rotation's errors, φ and ∇φ; the
-  checksum of the rule's run at 1 × 40 the same in both builds' launches where the classes agree.
+- FMM (Kathleen, below): every case at s = 1 within 1.1× Rotation's errors, φ and ∇φ. (The
+  plan's "checksum of the rule's run the same in both builds' launches" was wrong: the two builds'
+  transfer functions differ in their last bits, so their outputs do; what both builds share is the
+  classes per level, report §2.)
 - `cargo test -p nd-fmm-validate` (the example parses; `tests/helmholtz_accuracy.rs` unchanged).
 
 ## Checks
@@ -132,11 +134,14 @@ The FMM runs are done: Kathleen job 653621 (node-c11a-013, `singlenode`, 2026-11
 (with the pair study's printed table, `pair-study-m6.md`).
 
 ## Results
-- Built as planned, with two changes: the runs name `--diagonal-build interpolated` (the example's
+- Built as planned, with three changes (the third from the self-review): the unit check's bound
+  is 10⁻⁴, not the plan's 10⁻⁶ (a single pair's truncation at the box corners reaches 4.1·10⁻⁵ at
+  10⁻⁸); and the runs name `--diagonal-build interpolated` (the example's
   own default is the direct build; caught before the job's runs, job 653620 cancelled in its
   build), and the study's assertion is bounded to S6's range k a ≥ 2.8, with η = 1 only on
   kD = 100's levels (k a ≤ 21.65; at k a = 108 and η = 1 the transfer functions overflow f64, a
-  case on no FMM tree). Below k a = 2.8 a class above 2E is printed as a finding.
+  case on no FMM tree). Below k a = 2.8 a damped class above 2E is printed as a finding; real k is
+  asserted at every k a.
 - FMM (report §2): every case 1.000–1.007× Rotation's errors at θ = 1/2: W1 at kD = 100–1000, W3
   at N = 10⁶ and kD = 200, 500, 10⁻³–10⁻⁸, the constant density and the plane wave's trace, damped
   W1 (kD = 100 + 10i, 100 + 100i, 500 + 50i); both builds the same classes at kD = 500.
@@ -149,7 +154,12 @@ The FMM runs are done: Kathleen job 653621 (node-c11a-013, `singlenode`, 2026-11
   input-relative error by up to 10¹⁴ (η = 0.1) and 10²⁵ (η = 1); without it E under-predicts by
   up to 1.6·10⁶.
 - The study on the M6 (load 16–87 from other jobs): 9 min 9 s, passed (and again after the
-  Clippy fix).
+  Clippy fix, 15 min, and after the self-review's change to assert real k everywhere).
+- Self-review (a subagent on the branch, the plan, §10 and §2): two blocking findings, fixed: the
+  report's §5 numbers (the under-prediction without the factor, the classes' growth) and question 1
+  asking to confirm C₀, which this task leaves to CH4.3c; notes fixed: real k asserted below
+  k a 2.8, the test's doc comment on the constant, §4's wording, the timing claim of §5 (one
+  evaluation), question 1's alternative, question 4's added scope, the Alsos marked pending.
 
 ## Open questions
 For sign-off on the PR (report §6): 1, the acceptance as read and the constants kept; 2, the

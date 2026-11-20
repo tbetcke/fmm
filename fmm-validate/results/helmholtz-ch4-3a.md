@@ -25,16 +25,17 @@ pairs over the FMM's levels, and measures how much margin the rule leaves.
    gains nothing by loosening.
 3. **On pairs the bound holds at the FMM's degrees** (§4): for real k every class at every
    (k a, ε) of the FMM's levels within 2E per pair against RCR (at most 1.09 E for k a ≤ 27; from
-   k a ≈ 43 up E's floor C₀ u, where f64 RCR rounds more and the measurement reads against ref's
-   projection, up to 3.3 E: CH4.2a's known reading, CH4.3c's), both builds. One finding below
+   k a ≈ 43 up at most 1.99 E, and at k a = 108 E's floor C₀ u, where f64 RCR rounds more and the
+   measurement reads against ref's projection, up to 3.3 E against RCR: CH4.2a's known reading;
+   C₀ there is CH4.3c's), both builds. One finding below
    S6's calibrated range (k a ≥ 2.8): the direct build's class (0, 0, 3) at k a = 1.69,
    η = 0.1, 10⁻⁴ measures 2.9 E (E = 7.7·10⁻⁹ ≪ ε); question 3.
 4. **The damping factor is conservative in the FMM, but cannot simply go** (§5): on damped W1 the
-   errors stay at 1.000–1.006× up to 1024θ while the rule takes up to 75 % more classes; on pairs,
-   in the input-relative measure (CH1.3c's weighting), the factor over-predicts by up to 10¹⁴
-   (η = 0.1) and 10²⁵ (η = 1), yet without it E under-predicts by up to 1.6·10⁶. A fitted factor needs its own
-   study (question 2). At kD = 500 + 50i, 10⁻⁸, loosening by 1024 cut the evaluation from 9.75 to
-   8.46 s.
+   errors stay at 1.000–1.006× up to 1024θ while the rule takes more classes (up to 1.8× at
+   kD = 500 + 50i, 10⁻⁸; 3 → 27 at kD = 100 + 100i, 10⁻⁶); on pairs, in the input-relative measure
+   (CH1.3c's weighting), the factor over-predicts by up to 10¹⁴ (η = 0.1) and 10²⁵ (η = 1), yet
+   without it E under-predicts by up to 2.4·10⁶ (η = 0.1) and 3.4·10⁶ (η = 1) and would take
+   classes whose error exceeds ε. A fitted factor needs its own study (question 2).
 
 ## 1. Setup
 
@@ -161,13 +162,14 @@ per (k a, ε), per build (direct / interpolated), and the classes the rule takes
 | 1.35 | 7, 9, 15, 24 | 1.02, 0.50, 0.36, 0.29 | 0.55, 0.85, 0.51, 0.59 | 34, 32, 0, 0 |
 
 - Within 2E everywhere S6 fitted (k a ≥ 2.8), the interpolated build's C_T = 0.23 as tight as the
-  direct build's 0.15. Above 2E only at k a ≥ 43, where E is its floor C₀ u = 2.2·10⁻¹⁴ and the
-  difference is f64 RCR's own rounding: against ref's projection the diagonal form lies within
+  direct build's 0.15. Above 2E only at k a = 108 (k a 43 and 54 reach at most 1.99 E), where E
+  is its floor C₀ u = 2.2·10⁻¹⁴ and the difference is f64 RCR's own rounding: against ref's projection the diagonal form lies within
   max(2E, RCR's error) (CH4.2a's reading; CH4.3c checks C₀ there against a double-double
   reference).
 - The interpolated build takes the same classes as the direct one at every (k a, ε) of the table.
-- The RCR chain against the direct sum (the units of the input-relative measure) at 10⁻⁸: 10⁻⁵
-  to 3·10⁻⁷, the truncation of a single pair at the box corners.
+- The RCR chain against the direct sum (the units of the input-relative measure) at 10⁻⁸:
+  1.7·10⁻⁷ to 4.1·10⁻⁵, the truncation of a single pair at the box corners (the test's bound is
+  10⁻⁴; the plan's 10⁻⁶ was below this truncation).
 - **Below S6's range.** Damped, η = 0.1, the direct build's class (0, 0, 3) at k a = 1.69, p = 9,
   10⁻⁴ measured 2.23·10⁻⁸ against 2E = 1.55·10⁻⁸ (2.9 E; RCR's own error 2.6·10⁻¹⁵): the bound
   under-predicts by 1.44×. E there is 7.7·10⁻⁹, far below θ ε, so the FMM is not affected at
@@ -183,32 +185,45 @@ input-relative error is within ε.
 | η | k a | ε | input ÷ E | input ÷ E′ | rule (E) | rule (E′) | input ≤ ε |
 | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
 | 0.1 | 108.25 | 10⁻⁶ | 7.8·10⁻¹⁵ | 3.0·10⁵ | 0 | 34 | 34 |
+| 0.1 | 108.25 | 10⁻⁸ | 9.9·10⁻¹⁵ | 1.6·10⁶ | 0 | 34 | 33 |
 | 0.1 | 54.13 | 10⁻⁶ | 3.4·10⁻⁹ | 45 | 25 | 34 | 34 |
+| 0.1 | 54.13 | 10⁻⁸ | 2.1·10⁻⁹ | 29 | 0 | 34 | 33 |
 | 0.1 | 27.06 | 10⁻⁸ | 4.2·10⁻⁶ | 0.48 | 27 | 32 | 34 |
 | 0.1 | 13.53 | 10⁻⁸ | 1.2·10⁻³ | 0.51 | 27 | 32 | 32 |
 | 0.1 | 5.41 | 10⁻⁸ | 1.1·10⁻² | 0.13 | 1 | 3 | 7 |
 | 1 | 21.65 | 10⁻⁶ | 2.6·10⁻²⁵ | 5.8·10⁴ | 0 | 34 | 34 |
+| 1 | 21.65 | 10⁻⁸ | 7.0·10⁻²⁶ | 2.0·10⁶ | 0 | 34 | 33 |
 | 1 | 10.83 | 10⁻⁶ | 7.4·10⁻¹⁵ | 2.3·10³ | 0 | 34 | 34 |
+| 1 | 6.77 | 10⁻⁸ | 2.1·10⁻¹⁰ | 1.9·10³ | 0 | 29 | 27 |
 | 1 | 5.41 | 10⁻⁶ | 1.4·10⁻⁸ | 1.8·10² | 3 | 34 | 34 |
+| 1 | 5.41 | 10⁻⁸ | 1.1·10⁻⁸ | 1.5·10² | 0 | 25 | 21 |
 | 1 | 2.71 | 10⁻⁶ | 2.1·10⁻⁵ | 3.3 | 0 | 27 | 27 |
 
 - With the factor the bound over-predicts the input-relative error by up to 10¹⁴ (η = 0.1,
   k a 108) and 10²⁵ (η = 1, k a 21.65) on damped levels, and sends classes to RCR whose error lies far within ε (k a 108, η = 0.1: 0 of 34 taken,
-  34 within ε). Without it the bound under-predicts by up to 1.6·10⁶ (k a 108, η = 0.1, 10⁻⁸)
-  and 5.8·10⁴ (η = 1, k a 21.65, 10⁻⁶): neither form fits the input-relative
-  measure; one in between (a factor of part of the distance) would have to be fitted.
+  34 within ε). Without it the bound under-predicts by up to 1.6·10⁶ interpolated and 2.4·10⁶
+  direct (k a 108, η = 0.1, 10⁻⁸), and 2.0·10⁶ and 3.4·10⁶ (η = 1, k a 21.65, 10⁻⁸), and takes
+  classes whose input-relative error exceeds ε (η = 1 at 10⁻⁸: 29 against 27 within ε at k a 6.77,
+  25 against 21 at 5.41; η = 0.1 at 10⁻⁸: 34 against 33 at k a 54 and 108): neither form fits
+  the input-relative measure; one in between (a factor of part of the distance) would have to be
+  fitted.
 - In the FMM (§2, §3): every damped case at 1.000× at s = 1 and at most 1.006× up to s = 1024,
-  the rule taking up to 75 % more classes (kD = 500 + 50i at 10⁻⁸: 61 → 107 classes, the
-  evaluation 9.75 → 8.46 s, Rotation without the form 9.01 s; at kD = 100 + 100i, 10⁻⁶: 3 → 27).
-  The factor costs the damped trees most of the diagonal form's gain on their coarse levels.
+  the rule taking more classes (kD = 500 + 50i at 10⁻⁸: 61 → 107; at kD = 100 + 100i: 34 → 63
+  at 10⁻³, 3 → 27 at 10⁻⁶). The FMM measure is the errors over Rotation's (output-relative over
+  all sources), not the per-pair input-relative one. On kD = 500 + 50i's coarse levels (2 and 3)
+  the factor sends most classes to RCR; what that costs in time is CH4.3b's (one evaluation per
+  run here: 9.01 s under Rotation, 9.75 s with the form at s = 1, 8.46 s at s = 1024, within the
+  run-to-run spread of single evaluations).
 
 ## 6. Questions for sign-off
 
 1. **The acceptance as read, and the constants unchanged.** *Recommended*: C_T = 0.15 (direct)
-   and 0.23 (interpolated), C₀ = 200 and θ = 1/2 confirmed in the full FMM on W1 and W3 at
-   10⁻³ to 10⁻⁸ (every case 1.000–1.007× Rotation's), with a margin of 16 at 10⁻⁸ and nothing to
-   gain from a looser θ at ε ≥ 10⁻⁶; keep them. Alternative: θ = 2 (s = 4, 1.003–1.004× at
-   10⁻⁸), for 2–5 classes on low-frequency levels.
+   and 0.23 (interpolated) and θ = 1/2 confirmed in the full FMM on W1 and W3 at 10⁻³ to 10⁻⁸
+   (every case 1.000–1.007× Rotation's; W1 at kD = 1000 at 10⁻⁶ and 10⁻⁸ only), with a margin of
+   16 at 10⁻⁸ and nothing to gain from a looser θ at ε ≥ 10⁻⁶; keep them. C₀ = 200 is not
+   confirmed here: at k a = 108 the floor is read against the projection, and C₀ at p ≥ 72 against
+   a double-double reference is CH4.3c's. Alternative: θ = 2 (s = 4, 1.000–1.004× at 10⁻⁸), for
+   0–5 classes more on low-frequency levels.
 2. **The damping factor.** *Recommended*: keep e^{Im(k)(|t| + 2a)} (safe: every damped case at
    1.000×), and fit a looser factor in the input-relative measure, confirmed in the FMM on damped
    W1 (both measures), as an Also on CH5.1 (the classifier and pruning for Im k > 0, which owns
@@ -220,4 +235,8 @@ input-relative error is within ε.
    2.9 E found (direct build, η = 0.1, k a 1.69). Alternative: bound the rule to k a ≥ 2.8 now.
 4. **The split of CH4.3** into CH4.3a (this), CH4.3b (the time rule and the default), CH4.3c
    (the degrees refit and C₀ at large p), CH4.3d (the transfer function's length) and CH4.3e
-   (c_leaf), in that order, every Also of CH4.3 on one of them. *Recommended*: as split.
+   (c_leaf), in that order, every Also of CH4.3 on one of them. The split adds three items the
+   old line did not name: CH4.3b's diagonal form on by default for sign-off (CH4.2b's "opt-in, the
+   default unchanged until CH4.3"), CH4.3c's excess p − x refitted in L (proposal §3.5, "CH4.3's
+   to refit") and CH4.3e's sign-off as D11's (D11's amendment: "CH4.3 re-decides").
+   *Recommended*: as split.
