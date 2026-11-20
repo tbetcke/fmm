@@ -52,6 +52,12 @@
 //!   below 10⁻⁶ run at the raised degree (the library's `Rule` by default);
 //!   [`Row::plane_wave_raise`] the setting and [`Row::translation_degrees`] each level's
 //!   translation degree.
+//!   [`Case::diagonal`] (Helmholtz CH4.2b2) the diagonal M2L on the RCR levels
+//!   (`HelmholtzFmmBuilder::diagonal`, off by default, the library's until CH4.3);
+//!   [`Row::diagonal_classes`] per level the classes it took, [`Row::diagonal_pairs`] the
+//!   pairs on each form, [`Row::diagonal_seconds`] the level call's passes and parts,
+//!   [`Row::diagonal_conversions`] the conversions computed, [`Row::diagonal_build`] the
+//!   tables' build and [`Row::diagonal_multiply_adds`] a conversion's multiply-adds.
 //!   [`Case::empty_boxes`] (Helmholtz CH4.0d1) whether the plan leaves out the work of boxes
 //!   whose subtree holds no target or no source point (on by default, the library's);
 //!   [`Row::left_out`] what it left out and [`Row::remote_multipoles`] the multipoles the
@@ -77,9 +83,10 @@ use mpi::collective::SystemOperation;
 use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RcrSplit, VNear, Wavenumber, WxNear,
+    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DiagonalCounts, DiagonalTimes,
+    HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l,
+    LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit,
+    PlaneWaveTimes, RcrSplit, VNear, Wavenumber, WxNear,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -195,6 +202,10 @@ pub struct Case {
     /// (`HelmholtzFmmBuilder::rcr_split`, Helmholtz CH4.0i; `None` the library's, `Auto`). No
     /// bit depends on it.
     pub rcr_split: Option<RcrSplit>,
+    /// The diagonal M2L on the RCR levels (`HelmholtzFmmBuilder::diagonal`, Helmholtz
+    /// CH4.2b2; [`HelmholtzDiagonal::Off`] in [`Case::new`], the library's default until
+    /// CH4.3; named always, as `near_v`).
+    pub diagonal: HelmholtzDiagonal,
 }
 
 impl Case {
@@ -236,6 +247,7 @@ impl Case {
             near_wx: WxNear::Off,
             block_budget: None,
             rcr_split: None,
+            diagonal: HelmholtzDiagonal::Off,
         }
     }
 }
@@ -753,6 +765,27 @@ pub struct Row {
     /// Per level, the near interactions Σ_t n_t Σ_s n_s of its P2P, summed over the ranks
     /// (`HelmholtzFmm::near_interactions`; Helmholtz CH4.0d2).
     pub near_interactions: Vec<u64>,
+    /// The diagonal M2L's setting as built (Helmholtz CH4.2b2).
+    pub diagonal: HelmholtzDiagonal,
+    /// Per level, the offset classes that took the diagonal form (0 where the level has none;
+    /// `HelmholtzOperator::diagonal_classes`), the same on every rank.
+    pub diagonal_classes: Vec<usize>,
+    /// Per level, the V pairs of the last evaluation's diagonal level calls, [diagonal, RCR],
+    /// summed over the ranks (`DiagonalCounts`).
+    pub diagonal_pairs: Vec<[usize; 2]>,
+    /// Per level, the conversions of the last evaluation's diagonal level calls, [S → F
+    /// (signatures), F → R (accumulators converted back)], summed over the ranks.
+    pub diagonal_conversions: Vec<[usize; 2]>,
+    /// Per level, the last evaluation's diagonal level calls' times, [S → F pass, targets'
+    /// pass, S → F, pairs, F → R, RCR pairs] seconds (the passes wall, the parts
+    /// thread-seconds), each the slowest rank's (`HelmholtzOperator::diagonal_times`).
+    pub diagonal_seconds: Vec<[f64; 6]>,
+    /// Per level, the build of its transfer functions and of its conversions, seconds, the
+    /// slowest rank's (`HelmholtzOperator::diagonal_build_time`; zero without the form).
+    pub diagonal_build: Vec<[f64; 2]>,
+    /// Per level, one conversion's real multiply-adds (`HelmholtzOperator::
+    /// diagonal_multiply_adds`; 0 without the form).
+    pub diagonal_multiply_adds: Vec<u64>,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -784,7 +817,7 @@ impl Row {
 
 /// The parts of [`Row::build_parts`]: the builder's steps (`HelmholtzBuildTimings`), then the
 /// operator's tables by part (`TableTimings`, within "operator").
-pub const BUILD_PARTS: [&str; 14] = [
+pub const BUILD_PARTS: [&str; 15] = [
     "settings",
     "domain",
     "octree",
@@ -796,6 +829,7 @@ pub const BUILD_PARTS: [&str; 14] = [
     "RCR tables",
     "matrices",
     "plane-wave tables",
+    "diagonal tables",
     "scratch",
     "evaluator",
     "load",
@@ -1009,6 +1043,7 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(split) = case.rcr_split {
         builder = builder.rcr_split(split);
     }
+    builder = builder.diagonal(case.diagonal);
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
     }
@@ -1036,6 +1071,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         timings.tables.rcr,
         timings.tables.matrices,
         timings.tables.plane_waves,
+        timings.tables.diagonal,
         timings.tables.scratch,
         timings.evaluator,
         timings.load,
@@ -1059,12 +1095,16 @@ pub fn run_output<C: CommunicatorCollectives>(
     let mut kinds_before: Vec<[Duration; 6]> = Vec::new();
     let mut passes_before: Vec<PlaneWaveTimes> = Vec::new();
     let mut rcr_before: Vec<usize> = Vec::new();
+    let mut diagonal_before: Vec<DiagonalTimes> = Vec::new();
+    let mut diagonal_counts_before = Default::default();
     for evaluation in 0..case.evaluations.max(1) {
         before = fmm.operator().m2l_times().to_vec();
         p2p_before = fmm.operator().p2p_times().to_vec();
         kinds_before = fmm.operator().kind_times().to_vec();
         passes_before = fmm.operator().plane_wave_times().to_vec();
         rcr_before = fmm.operator().rcr_counts().level_calls.clone();
+        diagonal_before = fmm.operator().diagonal_times().to_vec();
+        diagonal_counts_before = fmm.operator().diagonal_counts().clone();
         comm.barrier();
         let start = Instant::now();
         output = Some(fmm.evaluate(&charges)?);
@@ -1258,6 +1298,7 @@ pub fn run_output<C: CommunicatorCollectives>(
     let mut totals = [0u64; 9];
     comm.all_reduce_into(&local[..], &mut totals[..], SystemOperation::sum());
     let signature_scratch = signature_scratch(comm, &fmm, threads);
+    let diagonal = diagonal_columns(comm, &fmm, &diagonal_before, &diagonal_counts_before);
     let block_visits: Vec<usize> = summed
         .iter()
         .skip(1)
@@ -1344,6 +1385,13 @@ pub fn run_output<C: CommunicatorCollectives>(
         source_points: [v_totals[2] as usize, v_totals[3] as usize],
         p2p_seconds,
         near_interactions,
+        diagonal: fmm.operator().diagonal(),
+        diagonal_classes: diagonal.classes,
+        diagonal_pairs: diagonal.pairs,
+        diagonal_conversions: diagonal.conversions,
+        diagonal_seconds: diagonal.seconds,
+        diagonal_build: diagonal.build,
+        diagonal_multiply_adds: diagonal.multiply_adds,
         errors,
         checksum,
     };
@@ -1352,6 +1400,87 @@ pub fn run_output<C: CommunicatorCollectives>(
         output,
         domain: *fmm.domain(),
     })
+}
+
+/// The diagonal M2L's columns of a [`Row`] (Helmholtz CH4.2b2).
+struct DiagonalColumns {
+    classes: Vec<usize>,
+    pairs: Vec<[usize; 2]>,
+    conversions: Vec<[usize; 2]>,
+    seconds: Vec<[f64; 6]>,
+    build: Vec<[f64; 2]>,
+    multiply_adds: Vec<u64>,
+}
+
+/// [`DiagonalColumns`] of the last evaluation of `fmm`, its times and counts before it given:
+/// one all-reduce (sum) of the counts and one (max) of the times.
+fn diagonal_columns<C: CommunicatorCollectives>(
+    comm: &C,
+    fmm: &HelmholtzFmm<'_, f64, C>,
+    before: &[DiagonalTimes],
+    counts_before: &DiagonalCounts,
+) -> DiagonalColumns {
+    let (op, nlevels) = (fmm.operator(), fmm.nlevels());
+    let counts = op.diagonal_counts();
+    let last = |after: &[usize], before: &[usize], l: usize| {
+        (after.get(l).copied().unwrap_or(0) - before.get(l).copied().unwrap_or(0)) as u64
+    };
+    let local: Vec<u64> = (0..nlevels)
+        .flat_map(|l| {
+            [
+                last(&counts.diagonal_pairs, &counts_before.diagonal_pairs, l),
+                last(&counts.rcr_pairs, &counts_before.rcr_pairs, l),
+                last(&counts.signatures, &counts_before.signatures, l),
+                last(&counts.back, &counts_before.back, l),
+            ]
+        })
+        .collect();
+    let mut summed = vec![0u64; local.len()];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let zero = DiagonalTimes::default();
+    let local: Vec<f64> = (0..nlevels)
+        .flat_map(|l| {
+            let after = op.diagonal_times().get(l).copied().unwrap_or_default();
+            let before = before.get(l).copied().unwrap_or(zero);
+            let built = op.diagonal_build_time(l).unwrap_or_default();
+            [
+                after.signatures - before.signatures,
+                after.targets - before.targets,
+                after.s2f - before.s2f,
+                after.pairs - before.pairs,
+                after.f2r - before.f2r,
+                after.rcr - before.rcr,
+                built.0,
+                built.1,
+            ]
+            .map(|d| d.as_secs_f64())
+        })
+        .collect();
+    let mut slowest = vec![0.0f64; local.len()];
+    comm.all_reduce_into(&local[..], &mut slowest[..], SystemOperation::max());
+    let counts = summed.as_chunks::<4>().0;
+    let times = slowest.as_chunks::<8>().0;
+    DiagonalColumns {
+        classes: (0..nlevels)
+            .map(|l| op.diagonal_classes(l).map_or(0, |c| c.len()))
+            .collect(),
+        pairs: counts
+            .iter()
+            .map(|c| [c[0] as usize, c[1] as usize])
+            .collect(),
+        conversions: counts
+            .iter()
+            .map(|c| [c[2] as usize, c[3] as usize])
+            .collect(),
+        seconds: times
+            .iter()
+            .map(|t| core::array::from_fn(|i| t[i]))
+            .collect(),
+        build: times.iter().map(|t| [t[6], t[7]]).collect(),
+        multiply_adds: (0..nlevels)
+            .map(|l| op.diagonal_multiply_adds(l).unwrap_or(0))
+            .collect(),
+    }
 }
 
 /// k as a complex number.

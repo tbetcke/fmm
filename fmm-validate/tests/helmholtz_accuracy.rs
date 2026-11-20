@@ -26,9 +26,9 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Degrees, Densities, HelmholtzM2l, LevelShape, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, VNear, Wavenumber, WavenumberKind, WxNear,
-    auto_m2l_mul_add, s7_degree,
+    ChargeKind, Degrees, Densities, HelmholtzDiagonal, HelmholtzM2l, LevelShape, Output,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, VNear, Wavenumber,
+    WavenumberKind, WxNear, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -690,6 +690,7 @@ fn helmholtz_accuracy_harness() {
     check_near_wx(&world);
     check_block_budget(&world);
     check_rcr_split(&world);
+    check_diagonal(&world);
 }
 
 /// Helmholtz CH4.0e: the M2L's rotation blocks formed per V pair (a block budget of 0)
@@ -737,7 +738,13 @@ fn check_block_budget(world: &SimpleCommunicator) {
     ] {
         assert!(parts(name) > 0.0, "{name}: {:?}", row_stored.build_parts);
     }
-    let tables = ["RCR tables", "matrices", "plane-wave tables", "scratch"];
+    let tables = [
+        "RCR tables",
+        "matrices",
+        "plane-wave tables",
+        "diagonal tables",
+        "scratch",
+    ];
     if world.size() == 1 {
         let in_tables: f64 = tables.iter().map(|&n| parts(n)).sum();
         assert!(in_tables <= parts("operator") * (1.0 + 1e-9));
@@ -1138,4 +1145,76 @@ fn check_box_study(world: &SimpleCommunicator) {
         boxes.iter().map(|b| b.targets).sum::<usize>(),
         problem.len()
     );
+}
+
+/// The diagonal M2L (Helmholtz CH4.2b2) on W1 at kD = 30, ε = 10⁻⁴: off in `Case::new`, no
+/// level and no columns; by the rule some level takes it, the row's columns the operator's
+/// counts and times (pairs on the level's V pairs, signatures and conversions back, the parts
+/// timed, the multiply-adds and build), the errors within 1.1× Rotation's without it, and the
+/// same checksum at 1 and 2 threads.
+fn check_diagonal(world: &SimpleCommunicator) {
+    let off = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-4));
+    assert_eq!(off.diagonal, HelmholtzDiagonal::Off, "Case::new's");
+    let on = Case {
+        diagonal: HelmholtzDiagonal::Rule,
+        ..off.clone()
+    };
+    let problem = Problem::new(&off);
+    let oracle = Oracle::sharded(complex_k(&off), &problem, off.gradients, 2, world);
+    let row_off = run(&off, &problem, &oracle, 1, world).expect("the FMM runs");
+    let row_on = run(&on, &problem, &oracle, 1, world).expect("the FMM runs");
+    let row_two = run(&on, &problem, &oracle, 2, world).expect("the FMM runs");
+    assert_eq!(row_off.diagonal, HelmholtzDiagonal::Off);
+    assert_eq!(row_on.diagonal, HelmholtzDiagonal::Rule);
+    assert!(row_off.diagonal_classes.iter().all(|&c| c == 0));
+    assert!(row_off.diagonal_seconds.iter().flatten().all(|&t| t == 0.0));
+    let levels: Vec<usize> = (0..row_on.levels)
+        .filter(|&l| row_on.diagonal_classes[l] > 0)
+        .collect();
+    assert!(!levels.is_empty(), "no level took the diagonal form");
+    for &l in &levels {
+        let [diagonal, rcr] = row_on.diagonal_pairs[l];
+        let [forward, back] = row_on.diagonal_conversions[l];
+        let [signatures, targets, s2f, pairs, f2r, rcr_s] = row_on.diagonal_seconds[l];
+        // On one rank the level call's pairs are the plan's (on several, a replicated top
+        // box's rows run on every rank).
+        if world.size() == 1 {
+            assert_eq!(diagonal + rcr, row_on.v_pairs[l], "level {l}");
+            assert!(back <= row_on.v_targets[l], "level {l}");
+        }
+        assert!(diagonal > 0 && forward > 0 && back > 0, "level {l}");
+        assert!(forward <= diagonal, "level {l}");
+        assert!(signatures > 0.0 && targets > 0.0 && s2f > 0.0 && pairs > 0.0 && f2r > 0.0);
+        assert_eq!(rcr_s > 0.0, rcr > 0, "level {l}");
+        assert!(signatures + targets <= row_on.m2l_seconds[l], "level {l}");
+        assert!(row_on.diagonal_multiply_adds[l] > 0, "level {l}");
+        assert!(
+            row_on.diagonal_build[l].iter().all(|&t| t > 0.0),
+            "level {l}"
+        );
+    }
+    for l in (0..row_on.levels).filter(|l| !levels.contains(l)) {
+        assert_eq!(row_on.diagonal_pairs[l], [0, 0], "level {l}");
+        assert_eq!(row_on.diagonal_multiply_adds[l], 0, "level {l}");
+    }
+    let diagonal = BUILD_PARTS
+        .iter()
+        .position(|&p| p == "diagonal tables")
+        .expect("a part");
+    // Off, the rule's choice of no level is timed too (a fraction of a microsecond).
+    assert!(row_on.build_parts[diagonal] > row_off.build_parts[diagonal]);
+    for (got, want) in row_on.errors.iter().zip(&row_off.errors) {
+        assert!(
+            got[0] <= 1.1 * want[0] && got[1] <= 1.1 * want[1],
+            "{got:?} against {want:?}"
+        );
+    }
+    assert_eq!(row_two.checksum, row_on.checksum);
+    if world.rank() == 0 {
+        println!(
+            "diagonal on W1 at kD = 30, 1e-4: levels {levels:?}, classes {:?}, errors {:?} \
+             against {:?}",
+            row_on.diagonal_classes, row_on.errors, row_off.errors
+        );
+    }
 }

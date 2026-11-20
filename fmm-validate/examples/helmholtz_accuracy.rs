@@ -144,6 +144,20 @@
 //!   library's), the outermost loop of the runs; the column "M2L" of a row with a named split
 //!   ends with `/rcr-boxes` or `/rcr-pairs`, and `--levels`' column "ran" says `rotation by
 //!   pairs` where a level call ran by pairs. No bit depends on it.
+//! - `--diagonal off|rule|<ε>,…` (Helmholtz CH4.2b2, `HelmholtzFmmBuilder::diagonal`): the
+//!   diagonal M2L on the levels whose M2L is RCR's (`off`, the default, the library's until
+//!   CH4.3; `rule` at the FMM's tolerance; `<ε>` at a named tolerance), outside
+//!   `--rcr-split`'s loop; the column "M2L" of a row with it lists its levels and classes
+//!   (`; diagonal 2:34,3:20`) and ends with `/diag` or `/diag<ε>`, and `--levels`' column
+//!   "ran" says `diagonal c/34` on a level that took c classes. With `--levels` a table
+//!   "Diagonal M2L" has a row per run and level with the diagonal form: the classes, the V
+//!   pairs on each form, the level's M2L seconds and ns per pair, the S → F pass's and the
+//!   targets' pass's seconds (the slowest rank's), the thread-seconds of S → F, the pairs,
+//!   F → R and the RCR pairs (`Row::diagonal_seconds`), the conversions of each kind, the
+//!   conversions' rate per thread (2 × the multiply-adds of every conversion over their
+//!   thread-seconds, GF/s), and the build of the level's transfer functions and conversions.
+//!   A Rotation row with the diagonal form has a "÷ Rotation" against the Rotation row
+//!   without it.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
 //!   touches the buffers, which on a large exponential M2L's waves costs seconds).
@@ -174,8 +188,8 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, RcrSplit, VNear, Wavenumber, WxNear, s7_degree,
+    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzDiagonal, HelmholtzM2l, PlaneWavePrecision,
+    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -209,6 +223,7 @@ struct Arguments {
     reaches: Vec<Option<f64>>,
     splits: Vec<Option<PlaneWaveSplit>>,
     rcr_splits: Vec<Option<RcrSplit>>,
+    diagonals: Vec<HelmholtzDiagonal>,
     raises: Vec<Option<PlaneWaveRaise>>,
     terms: Vec<bool>,
     blocks: Vec<Option<usize>>,
@@ -288,7 +303,7 @@ fn arguments() -> Arguments {
              [--dense-budget MB] [--plane-wave-budget MB|whole] [--block-budget MB] \
              [--reach corner|r,…] \
              [--split auto|parents|children,…] [--raise rule|level|leaves|m2l,…] \
-             [--rcr-split auto|boxes|pairs,…] \
+             [--rcr-split auto|boxes|pairs,…] [--diagonal off|rule|<ε>,…] \
              [--term on|off,…] [--block auto|w,…] [--empty-boxes on|off,…] [--near-v off|cost|n|inf,…] [--near-wx off|cost|n|inf,…] \
              [--leaf-size auto|n,…] [--c-leaf auto|c,…] [--levels] \
              [--evaluations n]; got {args:?}"
@@ -314,6 +329,7 @@ fn arguments() -> Arguments {
         reaches: vec![None],
         splits: vec![None],
         rcr_splits: vec![None],
+        diagonals: vec![HelmholtzDiagonal::Off],
         raises: vec![None],
         terms: vec![true],
         blocks: vec![None],
@@ -467,6 +483,20 @@ fn arguments() -> Arguments {
                         })
                         .collect::<Option<Vec<_>>>()
                         .map(|s| parsed.rcr_splits = s)
+                        .is_some(),
+                    "--diagonal" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "off" => Some(HelmholtzDiagonal::Off),
+                            "rule" => Some(HelmholtzDiagonal::Rule),
+                            e => e
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|e| *e > 0.0 && e.is_finite())
+                                .map(HelmholtzDiagonal::Tolerance),
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|d| parsed.diagonals = d)
                         .is_some(),
                     "--raise" => value
                         .split(',')
@@ -764,7 +794,34 @@ fn setting_name(row: &Row) -> String {
         RcrSplit::Boxes => "/rcr-boxes",
         RcrSplit::Pairs => "/rcr-pairs",
     };
-    format!("{}{split}", m2l_setting_name(row))
+    format!("{}{split}{}", m2l_setting_name(row), diagonal_suffix(row))
+}
+
+/// For a row with the diagonal M2L `/diag` (at the FMM's tolerance) or `/diag<ε>` (Helmholtz
+/// CH4.2b2); else empty.
+fn diagonal_suffix(row: &Row) -> String {
+    match row.diagonal {
+        HelmholtzDiagonal::Off => String::new(),
+        HelmholtzDiagonal::Rule => "/diag".into(),
+        HelmholtzDiagonal::Tolerance(e) => format!("/diag{e:e}"),
+    }
+}
+
+/// The diagonal M2L's levels of a row and their classes, `; diagonal 2:34,3:20` (none:
+/// `; diagonal none`), and its suffix (Helmholtz CH4.2b2); empty with it off.
+fn diagonal_string(row: &Row) -> String {
+    if row.diagonal == HelmholtzDiagonal::Off {
+        return String::new();
+    }
+    let levels: Vec<String> = (0..row.levels)
+        .filter(|&l| row.diagonal_classes[l] > 0)
+        .map(|l| format!("{l}:{}", row.diagonal_classes[l]))
+        .collect();
+    let levels = match levels.is_empty() {
+        true => "none".to_string(),
+        false => levels.join(","),
+    };
+    format!("; diagonal {levels}{}", diagonal_suffix(row))
 }
 
 /// [`setting_name`] without the Rotation M2L's split.
@@ -789,6 +846,9 @@ fn m2l_setting_name(row: &Row) -> String {
 /// `classes`, `batched`, `batched-fused`; Auto's are batched), `rotation`, or `rotation by
 /// pairs` where a level call ran by pairs (Helmholtz CH4.0i).
 fn level_m2l(row: &Row, level: usize) -> String {
+    if row.diagonal_classes[level] > 0 {
+        return format!("diagonal {}/34", row.diagonal_classes[level]);
+    }
     if let Some(q) = row.plane_wave[level] {
         return format!("planewave i{}", q.iprec());
     }
@@ -866,6 +926,7 @@ fn main() {
     let mut near: Vec<String> = Vec::new();
     let mut leaf_rows: Vec<String> = Vec::new();
     let mut build_rows: Vec<String> = Vec::new();
+    let mut diagonal_rows: Vec<String> = Vec::new();
     let mut leaf_operators: Vec<String> = Vec::new();
     // Whether `--leaf-size` and `--c-leaf` named a value (Helmholtz CH4.0d3): the column
     // "M2L" then ends with it.
@@ -938,8 +999,9 @@ fn main() {
                     "–".into()
                 };
                 let m2l = format!(
-                    "{}{}{}",
+                    "{}{}{}{}",
                     m2l_string(row),
+                    diagonal_string(row),
                     empty_suffix(row),
                     leaf_suffix(row, named)
                 );
@@ -1079,6 +1141,41 @@ fn main() {
                             s.chunk,
                             s.chunks,
                             s.over_budget,
+                        )
+                    })
+                    .collect()
+            };
+            // `--levels`: the rows of the table "Diagonal M2L" (Helmholtz CH4.2b2), a row per
+            // level with the diagonal form.
+            let diagonal_lines = |row: &Row| -> Vec<String> {
+                (0..row.levels)
+                    .filter(|&l| row.diagonal_classes[l] > 0)
+                    .map(|l| {
+                        let [diagonal, rcr] = row.diagonal_pairs[l];
+                        let [signatures, targets, s2f, pairs, f2r, rcr_s] = row.diagonal_seconds[l];
+                        let [forward, back] = row.diagonal_conversions[l];
+                        let [transfer, conversions] = row.diagonal_build[l];
+                        let flops = 2.0 * row.diagonal_multiply_adds[l] as f64;
+                        let rate = |count: usize, seconds: f64| match seconds > 0.0 {
+                            true => format!("{:.2}", flops * count as f64 / seconds / 1e9),
+                            false => "–".into(),
+                        };
+                        format!(
+                            "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {} | {l} | {} \
+                             | {} | {diagonal} | {rcr} | {:.6} | {:.0} | {signatures:.6} \
+                             | {targets:.6} | {s2f:.6} | {pairs:.6} | {f2r:.6} | {rcr_s:.6} \
+                             | {forward} | {back} | {} | {} | {transfer:.3} | {conversions:.3} |",
+                            workload.name(),
+                            problem.len(),
+                            setting_name(row),
+                            row.ranks,
+                            row.threads,
+                            row.degrees[l],
+                            row.diagonal_classes[l],
+                            row.m2l_seconds[l],
+                            1e9 * row.m2l_seconds[l] / (diagonal + rcr).max(1) as f64,
+                            rate(forward, s2f),
+                            rate(back, f2r),
                         )
                     })
                     .collect()
@@ -1312,16 +1409,21 @@ fn main() {
                 .flat_map(|&n| arguments.c_leaves.iter().map(move |&c| (n, c)))
                 .collect();
             // `--rcr-split` outermost (Helmholtz CH4.0i): no bit depends on it.
+            // `--diagonal` outside it (Helmholtz CH4.2b2).
             let mut runs_by_rule = Vec::new();
-            for &rcr in &arguments.rcr_splits {
-                for &tree in &trees {
-                    for &rule in &rules {
-                        runs_by_rule.push((rcr, tree, rule));
+            for &diagonal in &arguments.diagonals {
+                for &rcr in &arguments.rcr_splits {
+                    for &tree in &trees {
+                        for &rule in &rules {
+                            runs_by_rule.push((diagonal, rcr, tree, rule));
+                        }
                     }
                 }
             }
             let rules = runs_by_rule;
-            for (rcr_split, (leaf_size, c_leaf), (empty_boxes, near_v, near_wx)) in rules {
+            for (diagonal, rcr_split, (leaf_size, c_leaf), (empty_boxes, near_v, near_wx)) in rules
+            {
+                case.diagonal = diagonal;
                 case.rcr_split = rcr_split;
                 case.max_points_per_leaf = leaf_size;
                 case.c_leaf = c_leaf;
@@ -1458,12 +1560,14 @@ fn main() {
                                                 .iter()
                                                 .find(|(key, _)| *key == (p2p, threads))
                                                 .map(|&(_, errors)| errors);
-                                            let is_rotation = case.m2l == HelmholtzM2l::Rotation;
+                                            let is_rotation = case.m2l == HelmholtzM2l::Rotation
+                                                && case.diagonal == HelmholtzDiagonal::Off;
                                             if root {
                                                 print(&row, reference.filter(|_| !is_rotation));
                                                 if arguments.levels {
                                                     levels.extend(per_level(&row));
                                                     scratch_rows.extend(scratch_lines(&row));
+                                                    diagonal_rows.extend(diagonal_lines(&row));
                                                 }
                                                 left_out.push(left_out_line(&row));
                                                 near.extend(near_lines(&row));
@@ -1598,6 +1702,36 @@ fn main() {
             println!("{line}");
         }
         println!();
+        if !diagonal_rows.is_empty() {
+            println!("## Diagonal M2L");
+            println!();
+            println!(
+                "Per level with the diagonal form (Helmholtz CH4.2b2): its classes of 34, the V \
+                 pairs on the diagonal form and on RCR (summed over the ranks), the level's M2L \
+                 seconds and ns per pair, the S → F pass's and the targets' pass's wall seconds, \
+                 the thread-seconds of S → F, the pairs, F → R and the RCR pairs (each the \
+                 slowest rank's), the conversions S → F and F → R (summed), their rate per \
+                 thread in GF/s (2 × multiply-adds per conversion), and the build of the \
+                 level's transfer functions and conversions (seconds)."
+            );
+            println!();
+            println!(
+                "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | classes \
+                 | diagonal pairs | RCR pairs | M2L s | ns per pair | S → F pass s \
+                 | targets pass s | S → F thread-s | pairs thread-s | F → R thread-s \
+                 | RCR thread-s | S → F | F → R | S → F GF/s | F → R GF/s | transfer build s \
+                 | conversions build s |"
+            );
+            println!(
+                "| --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: \
+                 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: \
+                 | ---: | ---: |"
+            );
+            for line in &diagonal_rows {
+                println!("{line}");
+            }
+            println!();
+        }
         println!("## Near pairs");
         println!();
         println!(
