@@ -106,12 +106,14 @@
 //! }
 //! ```
 
+mod angles;
 mod bound;
 mod classes;
 mod dd;
 mod grid;
 mod transfer;
 
+pub use angles::AngleTable;
 pub use bound::{BoundConstants, THETA, bound};
 pub use classes::{Class, Symmetry, class_of, classes, offsets};
 pub use grid::{Grid, azimuth_count};
