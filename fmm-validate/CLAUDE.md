@@ -618,6 +618,14 @@ checks the interpolated row on W1 at kD = 30. `tools/helmholtz/ch4-2c2-runs.sh` 
 stages, `ch4-2c2-tables.py` makes the report's tables. Its report is
 `results/helmholtz-ch4-2c2.md`.
 
+Helmholtz CH4.3a (the diagonal form's bound constants in the full FMM; docs/helmholtz/tasks/CH4.3a.md)
+added the example's `--density random|planewave|constant` (`Case::density`, CH4.0b's; a plane
+wave's trace needs complex charges; a line "Density:" under the machine's). `tools/helmholtz/ch4-3a-runs.sh`
+runs the task's stages (the rule at s ε through `--diagonal <s ε>`, with `--diagonal-build
+interpolated` named: the example's own default build is the direct one), `ch4-3a-tables.py` makes the
+report's tables (the acceptance at s = 1, the margin by s). Its report is
+`results/helmholtz-ch4-3a.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

@@ -8,15 +8,14 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/gates/<milestone>.md`.
 
 Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
-`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged,
-and of item 10 CH4.1a–b, CH4.2a, CH4.2b1–2 and CH4.2c1; CH4.2c2 (the transfer functions' build
-a setting, the rule by its constants; W1's errors 1.000× Rotation's under both builds, the
-interpolated tables 4.0–6.4× faster on Kathleen, now the default build) is signed off and
-waits for its merge. Next CH4.3; CH4.2d (kernels) off the list; the FFT track stays item 11. HR, H0 and H2
-are still open; of H0, CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line
-until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
-`git show 8475009:docs/helmholtz/roadmap.md`.
+`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
+item 10 CH4.1, CH4.2 and CH4.2c; CH4.3 is split into CH4.3a–CH4.3e. CH4.3a (the bound's constants
+in the full FMM: every W1 and W3 case 1.000–1.007× Rotation's errors at θ = 1/2, margin 16 at
+10⁻⁸) waits for its sign-off and merge. Next CH4.3b (the time rule and the diagonal form by
+default); CH4.2d off the list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0,
+CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
+`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
+H1.G in `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
 
@@ -726,18 +725,13 @@ task's full line is in its record or report and its progress entry
   scratch budget binds (proposal §10). Split on 2026-11-20 into CH4.3a–CH4.3e by the size rule
   of `/next-task` (the Alsos below are each one study with its own machine runs); every Also of
   the task as it stood is on one of them.
-- [ ] **CH4.3a The bound's constants in the full FMM.** *Done when:* S6's C_T (0.15 direct,
-  0.23 interpolated, the default build: CH4.2c2's question 1, signed off 2026-11-20) and θ = 1/2
-  confirmed in the full FMM on W1 (kD = 100 to 1000) and W3 (N = 10⁶, kD = 200 and 500) at
-  10⁻³ to 10⁻⁸, under Rotation so that the rule reaches every level: each case within 1.1×
-  Rotation's errors, and the margin measured (the rule at s θ ε for growing s, until a case
-  leaves 1.1×); with the pair evidence on the same (k a, p): each class's error against RCR
-  over E, both builds. Also (CH4.0b's sign-off 2): verified on the constant density (kD ≤ 100)
-  and the plane wave's trace (kD = 500) as well as on §9.1's charges
-  (`helmholtz_accuracy::Density`). Also from S6 (its question 7): the damped classes measured in
-  the FMM-weighted norm of CH1.3c (relative to the input's size), per pair and in the FMM on
-  damped W1, against the per-pair bound's factor e^{Im(k)(|t| + 2a)}. *Needs:* CH4.2b2,
-  CH4.2c2. *Machines:* Kathleen.
+- [x] **CH4.3a The bound's constants in the full FMM.** Report:
+  `fmm-validate/results/helmholtz-ch4-3a.md`; record `docs/helmholtz/tasks/CH4.3a.md`. C_T (0.15
+  direct, 0.23 interpolated) and θ = 1/2 hold in the FMM: every case 1.000–1.007× Rotation's errors
+  on W1 (kD = 100–1000), W3 (N = 10⁶, kD = 200, 500), 10⁻³–10⁻⁸, the smooth densities and damped
+  W1; margin 16 at 10⁻⁸, none needed at ε ≥ 10⁻⁶; per pair within 2E on the FMM's levels
+  (k a ≥ 2.8); the damping factor conservative in the FMM (1.006× at 1024θ) and in the
+  input-relative measure, its removal unsafe. *Sign-off:* pending (the PR's questions 1–4).
 - [ ] **CH4.3b The time rule, and the diagonal form by default.** *Done when:* the time
   crossover per class and per level, the conversions included, against RCR and against the
   exponential M2L at matched accuracy, and the order between the two per level (CH4.2b2's report
@@ -748,7 +742,10 @@ task's full line is in its record or report and its progress entry
   `scratch_shape` on every rank, one all-reduce, so every rank runs the same M2L on a level,
   constraints 2 and 9; built in CH4.2b1; at 40 ranks per node W1 at kD = 1000's levels 2–3 do
   not fit a rank's 205 MiB); the diagonal form on by default (`HelmholtzDiagonal`, `Off` until
-  here) for sign-off, the FMM within 1.1× the defaults' errors on W1 and W3. *Needs:* CH4.3a.
+  here) for sign-off, the FMM within 1.1× the defaults' errors on W1 and W3. Also (CH4.3a's
+  report §4, its question 3): whether the time rule takes the diagonal form at k a < 2.8 at all,
+  below S6's calibrated range, where one damped class measured 2.9 E per pair (direct build,
+  η = 0.1, k a 1.69); if it does, the rule bounded to k a ≥ 2.8 or C_T raised there. *Needs:* CH4.3a.
   *Machines:* Kathleen, locust. *Sign-off:* the default.
 - [ ] **CH4.3c The high-frequency degrees refit, and C₀ at large degrees.** *Done when:* (review
   2026-11-19, A8, M12) the refit of the high-frequency degrees searches downward at x ≥ 54
@@ -792,7 +789,10 @@ task's full line is in its record or report and its progress entry
 **Gate:** CH5.3, complex k against FMM3D.
 
 - [ ] **CH5.1 Classifier and pruning for Im k > 0.** *Done when:* regimes as §3.6 with S6's
-  damped results; the error within target over a grid of (Re kD, Im kD) on W1. *Needs:*
+  damped results; the error within target over a grid of (Re kD, Im kD) on W1. Also (CH4.3a's
+  report §5, its question 2): a damping factor of the bound fitted in the input-relative measure
+  (CH1.3c's weighting; e^{Im(k)(|t| + 2a)} over-predicts by up to 10¹⁴ at η = 0.1 and 10²⁵ at
+  η = 1, none under-predicts by up to 1.6·10⁶), confirmed in the FMM on damped W1. *Needs:*
   CH2.3, CH4.3.
 - [ ] **CH5.2 Damping-dependent truncation and bound.** *Done when:* the error within target
   for weakly damped cases. *Needs:* CH5.1, CH0.6.

@@ -121,7 +121,37 @@ form); k a = 216 (W1 at kD = 1000's level 2, p = 245) in the FMM only, its pairs
   two jobs if one would exceed the `singlenode` limit.
 
 ## Pending runs
-<filled in step 6>
+- Kathleen job (submitted 2026-11-20 after the report): `run.sbatch 'cargo test -p
+  nd-fmm-tables --release -- --ignored'`, the crate's rule for a task that adds an ignored test
+  (`fmm-tables/CLAUDE.md`). It decides nothing of the acceptance; the new test alone passed on the
+  M6 (below).
+
+The FMM runs are done: Kathleen job 653621 (node-c11a-013, `singlenode`, 2026-11-20
+15:21–16:00, 38 min; the release build, then `ch4-3a-runs.sh w1 w3 damped densities w1-large`,
+40 launches, every one exit 0). Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-3a/`
+(with the pair study's printed table, `pair-study-m6.md`).
+
+## Results
+- Built as planned, with two changes: the runs name `--diagonal-build interpolated` (the example's
+  own default is the direct build; caught before the job's runs, job 653620 cancelled in its
+  build), and the study's assertion is bounded to S6's range k a ≥ 2.8, with η = 1 only on
+  kD = 100's levels (k a ≤ 21.65; at k a = 108 and η = 1 the transfer functions overflow f64, a
+  case on no FMM tree). Below k a = 2.8 a class above 2E is printed as a finding.
+- FMM (report §2): every case 1.000–1.007× Rotation's errors at θ = 1/2: W1 at kD = 100–1000, W3
+  at N = 10⁶ and kD = 200, 500, 10⁻³–10⁻⁸, the constant density and the plane wave's trace, damped
+  W1 (kD = 100 + 10i, 100 + 100i, 500 + 50i); both builds the same classes at kD = 500.
+- Margin (report §3): at 10⁻⁸ 16 (1.000–1.005× to 16θ, 1.19–1.52× from 64θ or 256θ); at
+  ε ≥ 10⁻⁶ every class passes at θ = 1/2 on these trees, nothing to gain. Damped: at most 1.006×
+  to 1024θ, with up to 75 % more classes.
+- Pairs (report §4, §5): real k within 2E for k a ≤ 27 (at most 1.09 E), at k a ≥ 43 at E's floor
+  read against the projection (up to 3.3 E against RCR, CH4.3c's); one finding below S6's range
+  (direct, η = 0.1, k a 1.69, (0, 0, 3), 2.9 E at E ≪ ε). The damping factor over-predicts the
+  input-relative error by up to 10¹⁴ (η = 0.1) and 10²⁵ (η = 1); without it E under-predicts by
+  up to 1.6·10⁶.
+- The study on the M6 (load 16–87 from other jobs): 9 min 9 s, passed (and again after the
+  Clippy fix).
 
 ## Open questions
-<filled when they arise>
+For sign-off on the PR (report §6): 1, the acceptance as read and the constants kept; 2, the
+damping factor kept, a fitted one an Also on CH5.1; 3, below S6's range, an Also on CH4.3b; 4,
+the split of CH4.3.
