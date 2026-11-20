@@ -13,7 +13,10 @@ Kathleen and locust, and an opt-in setting `HelmholtzDiagonal::Auto` that takes 
 classes on a level only where the model says the diagonal level beats the M2L the level would
 otherwise run (RCR, or the exponential M2L), so that CH4.3b2 can measure it as the default.
 
-## Acceptance (the roadmap's CH4.3b1; proposal §10 CH4.3, its second and third items in part)
+## Acceptance (the roadmap's CH4.3b1 as split; proposal §10 CH4.3, its second and third items in part)
+(The order against the waves is decided after the plan as built, "As built" below; the roadmap's
+line is amended in this PR, the report's question 2.)
+
 "The diagonal level's costs per machine class (S → F and F → R per box, the pair per sample;
 thread-ns, as `VCosts`) fitted on Kathleen (1 × 40) and locust (1 × 72) from W1's diagonal levels,
 beside `VCosts`' RCR and exponential M2L; the per-class crossover reported (the diagonal pair
@@ -36,15 +39,15 @@ How it is read:
   any, where it reaches 1).
 - **The level's decision.** On level l with the bound's classes C (θ ε, the build's C_T):
   T_diag = n_s c_S→F(p) + n_t c_F→R(p) + Σ_{c ∈ C} n_c c_pair S(p) + Σ_{c ∉ C} n_c c_RCR(p),
-  against T_RCR = n c_RCR(p) (or T_waves = n c_pw (p_w + 1)² where Auto gives the level waves).
+  against T_RCR = n c_RCR(p) (or, as built, T_waves = n_t c_pw(p_w) per box with a V row where
+  Auto gives the level waves; the plan had it per pair).
   The diagonal form takes the level iff T_diag < T_alt. After the plan the counts are the agreed
   ones (each box counted by the rank that computes it, summed over the ranks: the same on every
   rank and at every rank count, as `LevelShape`), n_s taken as n_t (the V relation is symmetric
   on a level where every box is both; the S → F count is the distinct sources, the model's one
-  approximation, measured). Before the plan (against the waves) there are no counts: the model
-  takes an interior box of a uniform level (pairs per class of the 8 child positions' V lists,
-  189 pairs per box), so it is a function of (p, k̂, ε, T, the costs) alone, as D8's rule; the
-  builder and the operator read the same function (`wave_levels`, CHA.11).
+  approximation, measured). The plan decided the order against the waves before the plan on a
+  uniform interior level; as built it is decided after the plan on the same agreed counts
+  ("As built" below).
 - **Under Auto the order against Batched is unchanged:** the diagonal form considers the levels
   that are RCR's or the waves' under the setting, not Batched's (p ≤ 11, below the high-frequency
   range where classes pass; reported if a Batched level would have passed).
@@ -73,14 +76,15 @@ How it is read:
     (CH4.2b2's run: 367 µs per pair at p = 41 against 53). The form: the conversions per box on
     CH4.2b2's run fit a (p + 1)² + b (p + 1)³ within 10 % from p = 16 to 131 (a ≈ 0.45 µs,
     b ≈ 1.6 ns), where a pure (p + 1)³ misses p = 41 by half;
-  - `HelmholtzDiagonal::Auto`: the bound's classes, then the level by the model;
-    `LevelShape` gains the V pairs per class (34 counts per level); the builder counts them
-    whatever the setting (every rank reaches the all-reduce) and agrees the costs (all-reduce
-    max of the constants, as m*), `with_diagonal_costs` names them to the operator;
-  - `wave_levels`' `WaveSettings` gains the diagonal setting, tolerance, build and costs: under
-    `Auto` a level the waves would take goes to the diagonal form where the uniform-level model
-    says so (its degree then the level's own, not CH6.1g's raised one);
-  - the Also's bound below k a = 2.8 if the census finds such a level (else recorded);
+  - `HelmholtzDiagonal::Auto`: the bound's classes, then the level by the model; a new
+    `DiagonalShape` per level (boxes with a V row, V pairs per class, `offset_class`), which the
+    builder counts whatever the setting (every rank reaches the all-reduce), and the costs agreed
+    (all-reduce max of the constants, as m*); `with_diagonal_costs`, `with_diagonal_shapes`, the
+    builder's `diagonal_costs`;
+  - (as built) the waves given up in the operator's `select_tables` after the plan, by
+    `diagonal_beats_plane_waves` on the level's shape; `wave_levels` unchanged (the builder's V
+    rule reads a superset);
+  - the Also's bound below k a = 2.8 (`DIAGONAL_AUTO_MIN_KA`, the time rule only);
   - the operator and builder docs, `fmm-exec/CLAUDE.md`.
 - `nd-fmm-validate`: `--diagonal auto` in `helmholtz_accuracy` (`HelmholtzDiagonal::Auto`), the
   model's prediction per level in `--levels`' "Diagonal M2L" table (T_diag and T_alt), and the
@@ -92,8 +96,8 @@ How it is read:
   no Laplace file.
 
 ## Tests that prove it
-- Unit (`operator_diagonal.rs`, `fmm.rs`): the model by hand on two shapes (every class passing
-  at p = 72 with full rows: diagonal; few classes at p = 16 with short rows: RCR); the uniform
+- Unit (`operator_diagonal.rs`): the model by hand (as built: hand constants at p = 1, against
+  RCR by the classes taken and against the waves by the pairs per box); the uniform
   level's class mix sums to 189 pairs and to 8 × 189 over the child positions; `diagonal_costs`
   by ISA; the pair against RCR per pair below 1 at every p from 8 to 245 with both machine
   classes' constants.
@@ -101,13 +105,14 @@ How it is read:
   levels, the same classes where it takes one, `Off`'s M2L where it takes none; the scratch
   budget's fallback first); without shapes, as `Rule` on the RCR levels; f32 below 10⁻⁴ none.
 - `fmm-exec/src/helmholtz/operator.rs`' `wave_levels_are_the_operators` with `Auto`: the
-  builder's wave levels the operator's; `tests/helmholtz/plane_wave.rs`: a wave level taken by
-  the diagonal form under `Auto` runs at its own degree.
+  operator's wave levels within the builder's (as built); `tests/helmholtz/diagonal.rs`
+  (`the_time_rule_against_the_waves`): a wave level taken by the diagonal form under `Auto`
+  runs at its own degree, a tight budget keeps the waves, none below k a = 2.8.
 - `tests/helmholtz_fmm.rs`, `check_diagonal_auto` (in `check_diagonal`; the cube at kD = 40 + 2i
   and the clusters at kD = 20, 10⁻⁴; under Rotation and the library's Auto): the errors within
   `DIAGONAL_RATIO` of the setting's without the form, the levels and classes the same on every
-  rank and the one-rank FMM's, 2 threads and chunks bit for bit, the one-rank FMM bit for bit,
-  and the agreed shapes per class against one rank's.
+  rank and the one-rank FMM's, 2 threads and chunks bit for bit (at free costs), the one-rank FMM
+  bit for bit, and the agreed shapes against the one-rank FMM's.
 - `fmm-validate/tests/helmholtz_accuracy.rs` (`check_diagonal`): an `auto` row on W1 at kD = 30.
 
 ## Checks
@@ -138,8 +143,46 @@ Helmholtz executable at opt-level 0 against their minute (the debug budget); `nd
 - Risk: at 10⁻⁸ a level moved from the raised waves to the diagonal form runs at p_l and loses
   the raise's accuracy; measured in stage 2, decided in CH4.3b2.
 
+## As built: the order against the waves after the plan
+The plan decided the order against the exponential M2L before the plan, in `wave_levels`, on the
+uniform level, with the waves per pair. The first runs (Kathleen job 653672, locust, at 164ddd7)
+refuted it: both passes of the waves cost per box with a V row whatever the pairs per box, the
+diagonal form per pair, so the order turns on the pairs per box (W1 about 45, W3 about 165); the
+uniform level (189) put W3's dense levels on the form at up to 1.9× the waves' time and lost 5.1 s
+of 64.8 s on Kathleen. As built (258261a, 14b2103):
+- `DiagonalCosts::plane_wave` per box with a V row; `diagonal_beats_plane_waves` on the level's
+  agreed shape, in the operator's `select_tables` after the plan; the builder's V rule reads
+  `wave_levels` before the plan as before, a superset of the operator's levels with waves (its
+  grouping per (parent, source) is exact under every M2L);
+- a level taken from the waves runs the cheaper of the form and RCR by the same model (Kathleen,
+  kD = 200, 10⁻⁸, level 5: raised waves 0.363 s, RCR 0.012 s, the form with 3 classes 0.020 s);
+- the fit weighs each level by its measured time; x86's constants from Kathleen, NEON's from
+  locust (`tools/helmholtz/ch4-3b1-fit.py fit`), replayed by `check` from the measured counts:
+  122/127 and 133/140 levels within 1.05× the fastest;
+- the Also: no level below k a = 2.8 under the time rule (`DIAGONAL_AUTO_MIN_KA`).
+The roadmap's CH4.3b1 line is amended in this PR; the report's question 2.
+
 ## Pending runs
-(filled in step 6)
+None. The runs are done:
+- Kathleen job 653672 (node-c11a-080, `singlenode`, 1 × 40, 2026-11-20 19:57–20:27, at 164ddd7):
+  `ch4-3b1-runs.sh target/runs/ch4-3b1 w1 w3`, 16 launches, every one exit 0 (the fit's data);
+- locust (1 × 72, idle, 19:47–19:59, at 164ddd7): the same, 16 launches, exit 0;
+- Kathleen job 653681 (node-c11a-080, 20:31–20:51, at 14b2103) and locust (20:30–20:51, at
+  14b2103): `auto`, 16 launches each, exit 0 (the final choices and errors);
+- (locust at 258261a, the first design after the plan with NEON's refit and the old x86
+  constants: archived as `ch4-3b1-auto-258261a`, not used in the report).
+Raw outputs in `~/projects/fmm-archive/{kathleen,locust}/runs/ch4-3b1{,-auto}/`.
+
+## Results
+The report: fmm-validate/results/helmholtz-ch4-3b1.md. The per-class crossover is never reached
+(a diagonal pair 0.08–0.52× RCR's at p = 8–245); the final runs' choices within 1.05× of the
+fastest on 123/127 levels (Kathleen) and 132/140 (locust); under Rotation 1.000–1.001× its
+errors, evaluation 0.27–1.00×; under the defaults their own errors at 10⁻³ and 10⁻⁶ and
+Rotation's at 10⁻⁸ (1.07–2.2× the defaults'). The self-review (a subagent on the branch at
+14b2103) found the budget's fallback after the waves were given up (fixed: a level whose form
+would not fit keeps its waves, tested), a misplaced doc comment, the FMM check without chunks and
+the one-rank shapes (added), the harness's choice column ungated (fixed), and stale wording here
+and in the roadmap (fixed).
 
 ## Open questions
-(filled when they arise)
+The report's §7, questions 1–4.

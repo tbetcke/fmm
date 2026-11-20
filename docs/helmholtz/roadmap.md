@@ -9,13 +9,14 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
-item 10 CH4.1, CH4.2 and CH4.2c; CH4.3 is split into CH4.3a–CH4.3e. CH4.3a (the bound's constants
-in the full FMM: every W1 and W3 case 1.000–1.007× Rotation's errors at θ = 1/2, margin 16 at
-10⁻⁸) is signed off (questions 1–4 as recommended) and waits for its merge. Next CH4.3b (the time rule and the diagonal form by
-default); CH4.2d off the list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0,
-CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
-`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
-H1.G in `git show 8475009:docs/helmholtz/roadmap.md`.
+item 10 CH4.1, CH4.2, CH4.2c and CH4.3a; CH4.3b is split into CH4.3b1 and CH4.3b2. CH4.3b1 (the
+diagonal form's time rule, opt-in: a cost model per machine class, the order against the waves
+after the plan, within 1.033× Rotation's errors) waits for its sign-off (questions 1–4). Next
+CH4.3b2 (the form by default, at matched accuracy at 10⁻⁸), then CH4.3c–CH4.3e; CH4.2d off the
+list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done,
+and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's
+history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+`git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
 
@@ -751,26 +752,30 @@ task's full line is in its record or report and its progress entry
   *Machines:* Kathleen, locust. *Sign-off:* the default. Split on 2026-11-20 into CH4.3b1 (the
   rule, opt-in, and its cost model) and CH4.3b2 (the default), by the size rule of `/next-task` (a
   cost model and a rule in the operator, plus measurements on two machines).
-- [ ] **CH4.3b1 The time rule per level, built and calibrated.** *Done when:* the diagonal
-  level's costs per machine class (S → F and F → R per box, the pair per sample; thread-ns, as
-  `VCosts`) fitted on Kathleen (1 × 40) and locust (1 × 72) from W1's diagonal levels, beside
-  `VCosts`' RCR and exponential M2L; the per-class crossover reported (the diagonal pair against
-  RCR's per pair at every degree); `HelmholtzDiagonal::Auto`, opt-in: on each level the bound's
-  classes, taken where the model's diagonal level beats the level's M2L under the setting (RCR
-  after the plan, by the agreed V pairs per class and boxes; the exponential M2L before it, in
-  `wave_levels`, by degree, k̂ and ε, so that the builder's V rule and the operator agree,
-  CHA.11), after the scratch budget's whole-level fallback; the model's choice against the
-  measured level times on W1 and W3; the FMM under it within 1.1× Rotation's errors, bit for bit
-  at every thread count, chunk and rank count. Also (CH4.3a's question 3): the levels below
-  k a = 2.8 that the bound takes on W1 and W3 at 10⁻³–10⁻⁸, and the rule bounded to k a ≥ 2.8,
-  or C_T raised there, if any is. *Needs:* CH4.3a. *Machines:* Kathleen, locust.
+- [x] **CH4.3b1 The time rule per level, built and calibrated.** Report:
+  `fmm-validate/results/helmholtz-ch4-3b1.md`; record `docs/helmholtz/tasks/CH4.3b1.md`.
+  `HelmholtzDiagonal::Auto` (opt-in): a level's bound classes where `DiagonalCosts` (per machine
+  class, fitted on Kathleen and locust; a diagonal pair 0.08–0.52× RCR's at every p, so the
+  choice is per level) puts the form below RCR or, after the plan, below Auto's waves (per box,
+  on the agreed `DiagonalShape`), the cheaper of form and RCR then; none below k a 2.8. Under
+  Rotation 1.000–1.001× its errors, evaluation 0.27–1.00×; choices within 1.05× of the fastest on
+  123/127 levels (Kathleen) and 132/140 (locust).
+  *Sign-off:* pending (the PR's questions 1–4).
 - [ ] **CH4.3b2 The diagonal form by default.** *Done when:* W1 and W3 at 10⁻³–10⁻⁸ on Kathleen
   and locust, the defaults with `HelmholtzDiagonal::Auto` against the defaults: the errors within
   1.1× (at 10⁻⁸ against CH6.1g's raised waves: at matched accuracy), the evaluation and the build
   per level; the order between the waves and the diagonal form per level (D8 amended here if it
   moves); the whole-level fallback at 40 × 1 (W1 at kD = 1000, levels 2–3); `Auto` the default
-  (`HelmholtzDiagonal`, `Off` until here) for sign-off. *Needs:* CH4.3b1. *Machines:* Kathleen,
-  locust. *Sign-off:* the default.
+  (`HelmholtzDiagonal`, `Off` until here) for sign-off. Also (CH4.3b1's report): at 10⁻⁸ the
+  levels the time rule takes from the raised waves return to Rotation's errors (1.07–2.2× the
+  defaults'), and the raised waves cost up to 31× RCR on a sparse level (Kathleen, W1 at
+  kD = 200, level 5): the order of waves, form and RCR there at matched accuracy; the model's
+  misses on W3's small dense levels (the waves kept where the form was 1.1–1.9× faster); the
+  constants at many ranks per node (fitted at one rank per node); the V rule's crossover on a
+  level the form takes from the waves (set for the waves' cost), and the defaults' errors at
+  10⁻⁶ (up to 1.35× Rotation's; 0.77–0.95× of them when the plan saw no waves on the levels the
+  form took, CH4.3b1's first runs). *Needs:* CH4.3b1. *Machines:*
+  Kathleen, locust. *Sign-off:* the default.
 - [ ] **CH4.3c The high-frequency degrees refit, and C₀ at large degrees.** *Done when:* (review
   2026-11-19, A8, M12) the refit of the high-frequency degrees searches downward at x ≥ 54
   (levels 2–4 carry 0.6–1.0 % of the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted

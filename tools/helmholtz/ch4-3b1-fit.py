@@ -6,6 +6,9 @@ CH4.3b1 (docs/helmholtz/tasks/CH4.3b1.md), fitted from `helmholtz_accuracy --lev
     python3 tools/helmholtz/ch4-3b1-fit.py check <machine>=<file-or-dir> …
     python3 tools/helmholtz/ch4-3b1-fit.py summary <machine>=<file-or-dir> …
 
+A `check` or `summary` argument <machine>=<dir>:<auto-dir> takes the time rule's rows from the
+`auto` stage's launches in <auto-dir> (the final runs), the other rows from <dir>.
+
 `fit` prints, per machine, the constants [a, b] of a (p + 1)² + b (p + 1)³ thread-ns for
 each unit, by least squares on the relative error over every level of every run given, each
 level weighted by its measured time:
@@ -59,10 +62,38 @@ def tables(path):
 
 
 def files(arg):
+    """<machine>=<file-or-dir>[:<auto-dir>]: the launches; with an `auto` stage's directory,
+    each launch's tables merged with its `<name>-auto.md` there (`merged`)."""
     machine, where = arg.split("=", 1)
+    where, _, auto = where.partition(":")
     where = pathlib.Path(where)
     paths = sorted(where.glob("*.md")) if where.is_dir() else [where]
+    if auto:
+        AUTO[machine] = pathlib.Path(auto)
     return machine, paths
+
+
+# The `auto` stage's directory per machine (`files`).
+AUTO = {}
+
+
+def merged(machine, path):
+    """The tables of a launch, with the rows of the time rule ("/diagauto") taken from the
+    machine's `auto` stage where one is given (the final runs: the rule with the constants
+    built in), the other rows (RCR, the rule, the defaults) from the launch."""
+    t = tables(path)
+    auto = AUTO.get(machine)
+    if not auto:
+        return t
+    final = auto / f"{path.stem}-auto.md"
+    if not final.exists():
+        return t
+    f = tables(final)
+    for heading in ("", "M2L per level", "Time rule"):
+        keep = [r for r in t.get(heading, []) if "/diagauto" not in r["M2L"]]
+        new = [r for r in f.get(heading, []) if "/diagauto" in r["M2L"]]
+        t[heading] = keep + new
+    return t
 
 
 def threads(row):
@@ -196,7 +227,9 @@ def run_check(args):
     """Per launch and level with V pairs: the measured M2L seconds of each option the setting
     has (RCR: Rotation without the form; the diagonal form with the bound's classes: Rotation
     with the rule; the defaults' own M2L: the defaults without the form), the option the time
-    rule took in the run (Rotation or the defaults with `auto`), and the choice the model makes
+    rule took in the run (Rotation or the defaults with `auto`; scored by that option's seconds
+    in the launch that measured the options, its own run's seconds beside), and the choice the
+    model makes
     with the constants fitted from the same launches (`fit`), from the level's measured counts:
     its boxes with a V row ("Diagonal-form scratch"), its pairs on each form under the rule
     ("Diagonal M2L"), the degrees run. Each choice's measured seconds over the best's."""
@@ -208,12 +241,12 @@ def run_check(args):
                  "best": 0.0}
         print(f"### {machine}\n")
         print("| launch | setting | level | p | k a | classes | RCR s | diagonal s "
-              "| own M2L | its s | best | the run took | ÷ best | the refit model takes "
-              "| ÷ best |")
+              "| own M2L | its s | best | the run took | ÷ best (its own seconds) "
+              "| the refit model takes | ÷ best |")
         print("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- | --- "
               "| ---: | --- | ---: |")
         for path in paths:
-            t = tables(path)
+            t = merged(machine, path)
             m2l = {}
             for r in t.get("M2L per level", []):
                 if r["level"] != "Σ":
@@ -244,7 +277,17 @@ def run_check(args):
                     if diag["ran"].startswith("diagonal"):
                         options["diagonal"] = float(diag["M2L s"])
                     best = min(options.values())
-                    ran = float(took["M2L s"])
+                    # The option the run took, timed in the launch that measured the options
+                    # (the run's own seconds vary from launch to launch by 5–30 % on small
+                    # levels).
+                    if took["ran"].startswith("diagonal"):
+                        kind = "diagonal"
+                    elif took["ran"] == own["ran"]:
+                        kind = "own"
+                    else:
+                        kind = "rcr"
+                    ran = options.get(kind, float(took["M2L s"]))
+                    ran_measured = float(took["M2L s"])
                     # The refit model's choice from the counts.
                     n = boxes.get(("rotation", l), 0)
                     p = int(diag["p"])
@@ -273,7 +316,8 @@ def run_check(args):
                           f"| {mod['bound classes']} | {options['rcr']:.4f} "
                           f"| {options.get('diagonal', float('nan')):.4f} | {own['ran']} "
                           f"| {options['own']:.4f} | {min(options, key=options.get)} "
-                          f"| {took['ran']} | {ran / best:.2f} | {choice} | {chosen / best:.2f} |")
+                          f"| {took['ran']} | {ran / best:.2f} ({ran_measured / best:.2f}) "
+                          f"| {choice} | {chosen / best:.2f} |")
         print()
         print(f"Levels: {total['levels']}; the run's choice within 1.05× the best: {total['ran']} "
               f"(seconds lost {total['lost_ran']:.3f}); the refit model's: {total['model']} "
@@ -295,7 +339,7 @@ def run_summary(args):
     for arg in args:
         machine, paths = files(arg)
         for path in paths:
-            runs = tables(path).get("", [])
+            runs = merged(machine, path).get("", [])
             plain = {}
             for r in runs:
                 base, diag = base_setting(r["M2L"])
