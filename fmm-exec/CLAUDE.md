@@ -754,6 +754,27 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `Direct`) the FMM's errors within
   `DIAGONAL_RATIO` of Rotation's, the classes within the direct build's and the same on every
   rank, 2 threads and the one-rank FMM bit for bit.
+  Since Helmholtz CH4.3b1 (docs/helmholtz/tasks/CH4.3b1.md; fmm-validate/results/helmholtz-ch4-3b1.md)
+  the time rule, `HelmholtzDiagonal::Auto` (opt-in until CH4.3b2; the operator module docs, "M2L"):
+  the bound's classes of a level taken only where `DiagonalCosts` (per machine class,
+  `DIAGONAL_COSTS_X86` from Kathleen, `DIAGONAL_COSTS_NEON` from locust, `diagonal_costs(isa)`;
+  each unit a (p + 1)² + b (p + 1)³ thread-ns of a whole level call, wall × threads: S → F, F → R,
+  the diagonal pair, RCR's pair, the waves' pair at p_w) puts the diagonal level below the level's
+  other M2L: on an RCR level by its agreed `DiagonalShape` (boxes with a V row and pairs per class,
+  `offset_class`; the builder's one all-reduce sum, counted whatever the setting) and
+  `diagonal_beats_rcr`; under `HelmholtzM2l::Auto` a level with waves by `diagonal_beats_plane_waves`
+  on `DiagonalShape::uniform()`, inside `wave_levels` (before the plan, CHA.11's one place), the
+  level then at its own degree, without batched tables, and the form's whatever its shape. The
+  builder agrees the costs (all-reduce max, `HelmholtzFmmBuilder::diagonal_costs` names them) and
+  passes `with_diagonal_costs` and `with_diagonal_shapes`. The scratch budget's fallback first.
+  `tests/helmholtz/diagonal.rs` (`the_time_rule_on_the_rcr_levels`, `the_time_rule_against_the_waves`)
+  checks the choice per level by the model, named costs, shapes, the fallback, f32 and the waves'
+  levels at their own degree; the unit tests the uniform shape, the model by hand and the pair below
+  RCR's at every p ≤ 256 on both classes; `wave_levels_are_the_operators` the builder's levels the
+  operator's with the rule; `check_diagonal_auto` (in `check_diagonal`, both settings, the machine's
+  and free costs) the agreed shapes, the classes on every rank, the errors within `DIAGONAL_RATIO`,
+  2 threads and the one-rank FMM bit for bit. Its cost: `helmholtz_fmm` at one rank, opt-level 1,
+  32.7 s on the M6.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

@@ -271,6 +271,24 @@
 //! the level call to rounding. Its tables are not cached; their build time is
 //! [`TableTimings::diagonal`].
 //!
+//! The time rule (Helmholtz CH4.3b1, [`HelmholtzDiagonal::Auto`], opt-in until CH4.3b2) takes
+//! the bound's classes of a level only where a cost model of the level calls puts the diagonal
+//! level below the M2L the level would run otherwise ([`DiagonalCosts`], per machine class,
+//! [`diagonal_costs`]; named by [`with_diagonal_costs`](HelmholtzOperator::with_diagonal_costs)):
+//! S → F and F → R per box with a V row, the diagonal pair per pair of a diagonal class, RCR's
+//! pair per pair of the others, each a (p + 1)² + b (p + 1)³ thread-ns. On an RCR level it reads
+//! the level's V lists ([`DiagonalShape`]: the boxes with a V row and the pairs per class,
+//! [`with_diagonal_shapes`](HelmholtzOperator::with_diagonal_shapes), which the builder counts
+//! and sums over the ranks; the uniform level's without them) against RCR's
+//! ([`diagonal_beats_rcr`]). Under [`HelmholtzM2l::Auto`] a level with waves goes to the
+//! diagonal form where, on the uniform level, the model puts it below the waves at their degree
+//! ([`diagonal_beats_plane_waves`]): decided in `wave_levels` before the plan, from the
+//! settings and degrees alone, so that the builder's V rule reads the same levels (Helmholtz
+//! CHA.11); such a level runs at its own degree, not the waves' raised one, takes no batched
+//! tables, and keeps the form whatever its shape. Each choice is a function of agreed counts,
+//! (p, k̂, ε, T) and agreed constants, so the same on every rank and at every rank count; the
+//! scratch budget's whole-level fallback comes first.
+//!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
 //! clock reads per call, no value changed; so is every P2P level call

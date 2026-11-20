@@ -738,7 +738,7 @@ impl HelmholtzFmmBuilder {
     }
 
     /// The costs of the diagonal form's time rule ([`HelmholtzDiagonal::Auto`]; Helmholtz
-    /// CH4.3b1; default `None`: [`diagonal_costs`](super::diagonal_costs) of the P2P kernel's
+    /// CH4.3b1; default `None`: [`diagonal_costs`] of the P2P kernel's
     /// ISA), agreed over the ranks (the largest of each constant), for the measurements and
     /// the tests.
     pub fn diagonal_costs(mut self, costs: Option<DiagonalCosts>) -> Self {

@@ -72,7 +72,7 @@ use nd_fmm_tables::parts::Parts;
 
 use super::{HelmholtzOperator, Isa, Kernel, SimdScalar};
 
-/// The diagonal M2L of the high-frequency levels (Helmholtz CH4.2b1; opt-in until CH4.3;
+/// The diagonal M2L of the high-frequency levels (Helmholtz CH4.2b1; opt-in until CH4.3b2;
 /// module documentation of [`operator`](super), "M2L").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum HelmholtzDiagonal {
@@ -88,7 +88,7 @@ pub enum HelmholtzDiagonal {
     /// degrees too).
     Tolerance(f64),
     /// The rule at the FMM's tolerance, then by time (Helmholtz CH4.3b1; module documentation
-    /// of [`operator`](super), "M2L", "The time rule"): a level takes the bound's classes only
+    /// of [`operator`](super), "M2L", the time rule): a level takes the bound's classes only
     /// where the model ([`DiagonalCosts`]) puts its diagonal level below the M2L it would run
     /// otherwise, RCR's by the level's agreed V lists ([`DiagonalShape`]), or under
     /// [`HelmholtzM2l::Auto`](super::HelmholtzM2l::Auto) the exponential M2L's on the uniform
