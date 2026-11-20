@@ -3751,3 +3751,56 @@ request, using this template:
   `nd-fmm-tables` and `nd-fmm-ref`).
 - Follow-ups: CH4.2b (roadmap; the transfer tables' build time per level among its Alsos);
   CH4.3's Also on C₀ at p ≥ 72 extended with this floor (the roadmap's CH4.3 line).
+
+## 2026-11-20: CH4.2b1 The diagonal M2L in the operator: the level call and the rule
+- Done: CH4.2b split into CH4.2b1 (the operator) and CH4.2b2 (W1 on Kathleen and locust).
+  `nd_fmm_exec::helmholtz`:
+  - `HelmholtzDiagonal` (`Off`, the default until CH4.3; `Rule` at the FMM's tolerance;
+    `Tolerance(ε)`), on the levels whose M2L is RCR's under any `HelmholtzM2l`: each class
+    with E(l, c) ≤ θ ε (`diagonal_rule_classes`; S6's f64 constants, f32's at ε ≥ 10⁻⁴ only,
+    D3) on CH4.2a's `DiagonalM2l`, RCR on the rest;
+  - the whole-level fallback to RCR where the scratch at the largest count of the level's V
+    sources over the ranks does not fit `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node
+    (the builder's one all-reduce max; moved here from CH4.3's Also);
+  - the level call (`operator_diagonal.rs`): S → F of each diagonal source and vector, blocks
+    over the pool; chunks of consecutive targets over the pool, each accumulator zeroed, its
+    diagonal pairs in row order, F → R, then its RCR pairs in row order; the pair body S → F,
+    pair, F → R;
+  - `HelmholtzFmmBuilder::{diagonal, diagonal_budget}`, the operator's setters and reports
+    (`diagonal_classes`, `diagonal_counts`, `diagonal_bytes`), `TableTimings::diagonal`.
+
+  `nd_fmm_tables::helmholtz::diagonal::Signatures::{strides_mut, relayout, fits}` and
+  `Conversions::s2f_strides`. Record `docs/helmholtz/tasks/CH4.2b1.md` (no report: no timing).
+- Tests:
+  - `fmm-tables/tests/helmholtz/diagonal_level.rs` (4 new): the strides split into blocks each
+    box `s2f`'s bits, one store laid out for two degrees in turn, the refusals.
+  - `fmm-exec/tests/helmholtz/diagonal.rs` (5): the rule per level against `class_bounds`,
+    none when off, without a tolerance, on Classes' levels, in f32 below 10⁻⁴, at a tight budget
+    or without sources; the pair body on every offset of levels 2 and 3 at k = 40 (real and
+    damped, one and two planes, two vectors) within 2E of Rotation's in CH1.3d1's measure (at
+    most 0.335 E), the RCR classes Rotation's bits.
+  - `check_diagonal` in `tests/helmholtz_fmm.rs` (the cube at kD = 40 + 2i, the clusters at
+    kD = 20, both ε = 10⁻⁴; the clusters' level 4 mixes 27 classes with RCR), under Rotation and
+    the library's Auto: errors 1.000× the setting's without it (`DIAGONAL_RATIO` 1.1), the
+    classes the same on every rank, 2 threads and chunk widths bit for bit, the one-rank FMM,
+    two vectors, the budget's floor Rotation's bits, a second evaluation the same bits with the
+    buffer not grown; Auto on the cube leaves no RCR level (the output unchanged).
+- Checks: `/verify` on the M6 (load about 23 from other jobs): fmt; Clippy (default, examples,
+  workspace all-targets); rustdoc with `-D warnings`; the default and workspace tests at
+  opt-level 1 (1,349 and 1,393 passed); the MPI list at 2 and 4 ranks at opt-level 1 (every
+  executable passed; `helmholtz_fmm` 109 s at both). At opt-level 0 (load 22–42): `helmholtz_fmm`'s one-rank run 987 s
+  (CH4.0d2: 766 s at load 16–20; `check_diagonal` about 110 s of it, the rest the load), above
+  the 20 % flag; `nd-fmm-exec`'s Helmholtz executable 71 s (the new tests 15 s), above the
+  crate's minute; the tables' Helmholtz executable 67 s (CH4.2a: 61 s at load 23–26). Not run: `cargo deny` (no
+  manifest), Laplace's benchmarks (no Laplace path changed), 8 ranks (no distributed code
+  beyond one all-reduce in the builder). A first opt-level 0 run of the new checks went past 30
+  minutes and was stopped by its limit, cause unknown (its output was buffered); the runs since
+  took 110 s (opt-level 0) and 8 s (opt-level 1). Nothing pending.
+- Decisions: pending, the PR's question 1 (the whole-level fallback built here).
+- Laplace: not touched (Helmholtz modules of `nd-fmm-exec` and `nd-fmm-tables`; `driver.rs`,
+  `pipeline.rs`, `nd-fmm-plan`, `nd-octree` and `nd-fmm-simd` unchanged).
+- Follow-ups: CH4.2b2 (roadmap: W1's errors and times, the conversions' rate, the transfer
+  tables' build time); CH4.3's Also on the fallback reduced to its place in the time rule. The
+  self-review's notes, not fixed: the partial fallback in the FMM (some levels kept, some not)
+  tested by the rule's unit test only; no f32 FMM test; a setter on a built operator rebuilds
+  every table.

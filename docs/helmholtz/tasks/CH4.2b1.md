@@ -61,9 +61,9 @@ levels: some classes diagonal, some RCR), CH4.2b2 on W1.
     The accumulators are each thread's (a chunk of targets × m), `Signatures` as signed off.
   - The pair path (`PairOperator::m2l`, per pair): S → F of the source, the pair, F → R: the
     level call to rounding (a target's diagonal pairs summed in signature space there).
-  - Reports: `diagonal_classes(level)`, `diagonal_levels`, `diagonal_bytes`, the setting.
+  - Reports: `diagonal_classes(level)`, `diagonal_counts`, `diagonal_bytes`, the setting.
   - `HelmholtzFmmBuilder::{diagonal, diagonal_budget}` (per node; default
-    `DEFAULT_SIGNATURE_NODE_BUDGET`), `HelmholtzFmm::diagonal_classes`.
+    `DEFAULT_SIGNATURE_NODE_BUDGET`); the FMM's through `HelmholtzFmm::operator()`.
 - `nd-fmm-tables` (Helmholtz module only): `Signatures::strides_mut` (the held boxes' strides as
   one slice, for a caller that splits blocks over threads) and `Conversions::s2f_strides` (S → F
   of a block into such a slice, `s2f`'s bits per box), so the pool writes disjoint blocks.
@@ -84,8 +84,8 @@ levels: some classes diagonal, some RCR), CH4.2b2 on W1.
   on two scenarios with a mixed level (the cube at kD ≈ 40 at ε = 10⁻⁴, a sphere), one and two
   multipole planes:
   - some level diagonal with some class on RCR (asserted), the setting off Rotation's bits;
-  - the FMM against the direct sum within `DIAGONAL_RATIO` = 1.1 of Rotation's error, under
-    Rotation and under the default Auto;
+  - the FMM against the direct sum within `DIAGONAL_RATIO` = 1.1 of the setting's error
+    without it, under Rotation and under the default Auto;
   - 2 threads (and 4 in release) bit for bit 1 thread; chunk widths 1, 2, 3, 5, 7 bit for bit
     the default; on P ranks the one-rank FMM bit for bit; two vectors each the one-vector FMM;
   - the budget's floor: every level RCR, Rotation's bits.
@@ -114,6 +114,38 @@ None here: correctness on the M6. The times, W1's errors and the build time are 
 
 ## Pending runs
 None.
+
+## Results
+- Built as planned, with these deviations: no `HelmholtzFmm::diagonal_classes` or
+  `diagonal_levels` (the FMM's reports through `HelmholtzFmm::operator()`); `Signatures::relayout`
+  and `Signatures::fits` added to `nd-fmm-tables` besides `strides_mut` and `s2f_strides` (one
+  store for every level's degree); the chunk widths 2, 5 and 7 and 4 threads in release builds
+  only (CI's opt-level 1 keeps debug assertions, so CI runs widths 1 and 3 at one thread and
+  width 3 at 2 threads); the scenarios the cube at kD = 40 + 2i and the clusters at kD = 20, both
+  at ε = 10⁻⁴ (at the calibrated degrees the bound takes every class down to k a ≈ 2 at 10⁻⁴, so
+  a mixed level needs the clusters' level 4, k a 1.1, 27 classes).
+- The rule at k = 40 on the unit cube, ε = 10⁻⁴, S7's degrees (p = 22): level 2 all 34 classes,
+  level 3 (k a 4.3) the 9 farthest; damped (40 + 4i) 32 and 5.
+- The pair body against Rotation's within 2E on every offset of levels 2 and 3 (CH1.3d1's
+  measure, the M6, debug): at most 0.335 E (level 2, real k, complex charges), 0.269 E (one
+  plane, two vectors), 0.091 E (damped); level 3 0.126, 0.179, 0.117 E. The RCR classes
+  Rotation's bits.
+- The FMM (`check_diagonal`, one rank, the M6): the cube's levels 2 and 3 diagonal (all 34
+  classes; 3,096 and 48,080 pairs), φ 4.777·10⁻⁶ and ∇φ 1.322·10⁻⁵, 1.000× Rotation's; under
+  Auto no RCR level (waves and Batched), the output unchanged. The clusters' levels 2, 3 and 4
+  (34, 34, 27 classes; level 4 96 diagonal and 192 RCR pairs), φ 5.898·10⁻⁶ against
+  5.897·10⁻⁶, 1.000×, under Rotation and under Auto alike. Debug cost about 110 s at opt-level 0
+  on a loaded M6 (load about 23), 8 s at opt-level 1. A first opt-level 0 run went past 30
+  minutes and was stopped by its time limit; its output was buffered by a pipe, so where it
+  stood is unknown; two runs since (opt-level 1 and 0) took 8 s and 110 s.
+- Self-review (a subagent, read-only): one fix (the operator's signature store read its fit
+  from the last layout, not its allocation, so it was reallocated between two levels on every
+  evaluation; now `Signatures::fits`, and `check_diagonal` evaluates twice and checks the
+  buffer's peak); documented the one-off growth without source counts and of the slots, and
+  that the levels depend on the ranks per node where the budget binds (as the dense tables').
+  Left as notes: the fallback in the FMM is tested at the budget's floor (every level) and the
+  partial fallback by the rule's unit test; f32 tested on the rule alone (no f32 FMM test);
+  the setters on a built operator rebuild every table.
 
 ## Open questions
 1. The whole-level fallback built here (from CH4.3's Also), since the opt-in on several ranks

@@ -7,14 +7,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
 `docs/helmholtz/gates/<milestone>.md`.
 
-Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
-`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a and CH4.1b (the product
-conversions, the signature buffers and the level's scratch). CH4.2 is split into CH4.2a (the
-transfer functions per class and the pair, against RCR within 2E; signed off on #237) and CH4.2b (the operator, threaded, opt-in), next; then CH4.3;
-the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and
-of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's
-history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
+`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged,
+and of item 10 CH4.1a, CH4.1b and CH4.2a. CH4.2b is split into CH4.2b1 (the diagonal M2L in
+the operator, opt-in; in review) and CH4.2b2 (W1 measured on Kathleen and locust), next; then
+CH4.3; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
+done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this
+file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
@@ -674,16 +673,13 @@ task's full line is in its record or report and its progress entry
   and rank count (constraint 2). Split on 2026-11-20 into CH4.2b1 (the operator) and CH4.2b2
   (W1 on the machines), by the size rule of `/next-task` (a new operator plus measurements on
   several machines).
-- [ ] **CH4.2b1 The diagonal M2L in the operator: the level call and the rule.** `nd-fmm-exec`:
-  the opt-in setting, the per-class rule (E ≤ θ ε, S6's constants; D3's f32 scope), the
-  threaded level call, the pair path, the scratch within `DEFAULT_SIGNATURE_NODE_BUDGET` over
-  the ranks per node with the whole-level fallback to RCR decided from the largest need over
-  the ranks (moved here from CH4.3's Also: the opt-in needs it for constraint 2).
-  *Done when:* the FMM against the direct sum within 1.1× RCR's error on the test trees with
-  mixed levels (CI's sizes); every output bit for bit at every thread count, chunk size and
-  rank count (constraint 2); the default's output unchanged. Also (CH4.1b): the threaded level
-  call keeps `m2l_level`'s order (each target's row in order, F → R after, the RCR pairs added
-  after F → R), the buffers' layout as signed off. *Needs:* CH4.2a.
+- [x] **CH4.2b1 The diagonal M2L in the operator: the level call and the rule.** Record
+  `docs/helmholtz/tasks/CH4.2b1.md` (no report: no timing). `HelmholtzDiagonal` (opt-in,
+  `Off` the default), each class with E ≤ θ ε on the RCR levels, the threaded level call (row
+  order, F → R, the RCR pairs after), the whole-level fallback from the agreed source counts
+  within `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node; the FMM 1.000× Rotation's
+  errors on the cube (kD = 40 + 2i) and the clusters (kD = 20, a mixed level 4) at 10⁻⁴,
+  threads, chunk widths and ranks bit for bit. *Sign-off:* pending (the PR's question 1).
 - [ ] **CH4.2b2 The diagonal M2L on W1, measured.** *Done when:* the FMM against the direct
   sum on W1 (kD = 500 at 10⁻⁶ and 10⁻⁸; kD = 1000 at 10⁻⁶) within 1.1× RCR's error, the
   diagonal levels' M2L time against RCR's per level, at 1 × 40 (Kathleen) and 1 × 72 (locust).
