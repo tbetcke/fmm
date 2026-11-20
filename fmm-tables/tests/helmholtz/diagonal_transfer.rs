@@ -23,9 +23,11 @@ use nd_fmm_ref::helmholtz::diagonal::{BoundConstants, Grid, THETA, Transfer, cla
 use nd_fmm_ref::helmholtz::{Level, Workspace, direct, leaf, rcr};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offset_index, m2l_offsets};
 use nd_fmm_tables::helmholtz::diagonal::{
-    CLASS_COUNT, Conversions, DiagonalM2l, LevelBuffers, class_bounds, m2l_level,
+    CLASS_COUNT, Conversions, DiagonalM2l, LevelBuffers, TransferBuild, class_bounds,
+    interpolation_steps, m2l_level,
 };
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
+use nd_fmm_tables::parts::Serial;
 
 use super::parts::Threads;
 
@@ -440,9 +442,46 @@ enum Floor {
     AgainstTheProjection,
 }
 
+/// What the tables' M2L is measured against.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reference {
+    /// ref's RCR (the acceptance of CH4.2).
+    Rcr,
+    /// The same tables' M2L built directly (CH4.2c's "against the direct build").
+    DirectBuild,
+}
+
 /// The tables' M2L of each offset in `offsets` against ref's RCR, within 2E of its class
-/// (`floor` says how an offset above it is read).
+/// (`floor` says how an offset above it is read), the tables built directly.
 fn against_rcr<T: RealScalar>(
+    ka: f64,
+    eta: f64,
+    p: usize,
+    offsets: &[[i32; 3]],
+    constants: BoundConstants,
+    seed: u64,
+    floor: Floor,
+) {
+    against::<T>(
+        TransferBuild::Direct,
+        Reference::Rcr,
+        ka,
+        eta,
+        p,
+        offsets,
+        constants,
+        seed,
+        floor,
+    );
+}
+
+/// The tables' M2L of each offset in `offsets`, the tables built by `build`, against
+/// `reference`, within 2E of its class (`floor` says how an offset above it is read against
+/// RCR; against the direct build every offset is read strictly).
+#[allow(clippy::too_many_arguments)]
+fn against<T: RealScalar>(
+    build: TransferBuild,
+    against: Reference,
     ka: f64,
     eta: f64,
     p: usize,
@@ -459,7 +498,9 @@ fn against_rcr<T: RealScalar>(
         c.dedup();
         c
     };
-    let m2l = DiagonalM2l::<T>::build(p, k, &needed);
+    let m2l = DiagonalM2l::<T>::build_by(p, k, &needed, build, &Serial);
+    let direct =
+        (against == Reference::DirectBuild).then(|| DiagonalM2l::<T>::build(p, k, &needed));
     let conversions = Conversions::<T>::new(p, level.scale());
     let bounds = class_bounds(p, k, constants);
     let mut worst: f64 = 0.0;
@@ -470,7 +511,11 @@ fn against_rcr<T: RealScalar>(
         let m = multipole(p, &level, [0.0; 3], seed + 7 * i as u64);
         let targets = in_box(frame(o).centre, 24, seed + 7 * i as u64 + 3);
         let centre = frame(o).centre;
-        let reference = evaluate(p, &level, centre, &rcr_local(p, &level, o, &m), &targets);
+        let reference_local = match &direct {
+            Some(direct) => tables_local(direct, &conversions, d, &m),
+            None => rcr_local(p, &level, o, &m),
+        };
+        let reference = evaluate(p, &level, centre, &reference_local, &targets);
         let got = evaluate(
             p,
             &level,
@@ -487,7 +532,7 @@ fn against_rcr<T: RealScalar>(
         if measured <= e / THETA {
             continue;
         }
-        if floor == Floor::Strict {
+        if floor == Floor::Strict || against == Reference::DirectBuild {
             failures.push(format!("{o:?}: {measured:.2e} > 2E = {:.2e}", e / THETA));
             continue;
         }
@@ -511,7 +556,8 @@ fn against_rcr<T: RealScalar>(
         }
     }
     println!(
-        "k a = {ka}, η = {eta}, p = {p}, {} offsets: largest measured/E {worst:.3}",
+        "{build:?} against {against:?}: k a = {ka}, η = {eta}, p = {p}, {} offsets: largest \
+         measured/E {worst:.3}",
         offsets.len()
     );
     assert!(failures.is_empty(), "k a = {ka}, p = {p}: {failures:?}");
@@ -624,6 +670,263 @@ fn against_rcr_at_large_degrees() {
     }
     let few = [[0, 0, 2], [1, 2, 2], [3, 3, 3]];
     against_rcr::<f64>(108.0, 0.0, 131, &few, BoundConstants::F64, 21_000, floor);
+}
+
+// ---------------------------------------------------------------------------------------
+// The interpolated build (CH4.2c1): against the direct build and RCR within 2E at C_T = 0.23.
+
+const INTERPOLATED: BoundConstants = BoundConstants::F64_INTERPOLATED;
+
+/// Every stored sample of the interpolated build against the direct build's: the largest
+/// difference per class over the class's largest sample, the largest over the classes. Both in
+/// f64.
+fn interpolated_against_direct(p: usize, k: C) -> f64 {
+    let direct = DiagonalM2l::<f64>::build(p, k, &ALL);
+    let interpolated =
+        DiagonalM2l::<f64>::build_by(p, k, &ALL, TransferBuild::Interpolated, &Serial);
+    (0..CLASS_COUNT)
+        .map(|c| {
+            let (a, b) = (
+                interpolated.class_samples(c).unwrap(),
+                direct.class_samples(c).unwrap(),
+            );
+            let largest = b.iter().fold(0.0f64, |m, s| m.max(s.norm()));
+            let worst = a
+                .iter()
+                .zip(b)
+                .fold(0.0f64, |m, (x, y)| m.max((x - y).norm()));
+            assert!(worst.is_finite(), "class {c}");
+            worst / largest
+        })
+        .fold(0.0, f64::max)
+}
+
+/// Test 1 of the plan: every sample of every class, the interpolated build against the direct
+/// build within 64 u (32 ε) of the class's largest sample, at p = 6 (k a = 5, real and damped)
+/// and p = 16 (k a = 5 and 8).
+#[test]
+fn interpolated_samples_against_the_direct_build() {
+    for (p, ka, eta) in [(6, 5.0, 0.0), (6, 5.0, 0.1), (16, 5.0, 0.0), (16, 8.0, 0.1)] {
+        let worst = interpolated_against_direct(p, k_hat(ka, eta));
+        println!(
+            "p = {p}, k a = {ka}, η = {eta}: largest difference {:.2} ε of the class's largest",
+            worst / f64::EPSILON
+        );
+        assert!(
+            worst <= 32.0 * f64::EPSILON,
+            "p = {p}, k a = {ka}: {:.1} ε",
+            worst / f64::EPSILON
+        );
+    }
+}
+
+/// Test 2: the acceptance with the interpolated tables, against RCR within 2E at C_T = 0.23 on
+/// the 34 classes (k a = 2.83, p = 7; k a = 8 real and damped), the 316 offsets (k a = 5,
+/// p = 16), and f32 within `F32`'s 2E (k a = 8, p = 16).
+#[test]
+fn interpolated_against_rcr_within_the_bound() {
+    let reps = representatives();
+    let offsets: Vec<[i32; 3]> = m2l_offsets().iter().map(|o| o.map(|x| x as i32)).collect();
+    let build = TransferBuild::Interpolated;
+    assert_eq!(build.bound_constants(false), INTERPOLATED);
+    assert_eq!(build.bound_constants(true), BoundConstants::F32);
+    let cases: [(f64, f64, usize, &[[i32; 3]]); 4] = [
+        (2.83, 0.0, 7, &reps),
+        (8.0, 0.0, formula_degree(8.0, 1e-6), &reps),
+        (8.0, 0.1, formula_degree(8.0, 1e-6), &reps),
+        (5.0, 0.0, 16, &offsets),
+    ];
+    for (i, (ka, eta, p, set)) in cases.into_iter().enumerate() {
+        against::<f64>(
+            build,
+            Reference::Rcr,
+            ka,
+            eta,
+            p,
+            set,
+            INTERPOLATED,
+            30_000 + 100 * i as u64,
+            Floor::Strict,
+        );
+    }
+    against::<f32>(
+        build,
+        Reference::Rcr,
+        8.0,
+        0.0,
+        16,
+        &reps,
+        build.bound_constants(true),
+        31_000,
+        Floor::Strict,
+    );
+}
+
+/// Test 3: the interpolated tables' M2L against the direct tables' within 2E at C_T = 0.23, on
+/// the cases of test 2.
+#[test]
+fn interpolated_against_the_direct_build_within_the_bound() {
+    let reps = representatives();
+    let offsets: Vec<[i32; 3]> = m2l_offsets().iter().map(|o| o.map(|x| x as i32)).collect();
+    let cases: [(f64, f64, usize, &[[i32; 3]]); 4] = [
+        (2.83, 0.0, 7, &reps),
+        (8.0, 0.0, formula_degree(8.0, 1e-6), &reps),
+        (8.0, 0.1, formula_degree(8.0, 1e-6), &reps),
+        (5.0, 0.0, 16, &offsets),
+    ];
+    for (i, (ka, eta, p, set)) in cases.into_iter().enumerate() {
+        against::<f64>(
+            TransferBuild::Interpolated,
+            Reference::DirectBuild,
+            ka,
+            eta,
+            p,
+            set,
+            INTERPOLATED,
+            32_000 + 100 * i as u64,
+            Floor::Strict,
+        );
+    }
+}
+
+/// Test 4: both builds in parts of one ring on a map that runs them in reverse on three
+/// threads, bit for bit the serial build; the direct build by `build_by` bit for bit `build`
+/// (CH4.2a's tables, checked against ref's `Transfer` above); f32 the f64 tables rounded.
+#[test]
+fn both_builds_in_parts_by_ring() {
+    let (p, k) = (5, k_hat(6.0, 0.05));
+    let stored = [0, 3, 7, 20, 33];
+    for build in [TransferBuild::Direct, TransferBuild::Interpolated] {
+        let serial = DiagonalM2l::<f64>::build_by(p, k, &stored, build, &Serial);
+        let threads = DiagonalM2l::<f64>::build_by(p, k, &stored, build, &Threads);
+        let single = DiagonalM2l::<f32>::build_by(p, k, &stored, build, &Threads);
+        for &c in &stored {
+            let s = serial.class_samples(c).unwrap();
+            assert_eq!(
+                bits(s),
+                bits(threads.class_samples(c).unwrap()),
+                "{build:?}, class {c}"
+            );
+            let rounded: Vec<Complex<f32>> = s
+                .iter()
+                .map(|w| Complex::new(w.re as f32, w.im as f32))
+                .collect();
+            assert_eq!(bits(single.class_samples(c).unwrap()), bits(&rounded));
+        }
+        assert_eq!(serial.stored_classes(), stored);
+    }
+    let by_class = DiagonalM2l::<f64>::build(p, k, &stored);
+    let by_ring = DiagonalM2l::<f64>::build_by(p, k, &stored, TransferBuild::Direct, &Threads);
+    for &c in &stored {
+        assert_eq!(
+            bits(by_class.class_samples(c).unwrap()),
+            bits(by_ring.class_samples(c).unwrap())
+        );
+    }
+    assert_eq!(interpolation_steps(p), 6 * p + 1);
+}
+
+/// The interpolated acceptance's larger cases (release only): against RCR within 2E at
+/// C_T = 0.23 at k a = 16 (the formula's p at 10⁻⁶) and at the large degrees of
+/// `against_rcr_at_large_degrees` (k a 32–108, read against the projection at E's floor), and
+/// against the direct build at k a = 16 and 54 (p = 72).
+#[test]
+#[ignore = "larger degrees: run in release by hand"]
+fn interpolated_at_large_degrees() {
+    let reps = representatives();
+    let build = TransferBuild::Interpolated;
+    let p16 = formula_degree(16.0, 1e-6);
+    against::<f64>(
+        build,
+        Reference::Rcr,
+        16.0,
+        0.0,
+        p16,
+        &reps,
+        INTERPOLATED,
+        33_000,
+        Floor::Strict,
+    );
+    for (i, (ka, p)) in [(16.0, p16), (54.0, 72)].into_iter().enumerate() {
+        against::<f64>(
+            build,
+            Reference::DirectBuild,
+            ka,
+            0.0,
+            p,
+            &reps,
+            INTERPOLATED,
+            33_100 + i as u64,
+            Floor::Strict,
+        );
+    }
+    let floor = Floor::AgainstTheProjection;
+    for (i, (ka, p)) in [(32.0, formula_degree(32.0, 1e-8)), (54.0, 72), (54.0, 82)]
+        .into_iter()
+        .enumerate()
+    {
+        against::<f64>(
+            build,
+            Reference::Rcr,
+            ka,
+            0.0,
+            p,
+            &reps,
+            INTERPOLATED,
+            34_000 + i as u64,
+            floor,
+        );
+    }
+    let few = [[0, 0, 2], [1, 2, 2], [3, 3, 3]];
+    against::<f64>(
+        build,
+        Reference::Rcr,
+        108.0,
+        0.0,
+        131,
+        &few,
+        INTERPOLATED,
+        35_000,
+        floor,
+    );
+}
+
+/// Test 6 (prints, asserts no time): one class's build on one thread, direct against
+/// interpolated, at the degrees of W1's diagonal levels (p = 41, 72, 131 and 245 at
+/// k a ≈ 27, 54, 108 and 216), with the samples' largest difference. Release only.
+#[test]
+#[ignore = "timing: run in release by hand"]
+fn time_one_class() {
+    let classes = [classes()
+        .iter()
+        .position(|c| c.representative == [0, 0, 2])
+        .unwrap()];
+    println!("| p | k a | direct s | interpolated s | ratio | largest difference (ε) |");
+    println!("| ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (p, ka) in [(41, 27.0), (72, 54.0), (131, 108.0), (245, 216.0)] {
+        let k = k_hat(ka, 0.0);
+        let clock = std::time::Instant::now();
+        let direct = DiagonalM2l::<f64>::build(p, k, &classes);
+        let t_direct = clock.elapsed().as_secs_f64();
+        let clock = std::time::Instant::now();
+        let interpolated =
+            DiagonalM2l::<f64>::build_by(p, k, &classes, TransferBuild::Interpolated, &Serial);
+        let t_interpolated = clock.elapsed().as_secs_f64();
+        let (a, b) = (
+            interpolated.class_samples(classes[0]).unwrap(),
+            direct.class_samples(classes[0]).unwrap(),
+        );
+        let largest = b.iter().fold(0.0f64, |m, s| m.max(s.norm()));
+        let worst = a
+            .iter()
+            .zip(b)
+            .fold(0.0f64, |m, (x, y)| m.max((x - y).norm()));
+        println!(
+            "| {p} | {ka} | {t_direct:.3} | {t_interpolated:.3} | {:.1} | {:.2} |",
+            t_direct / t_interpolated,
+            worst / largest / f64::EPSILON
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------
