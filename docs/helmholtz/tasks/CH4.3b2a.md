@@ -115,8 +115,44 @@ Helmholtz executable at opt-level 0 against their budget; `nd-fmm-validate`'s
   10⁻⁸ it may win fewer levels than CH4.3b1's runs (which ran it at p_l); measured.
 - The V rule's crossover on a level the rule takes from the waves stays the waves' (CH4.3b2b).
 
+## As built: the order on a level with waves
+The plan took the cheapest of three, RCR included (c02d2b3). The first runs (Kathleen job 653691,
+locust) put RCR against the waves on seven levels: 0.45 s lost and 0.11 s gained against keeping
+the waves, RCR's constant (CH4.3b1's, fitted at the degrees given) under-predicting RCR at p_w on
+sparse, low-k a levels (the report §4). As built (a4bc1c2): the waves unless the form beats them at
+p_w, then the cheaper of the form and RCR (`wave_level_choice`); RCR never against the waves alone.
+The roadmap's CH4.3b2a line is amended in this PR; the report's question 2. The forced costs of the
+harness follow: `RCR_COSTS` forces RCR only where a class passes. The FMM check
+(`check_time_rule_raised`) runs the cubes at kD = 20 + 2i (no class at p_w, so the waves stay) in
+release builds only, and in debug builds the forced costs alone, 2 threads at free form costs alone,
+on 600 points.
+
 ## Pending runs
-(filled in step 6)
+None. The runs are done:
+- first runs (the rule of three, c02d2b3): Kathleen job 653691 (node-c11a-044, `singlenode`, 1 × 40,
+  2026-11-20 22:05–22:34), `ch4-3b2a-runs.sh target/runs/ch4-3b2a w1 w3`, 21 launches, every one
+  exit 0; locust 1 × 72, 22:05–22:29, the same, with W1 at kD = 1000 rerun alone at 22:29–22:32
+  (another user's load during the first: 15-minute average 316; the rerun's 1-minute load at most 33);
+- final runs (as built, a4bc1c2): Kathleen job 653702 (node-c11a-018, 22:57–23:26, queued 17 min),
+  `ch4-3b2a-runs.sh target/runs/ch4-3b2a-final w1 w3`, 21 launches, every one exit 0; locust
+  22:39–22:51, the load sampled every 30 s, at most 45, every launch exit 0.
+Raw outputs in `~/projects/fmm-archive/{kathleen,locust}/runs/ch4-3b2a{,-final,-rerun,-contaminated}/`.
+
+## Results
+The report: fmm-validate/results/helmholtz-ch4-3b2a.md. Under the time rule the errors are
+0.990–1.037× the defaults' on every case on both machines, 0.993–1.000× at 10⁻⁸ (CH4.3b1: 1.07–2.2×);
+the choices within 1.05× of the fastest on 81/83 levels (Kathleen, 0.54 s lost of 48.0 s) and 82/92
+(locust, 0.28 s of 13.8 s), every miss the waves kept where the form was faster (W3's dense levels
+and two raised W1 levels); the evaluation 0.38–1.12× the defaults' on Kathleen and 0.43–0.99× on
+locust (W3 at kD = 200 on Kathleen 1.03–1.12×: the same waves level slower in the time rule's run of
+the launch, question 4). CH4.3b1's sparse level (31× RCR) is the V near rule's plan (58,551 V pairs
+against Rotation's plan's 2,296), not the M2L: CH4.3b2b. At the raised degree the bound passes fewer
+classes at low k a (the cube at k = 40, level 2: 16 at 10⁻⁷, 5 at 10⁻⁸).
+
+Debug test time (opt-level 0, one rank, the M6): `helmholtz_fmm` 646 s at load 2–7 (CH4.2c2: 611 s at
+load 7–10; the first version of the check, 803 s at load 3–35, was trimmed), `nd-fmm-exec`'s
+`helmholtz` executable 51.5 s (under its minute). At opt-level 1 `helmholtz_fmm` 33.6 s at one rank
+(CH4.3b1: 33 s).
 
 ## Open questions
-(filled when they arise)
+The report's §7, questions 1–4, for sign-off.

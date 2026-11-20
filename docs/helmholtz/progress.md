@@ -4057,3 +4057,53 @@ request, using this template:
   their cost on sparse levels, up to 31× RCR's), the model's misses on W3's small dense levels, the
   constants at many ranks per node, the V rule's crossover and the defaults' errors on the levels
   the form takes from the waves.
+
+## 2026-11-20: CH4.3b2a The time rule at matched accuracy
+- Done: CH4.3b2 split into CH4.3b2a (matched accuracy), CH4.3b2b (the V rule on the form's levels)
+  and CH4.3b2c (the default), by the size rule; every Also of CH4.3b2 on one of them.
+  - `nd_fmm_exec::helmholtz`: under `HelmholtzDiagonal::Auto` a level with Auto's waves keeps its
+    resolving degree p_w whatever M2L the time rule gives it (stores, M2L, leaves at p_w;
+    translations as `PlaneWaveRaise` gives the waves); the form's classes the bound's at p_w, its
+    scratch at p_w within the budget; `wave_level_choice` (`WaveLevelChoice`): the waves unless the
+    form beats them, then the cheaper of the form and RCR; `HelmholtzOperator::taken_from_waves`.
+  - `nd-fmm-validate`: `FORM_COSTS`, `RCR_COSTS`, `Row::{diagonal_costs, taken_from_waves}`, the
+    model at the degree as run, the example's `--diagonal-costs machine|form|rcr`.
+  - `tools/helmholtz/ch4-3b2a-runs.sh` and `ch4-3b2a-tables.py`. Report
+    `fmm-validate/results/helmholtz-ch4-3b2a.md`; record `docs/helmholtz/tasks/CH4.3b2a.md`.
+  - The plan took the cheapest of three, RCR included; the first runs refuted it (RCR against the
+    waves on seven levels: 0.45 s lost, 0.11 s gained; RCR's constant under-predicts RCR at p_w on
+    sparse levels), so RCR never competes with the waves alone. Question 2.
+- Tests: unit `the_choice_on_a_level_with_waves_by_hand`; `tests/helmholtz/diagonal.rs`
+  `the_time_rule_against_the_waves` (10⁻⁴, 10⁻⁷, 10⁻⁸; free form, free RCR, dear, a tight budget,
+  below k a 2.8: the defaults' degrees and translation degrees under every costs, the classes at
+  p_w); `check_time_rule_raised` in `tests/helmholtz_fmm.rs` (a cube at kD = 40 + 2i, 10⁻⁷, level 2
+  taking 15 classes at p_w = 28; in release also the cubes at kD = 20 + 2i at 10⁻⁷ and 10⁻⁸): the
+  defaults' degrees, the errors within `DIAGONAL_RATIO` of the defaults' (or of ε/100 in rounding's
+  regime), 2 threads and the one-rank FMM bit for bit; `fmm-validate`'s `check_diagonal` both forced
+  costs at 10⁻⁷ on W1 at kD = 30.
+- Measurements (final: Kathleen job 653702, node-c11a-018, `singlenode`, 1 × 40; locust 1 × 72, the
+  load sampled; first runs Kathleen job 653691, locust): W1 at kD = 100–500 (and 1000 at 10⁻⁶) and W3
+  at N = 10⁶, kD = 200 and 500, at 10⁻³, 10⁻⁶, 10⁻⁷, 10⁻⁸, the defaults against the time rule at the
+  machine's, forced-form and forced-RCR costs:
+  - errors 0.990–1.037× the defaults' on every case on both machines, 0.993–1.000× at 10⁻⁸ (CH4.3b1:
+    1.07–2.2×);
+  - choices within 1.05× of the fastest on 81/83 levels (Kathleen, 0.54 s lost of 48.0 s) and 82/92
+    (locust, 0.28 of 13.8 s), every miss the waves kept where the form was faster;
+  - evaluation 0.38–1.12× the defaults' (Kathleen), 0.43–0.99× (locust); W3 at kD = 200 on Kathleen
+    1.03–1.12× with every choice within 1.05× (question 4); build up to 1.38× (Kathleen, the transfer
+    functions at p_w);
+  - CH4.3b1's sparse level (31× RCR) is the V near rule's plan (58,551 V pairs against 2,296); at
+    the same plan and p_w RCR and the waves both 0.30–0.32 s;
+  - at p_w the bound passes fewer classes at low k a (k = 40, level 2: 16 at 10⁻⁷, 5 at 10⁻⁸);
+  - locust's first W1 at kD = 1000 ran under another user's load (15-minute average 316) and was
+    rerun; raw outputs in `~/projects/fmm-archive/{kathleen,locust}/runs/ch4-3b2a*/`.
+- Checks: `/verify` on the M6 (on c02d2b3, the rule of three): fmt; Clippy (default, examples,
+  workspace all-targets); rustdoc with `-D warnings`; the default and workspace tests at opt-level 1
+  (1,367 and 1,411 passed); the MPI list at 2 and 4 ranks at opt-level 1 (every executable passed).
+  After the change of the order (a4bc1c2) again: see the PR. Debug time (opt-level 0, one rank):
+  `helmholtz_fmm` 646 s at load 2–7 (CH4.2c2 611 s), the `helmholtz` executable 51.5 s. Not run:
+  `cargo deny` (no manifest), Laplace's benchmarks (no Laplace path), 8 ranks (no distributed code).
+- Decisions: the report's questions 1–4, for sign-off.
+- Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
+- Follow-ups: CH4.3b2b's Also (the 58,551-pair level), CH4.3b2c's Also (W3 at kD = 200's evaluation
+  on Kathleen; W3's dense levels), in the roadmap.
