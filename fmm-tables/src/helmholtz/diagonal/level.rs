@@ -127,6 +127,36 @@ impl<T: RealScalar> Signatures<T> {
         }
     }
 
+    /// Lays the store out again in its allocation for `boxes` boxes of `samples` samples each
+    /// (another level's degree; Helmholtz CH4.2b1), holding and able to hold `boxes` boxes,
+    /// each on its line as before, the padding zero. The samples are left as they lie (the
+    /// earlier layout's values) until the caller writes them (S → F) or
+    /// [`zero`](Self::zero)es them.
+    /// Allocates nothing; a store made by [`new`](Self::new) for the most
+    /// [`bytes_for`](Self::bytes_for) among several layouts holds each of them.
+    ///
+    /// # Panics
+    ///
+    /// If the layout does not fit the allocation.
+    pub fn relayout(&mut self, samples: usize, boxes: usize) {
+        let stride = Self::stride_for(samples);
+        assert!(
+            self.start + boxes * stride <= self.values.len(),
+            "{boxes} boxes of {samples} samples exceed the store's {} values",
+            self.values.len()
+        );
+        // The padding, less than a line per box.
+        let zero = Complex::new(T::zero(), T::zero());
+        let end = self.start + boxes * stride;
+        for b in self.values[self.start..end].chunks_exact_mut(stride) {
+            b[samples..].fill(zero);
+        }
+        self.samples = samples;
+        self.stride = stride;
+        self.capacity = boxes;
+        self.boxes = boxes;
+    }
+
     /// The samples of a signature.
     pub fn samples(&self) -> usize {
         self.samples

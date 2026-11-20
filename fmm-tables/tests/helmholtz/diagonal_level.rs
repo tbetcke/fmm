@@ -214,6 +214,67 @@ fn the_strides_split_into_blocks_are_the_plain_conversions() {
     }
 }
 
+/// One allocation laid out for two degrees in turn: aligned, the padding zero, every box's
+/// conversion `s2f`'s bits in each layout (Helmholtz CH4.2b1).
+#[test]
+fn a_store_laid_out_again_for_another_degree() {
+    let (small, large) = (
+        Conversions::<f64>::new(3, 1.0),
+        Conversions::<f64>::new(9, 1.0),
+    );
+    let bytes = |c: &Conversions<f64>, boxes| Signatures::<f64>::bytes_for(c.samples(), boxes);
+    // Sized for the larger of 9 boxes at p = 3 and 2 at p = 9.
+    let (store_samples, store_boxes) = if bytes(&small, 9) >= bytes(&large, 2) {
+        (small.samples(), 9)
+    } else {
+        (large.samples(), 2)
+    };
+    let mut store = Signatures::<f64>::new(store_samples, store_boxes);
+    for (conversions, boxes, seed) in [
+        (&large, 2, 3),
+        (&small, 9, 5),
+        (&large, 1, 7),
+        (&small, 9, 9),
+    ] {
+        let mut scratch = ConversionScratch::new(conversions);
+        let (len, samples) = (conversions.expansion_len(), conversions.samples());
+        store.relayout(samples, boxes);
+        assert_eq!(
+            (store.samples(), store.boxes(), store.capacity()),
+            (samples, boxes, boxes)
+        );
+        assert_eq!(store.stride(), Signatures::<f64>::stride_for(samples));
+        assert!(store.is_aligned());
+        let multipoles = values(boxes * len, seed);
+        conversions.s2f_into(&multipoles, &mut store, 0, &mut scratch);
+        let mut plain = vec![Complex::new(0.0, 0.0); boxes * samples];
+        conversions.s2f(&multipoles, &mut plain, &mut scratch);
+        let stride = store.stride();
+        for b in 0..boxes {
+            assert_eq!(
+                signature_bits(store.signature(b)),
+                signature_bits(&plain[b * samples..(b + 1) * samples])
+            );
+        }
+        let strides = store.strides_mut();
+        for b in 0..boxes {
+            assert!(
+                strides[b * stride + samples..(b + 1) * stride]
+                    .iter()
+                    .all(|z| z.re == 0.0 && z.im == 0.0),
+                "the padding of box {b}"
+            );
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "exceed the store's")]
+fn refuses_a_layout_beyond_the_allocation() {
+    let mut store = Signatures::<f64>::new(10, 2);
+    store.relayout(100, 2);
+}
+
 #[test]
 #[should_panic(expected = "2 boxes need")]
 fn refuses_strides_too_short() {
