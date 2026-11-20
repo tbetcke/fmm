@@ -169,6 +169,62 @@ fn the_store_conversions_are_the_plain_ones() {
     }
 }
 
+/// `strides_mut` split into blocks of any size, each block by `s2f_strides`: every box `s2f`'s
+/// bits (Helmholtz CH4.2b1, the threaded level call's split), the padding untouched.
+#[test]
+fn the_strides_split_into_blocks_are_the_plain_conversions() {
+    for p in [3, 12] {
+        let conversions = Conversions::<f64>::new(p, 0.75);
+        let mut scratch = ConversionScratch::new(&conversions);
+        let (len, samples) = (conversions.expansion_len(), conversions.samples());
+        let boxes = 7;
+        let multipoles = values(boxes * len, 17);
+        let mut plain = vec![Complex::new(0.0, 0.0); boxes * samples];
+        conversions.s2f(&multipoles, &mut plain, &mut scratch);
+        for block in [1, 2, 3, 4, 5, 7] {
+            let mut store = Signatures::new(samples, boxes);
+            let stride = store.stride();
+            for (i, strides) in store.strides_mut().chunks_mut(block * stride).enumerate() {
+                let first = i * block;
+                let nb = block.min(boxes - first);
+                conversions.s2f_strides(
+                    &multipoles[first * len..(first + nb) * len],
+                    strides,
+                    stride,
+                    &mut scratch,
+                );
+            }
+            for b in 0..boxes {
+                assert_eq!(
+                    signature_bits(store.signature(b)),
+                    signature_bits(&plain[b * samples..(b + 1) * samples]),
+                    "p = {p}, blocks of {block}, box {b}"
+                );
+            }
+            // The padding stays zero.
+            let strides = store.strides_mut();
+            for b in 0..boxes {
+                assert!(
+                    strides[b * stride + samples..(b + 1) * stride]
+                        .iter()
+                        .all(|z| z.re == 0.0 && z.im == 0.0)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "2 boxes need")]
+fn refuses_strides_too_short() {
+    let conversions = Conversions::<f64>::new(2, 1.0);
+    let mut scratch = ConversionScratch::new(&conversions);
+    let mut store = Signatures::new(conversions.samples(), 1);
+    let stride = store.stride();
+    let multipoles = vec![0.0; 2 * conversions.expansion_len()];
+    conversions.s2f_strides(&multipoles, store.strides_mut(), stride, &mut scratch);
+}
+
 #[test]
 #[should_panic(expected = "boxes 3..6 of a store of 5")]
 fn refuses_boxes_beyond_the_store() {
