@@ -20,6 +20,9 @@
 //!   in place of a tolerance (levels 0 and 1 hold expansions nothing reads);
 //! - `--charges real|complex` (default complex), `--vectors m` (default 1),
 //!   `--samples n` (default 1000), `--no-gradients`;
+//! - `--density random|planewave|constant` (Helmholtz CH4.3a, `Case::density`): §9.1's random
+//!   charges (the default), the trace of a plane wave (complex charges only) or a constant;
+//!   named in a line under the machine's;
 //! - `--threads t,…` (default 1), `--oracle-threads t` (default the largest of
 //!   `--threads`);
 //! - `--rule calibrated|s7` (default `calibrated`, Helmholtz CH3.3): with `s7`, a tolerance
@@ -204,7 +207,7 @@ use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, domain_of};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    BUILD_PARTS, Case, Oracle, Problem, Row, complex_k, run, sweep_crossovers,
+    BUILD_PARTS, Case, Density, Oracle, Problem, Row, complex_k, run, sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_workloads::Workload;
 use nd_fmm_validate::scaling::resident_memory;
@@ -216,6 +219,7 @@ struct Arguments {
     kim: f64,
     degrees: Vec<Degrees>,
     charges: ChargeKind,
+    density: Density,
     vectors: usize,
     samples: usize,
     gradients: bool,
@@ -302,7 +306,7 @@ fn arguments() -> Arguments {
         eprintln!(
             "usage: helmholtz_accuracy [--workload w1|w2|w3|w3:<n>|w4-<distribution>:<n>] \
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
-             [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
+             [--density random|planewave|constant] [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
              [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|auto-pw|\
              auto-pw:<d>|sweep|\
@@ -324,6 +328,7 @@ fn arguments() -> Arguments {
         kim: 0.0,
         degrees: vec![Degrees::Tolerance(1e-3)],
         charges: ChargeKind::Complex,
+        density: Density::Random,
         vectors: 1,
         samples: 1000,
         gradients: true,
@@ -385,6 +390,9 @@ fn arguments() -> Arguments {
                     }
                     .map(|c| parsed.charges = c)
                     .is_some(),
+                    "--density" => Density::from_name(value)
+                        .map(|d| parsed.density = d)
+                        .is_some(),
                     "--vectors" => value.parse().map(|v| parsed.vectors = v).is_ok(),
                     "--samples" => value.parse().map(|v| parsed.samples = v).is_ok(),
                     "--threads" => list(value).map(|v| parsed.threads = v).is_some(),
@@ -647,6 +655,10 @@ fn arguments() -> Arguments {
         || parsed.m2l.is_empty()
     {
         usage();
+    }
+    if parsed.density == Density::PlaneWave && parsed.charges == ChargeKind::Real {
+        eprintln!("helmholtz_accuracy: a plane wave's trace needs complex charges");
+        std::process::exit(2);
     }
     parsed
 }
@@ -933,6 +945,8 @@ fn main() {
             std::env::var("OPENBLAS_NUM_THREADS").unwrap_or_else(|_| "unset".into()),
         );
         println!();
+        println!("Density: {}", arguments.density.name());
+        println!();
         println!(
             "| Workload | N | kD | degrees | charges | m | P2P | M2L | ranks × threads | levels \
              | leaf level | p by level | leaves | max leaf | build s | evaluate s | φ | ∇φ \
@@ -962,6 +976,7 @@ fn main() {
         for degrees in &arguments.degrees {
             let mut case = Case::new(workload, (kd, arguments.kim), degrees.clone());
             case.charges = arguments.charges;
+            case.density = arguments.density;
             case.vectors = arguments.vectors;
             case.samples = arguments.samples;
             case.gradients = arguments.gradients;

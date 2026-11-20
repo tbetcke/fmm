@@ -3959,3 +3959,44 @@ request, using this template:
   as read.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness).
 - Follow-ups: CH4.3's Also (roadmap): C_T and θ confirmed for the default build.
+
+## 2026-11-20: CH4.3a The bound's constants in the full FMM
+- Done: CH4.3 split into CH4.3a–CH4.3e by the size rule (every Also of CH4.3 on one of them); the
+  first, a measurement with no library change.
+  - `nd-fmm-tables`, tests: the ignored `the_bound_on_the_fmms_levels` in
+    `tests/helmholtz/diagonal_transfer.rs`, the 34 classes at the (k a, p) of the FMM's levels
+    (k a 1.35–108, the calibrated degree at 10⁻³–10⁻⁸ restated), real k and η = 0.1 and 1, both
+    builds: per pair against RCR over E (asserted within 2E, damped k for k a ≥ 2.8), and the
+    input-relative error over E with and without the damping factor (printed).
+  - `nd-fmm-validate`: the `helmholtz_accuracy` example's `--density random|planewave|constant`.
+  - `tools/helmholtz/ch4-3a-runs.sh` and `ch4-3a-tables.py`. Report
+    `fmm-validate/results/helmholtz-ch4-3a.md`; record `docs/helmholtz/tasks/CH4.3a.md`.
+- Tests: the study (release, the M6, 9–15 min, load 16–87 from other jobs): passed. Real k within
+  1.09 E for k a ≤ 27, 1.99 E at k a 43–54; at k a = 108 at E's floor, read against ref's
+  projection (up to 3.3 E against RCR). One finding below S6's range: direct build, η = 0.1, k a 1.69, (0, 0, 3), 2.9 E
+  at E ≪ ε.
+- Measurements (Kathleen job 653621, node-c11a-013, `singlenode`, 1 × 40, 40 launches, 38 min):
+  - every case at θ = 1/2 within 1.000–1.007× Rotation's errors: W1 at kD = 100–1000, W3 at
+    N = 10⁶ and kD = 200, 500, 10⁻³–10⁻⁸, the constant density (kD = 100), the plane wave's trace
+    (kD = 500), damped W1 at kD = 100 + 10i, 100 + 100i, 500 + 50i; at kD = 500 both builds took
+    the same classes;
+  - the margin (the rule at s θ): 16 at 10⁻⁸ (1.000–1.005× to 16θ, 1.19–1.52× from 64θ or 256θ);
+    at ε ≥ 10⁻⁶ every class passes at θ = 1/2 on these trees (c_leaf 2), so nothing to gain;
+  - damped: at most 1.006× up to 1024θ, with more classes (kD = 500 + 50i, 10⁻⁸: 61 → 107;
+    kD = 100 + 100i, 10⁻⁶: 3 → 27). On pairs the factor over-predicts the input-relative error by
+    up to 10¹⁴ (η = 0.1) and 10²⁵ (η = 1); without it E under-predicts by up to 3.4·10⁶.
+  - Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-3a/`.
+- Checks: `/verify` on the M6 (load 6–44): fmt; Clippy (default, examples, workspace all-targets,
+  the last after fixing a range loop in the study); rustdoc with `-D warnings`; the default and
+  workspace tests at opt-level 1 (1,361 and 1,405 passed); the tables' whole ignored suite in
+  release on Kathleen (job 653633, at 70f78c7, 26 passed, 1 h 49 min; the study's last change
+  passed on the M6). Not run:
+  the MPI list (no exec, plan or octree change), `cargo deny` (no manifest), Laplace's benchmarks
+  (no Laplace path changed), the debug-time budgets (no non-ignored test added).
+- Decisions: signed off 2026-11-20 on #242, questions 1–4 as recommended: 1, the acceptance as
+  read, C_T and θ kept (C₀ is CH4.3c's);
+  2, the damping factor kept, a fitted one an Also on CH5.1; 3, below S6's range (k a < 2.8), an
+  Also on CH4.3b; 4, the split of CH4.3.
+- Laplace: not touched (a test of `nd-fmm-tables`, a flag of the validation harness, scripts).
+- Follow-ups: CH4.3b's Also (the rule below k a 2.8) and CH5.1's Also (a fitted damping factor),
+  in the roadmap; CH4.3b–CH4.3e.
