@@ -3902,7 +3902,8 @@ request, using this template:
   at load about 9 (CH4.2b1: 67 s at load 22–42), under its minute. Not run: `cargo deny` (no
   manifest), Laplace's benchmarks (no Laplace path changed), 8 ranks (no distributed code).
   Nothing pending.
-- Decisions: question 1 of the PR for sign-off (the acceptance as read).
+- Decisions: signed off 2026-11-20 with the merge request on #240, the user, 2026-11-20: "Merge the PR": question 1, the
+  acceptance as read, as recommended.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-ref` and `nd-fmm-tables`; doc comments of
   `nd-fmm-exec`'s Helmholtz operator).
 - Follow-ups: CH4.2c2 (roadmap: the operator's build setting and the rule's constants by the

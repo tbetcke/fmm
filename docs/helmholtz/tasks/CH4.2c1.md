@@ -170,4 +170,5 @@ rest of the interpolated build is the 72 `exp`s per sample (about 40 % at p = 13
 None.
 
 ## Open questions
-1. The acceptance as read (the PR's question 1).
+1. The acceptance as read (the PR's question 1): signed off 2026-11-20 with the merge request,
+   the user, 2026-11-20: "Merge the PR" (no separate answer to the question; accepted as recommended).
