@@ -704,7 +704,7 @@ task's full line is in its record or report and its progress entry
   `TransferBuild::Interpolated` (ref's `AngleTable`, S6's sinc series) within 2E at C_T = 0.23
   against RCR and the direct build on every class CI runs (at most 1.35 E), 2.3–9.6× faster per
   class at p = 41–245; both builds by ring, the direct build CH4.2a's bits. *Sign-off:* the
-  PR's question 1 with the merge request (the user on #240, 2026-11-20: "Merge the PR").
+  PR's question 1 as recommended (the user on #240, 2026-11-20: "Sign off Q1 as recommended").
 - [ ] **CH4.2c2 The interpolated build in the operator, and W1's tables timed.** *Done when:*
   the operator's build setting (the rule's constants by the build: C_T = 0.23 interpolated) and
   the harness's; the FMM within 1.1× Rotation's errors with it; W1 at kD = 500 and 1000's
