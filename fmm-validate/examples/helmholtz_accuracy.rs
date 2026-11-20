@@ -160,7 +160,8 @@
 //!   without it.
 //! - `--diagonal-build direct|interpolated,…` (Helmholtz CH4.2c2,
 //!   `HelmholtzFmmBuilder::diagonal_build`): the diagonal M2L's transfer functions per sample
-//!   (`direct`, the default) or interpolated in ŝ · t̂ (`interpolated`, the rule at C_T = 0.23),
+//!   (`direct`, the harness's default, so that CH4.2b2's runs repeat) or interpolated in ŝ · t̂
+//!   (`interpolated`, the rule at C_T = 0.23; the library's default since CH4.2c2's sign-off),
 //!   each `--diagonal` run other than `off` with each build in turn; the column "M2L" ends
 //!   with `/interp` for the interpolated build.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the

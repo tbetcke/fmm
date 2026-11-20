@@ -210,8 +210,8 @@ pub struct Case {
     /// CH4.3; named always, as `near_v`).
     pub diagonal: HelmholtzDiagonal,
     /// The diagonal M2L's transfer functions' build (`HelmholtzFmmBuilder::diagonal_build`,
-    /// Helmholtz CH4.2c2; [`TransferBuild::Direct`] in [`Case::new`], the library's default;
-    /// named always).
+    /// Helmholtz CH4.2c2; [`TransferBuild::Direct`] in [`Case::new`], named always, so that
+    /// CH4.2b2's runs repeat; the library's default is interpolated since CH4.2c2's sign-off).
     pub diagonal_build: TransferBuild,
 }
 

@@ -610,7 +610,8 @@ runs the task's stages, `ch4-2b2-tables.py` makes the report's tables. Its repor
 
 Helmholtz CH4.2c2 (the interpolated transfer build in the operator; docs/helmholtz/tasks/CH4.2c2.md)
 added `helmholtz_accuracy::Case::diagonal_build` (`HelmholtzFmmBuilder::diagonal_build`,
-`TransferBuild::Direct` in `Case::new`, named always) and `Row::diagonal_build_kind` (as built),
+`TransferBuild::Direct` in `Case::new`, named always, although the library's default is
+`Interpolated` since CH4.2c2's sign-off) and `Row::diagonal_build_kind` (as built),
 and to the example `--diagonal-build direct|interpolated,…` (each `--diagonal` run but `off` with
 each build; the column "M2L" ending `/interp`). `tests/helmholtz_accuracy.rs` (`check_diagonal`)
 checks the interpolated row on W1 at kD = 30. `tools/helmholtz/ch4-2c2-runs.sh` runs the task's

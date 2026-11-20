@@ -74,7 +74,7 @@ pub use fmm::{
     v_crossover, wx_costs, wx_crossovers,
 };
 pub use operator::{
-    AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, DEFAULT_RCR_BUFFER,
+    AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, DEFAULT_DIAGONAL_BUILD, DEFAULT_RCR_BUFFER,
     DIAGONAL_F32_MIN_TOLERANCE, DiagonalCounts, DiagonalTimes, HelmholtzDiagonal, HelmholtzM2l,
     HelmholtzOperator, LevelShape, M2L_MIN_BLOCK_TARGETS, MIN_BUFFER_BOXES, OperatorError,
     PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes,

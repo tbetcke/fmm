@@ -115,7 +115,9 @@ release build, `node` and `cores`). Raw outputs in `~/projects/fmm-archive/kathl
 
 ## Results
 - Built as planned; `Row::diagonal_build_kind` in place of the plan's `Row::diagonal_build`
-  (taken by the build seconds). The default stays `Direct` until question 1.
+  (taken by the build seconds). After question 1's sign-off the default is `Interpolated`
+  (`DEFAULT_DIAGONAL_BUILD`, operator and builder); the tests name `Direct` as the trusted path
+  and `check_interpolated` runs the builder's default.
 - Errors (report §2): the interpolated build 1.000× Rotation's errors (φ and ∇φ) on W1 at
   kD = 500 (10⁻⁶, 10⁻⁸) and 1000 (10⁻⁶) at 1 × 40 and 40 × 1, as the direct build; in CI's
   `check_interpolated` 1.000× on the cube at kD = 40 + 2i and the clusters at kD = 20.
@@ -135,3 +137,6 @@ release build, `node` and `cores`). Raw outputs in `~/projects/fmm-archive/kathl
 ## Open questions
 For sign-off on the PR (report §5): 1, the default build (recommended: `Interpolated`, with
 `Direct` named and the tests' trusted path); 2, the acceptance as read.
+
+Signed off 2026-11-20 by the user on #241: "Both questions as recommended". Proposal §5.4
+amended (the interpolated build the default).

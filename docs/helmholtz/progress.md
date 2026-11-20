@@ -3914,7 +3914,8 @@ request, using this template:
 - Done: the second half of CH4.2c.
   - `nd_fmm_exec::helmholtz`: `TransferBuild` (re-exported from `nd-fmm-tables`),
     `HelmholtzOperator::{with_diagonal_build, diagonal_build}`,
-    `HelmholtzFmmBuilder::diagonal_build` (default `Direct` until the sign-off);
+    `HelmholtzFmmBuilder::diagonal_build`, the default `DEFAULT_DIAGONAL_BUILD` =
+    `Interpolated` since the sign-off (the tests name `Direct` as the trusted path);
     `diagonal_rule_classes(p, k̂, ε, build)` reads `TransferBuild::bound_constants` (C_T = 0.15
     direct, 0.23 interpolated, f32's by either); `select` builds by `DiagonalM2l::build_by`.
   - `nd-fmm-validate`: `Case::diagonal_build`, `Row::diagonal_build_kind`, the example's
@@ -3949,8 +3950,12 @@ request, using this template:
   executable 51 s at load 4–9 (under its minute), `helmholtz_fmm`'s one-rank run 611 s at load
   7–10 (CH4.2b2: 1,807 s at load 39–49), `nd-fmm-validate`'s `helmholtz_accuracy` 282 s at load 3–10 (CH4.0e: 246 s at load 2–3; CH4.2b2: 849 s at load 39–49).
   Not run: `cargo deny` (no manifest), Laplace's benchmarks (no Laplace path changed), 8 ranks
-  (no distributed code). Nothing pending.
-- Decisions: questions for sign-off on the PR: 1, the default build (recommended
-  `Interpolated`); 2, the acceptance as read.
+  (no distributed code). After the default change (the sign-off) again: fmt, Clippy, rustdoc,
+  the default and workspace tests at opt-level 1 (1,361 and 1,405 passed), the MPI list at 2 and
+  4 ranks (every executable passed; `helmholtz_fmm` 61 and 66 s, the M6's other jobs varying).
+  Nothing pending.
+- Decisions: signed off 2026-11-20 by the user on #241, "Both questions as recommended": 1, the
+  default build `Interpolated` (applied on the branch; proposal §5.4 amended); 2, the acceptance
+  as read.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness).
 - Follow-ups: CH4.3's Also (roadmap): C_T and θ confirmed for the default build.

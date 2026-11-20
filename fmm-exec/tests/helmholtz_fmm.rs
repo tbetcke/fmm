@@ -93,8 +93,9 @@
 //! the one-vector FMM, and the budget's floor Rotation's bits; where Auto leaves no RCR level,
 //! the setting's output unchanged. Its debug cost: about 110 s of the one-rank run on a loaded
 //! M6 (load about 23), 8 s at CI's opt-level 1. Under Rotation also with interpolated transfer
-//! functions (Helmholtz CH4.2c2, `check_interpolated`): each level's classes within the direct
-//! build's, the errors within `DIAGONAL_RATIO` of Rotation's, 2 threads and the one-rank FMM bit
+//! functions, the library's default build since CH4.2c2's sign-off (Helmholtz CH4.2c2,
+//! `check_interpolated`; the other checks name the direct build): each level's classes within
+//! the direct build's, the errors within `DIAGONAL_RATIO` of Rotation's, 2 threads and the one-rank FMM bit
 //! for bit.
 //!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
@@ -114,11 +115,11 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
-    DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, DiagonalTimes, HelmholtzDiagonal,
-    HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES,
-    OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit,
-    PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear,
-    auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
+    DEFAULT_DIAGONAL_BUILD, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, DiagonalTimes,
+    HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l,
+    MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
+    PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild, VNear,
+    Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
     auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
@@ -2154,7 +2155,10 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
         let (fmm, plain) = run(&base, &inputs, kind, comm);
         let plain_errors = errors(scenario, &inputs, &plain, 0, comm);
         drop(fmm);
-        let diagonal = base.clone().diagonal(HelmholtzDiagonal::Rule);
+        // The direct build named: the trusted path (the library's default build, interpolated
+        // since Helmholtz CH4.2c2's sign-off, is `check_interpolated`'s).
+        let ruled = base.clone().diagonal(HelmholtzDiagonal::Rule);
+        let diagonal = ruled.clone().diagonal_build(TransferBuild::Direct);
         let (mut fmm, want) = run(&diagonal, &inputs, kind, comm);
         let what = format!("{name}, {setting} with the diagonal M2L");
         // A second evaluation: the same bits, and the buffer sized by the build holds every
@@ -2274,7 +2278,7 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
             check_interpolated(
                 &what,
                 scenario,
-                &diagonal,
+                &ruled,
                 &inputs,
                 &direct_classes,
                 plain_errors,
@@ -2332,7 +2336,8 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
 }
 
 /// The diagonal M2L with interpolated transfer functions (Helmholtz CH4.2c2) on `diagonal`'s
-/// settings: the build reported, each level's classes within the direct build's
+/// settings, the build not named: the library's default ([`DEFAULT_DIAGONAL_BUILD`],
+/// interpolated since CH4.2c2's sign-off) reported, each level's classes within the direct build's
 /// (`direct_classes`; C_T = 0.23 against 0.15) and the same on every rank, the errors against
 /// the direct sum within [`DIAGONAL_RATIO`] of Rotation's (`plain`), 2 threads bit for bit one,
 /// on P ranks the one-rank FMM bit for bit.
@@ -2347,10 +2352,15 @@ fn check_interpolated(
 ) {
     let kind = scenario.charges;
     let what = format!("{what}, interpolated");
-    let interpolated = diagonal.clone().diagonal_build(TransferBuild::Interpolated);
+    let interpolated = diagonal.clone();
     let (fmm, want) = run(&interpolated, inputs, kind, comm);
     let op = fmm.operator();
-    assert_eq!(op.diagonal_build(), TransferBuild::Interpolated, "{what}");
+    assert_eq!(DEFAULT_DIAGONAL_BUILD, TransferBuild::Interpolated);
+    assert_eq!(
+        op.diagonal_build(),
+        TransferBuild::Interpolated,
+        "{what}: the default"
+    );
     let classes: Vec<Vec<usize>> = (0..fmm.nlevels())
         .map(|l| op.diagonal_classes(l).unwrap_or_default())
         .collect();

@@ -13,8 +13,8 @@ is the default, for sign-off."
   (`HelmholtzOperator::with_diagonal_build`) and of the builder
   (`HelmholtzFmmBuilder::diagonal_build`). The rule reads the build's constants: C_T = 0.15 for
   direct, 0.23 for interpolated, and f32's constants for f32 by either build. The harness takes
-  `--diagonal-build direct|interpolated`. The default stays `Direct` until question 1 is
-  answered.
+  `--diagonal-build direct|interpolated`. Since question 1's sign-off the default is
+  `Interpolated` (`DEFAULT_DIAGONAL_BUILD`); `Direct` is named.
 - **The errors** (§2). The interpolated build's FMM is 1.000× Rotation's errors for φ and ∇φ on
   all three W1 cases at both splits. That is the same as the direct build's. CI's tests hold it
   within 1.1× on the cube at kD = 40 + 2i and the clusters at kD = 20.
@@ -32,7 +32,7 @@ is the default, for sign-off."
 - **Bits** (§4). Each build gives one checksum at 1 × 40 and at 40 × 1. The direct build's
   checksum at kD = 500 and 10⁻⁶ is CH4.2b2's `c74ca0e7954cf9ba`, so the direct tables split by
   ring are CH4.2b2's bits in the full FMM.
-- **Recommendation** (question 1): make `Interpolated` the default build.
+- **Sign-off** (§5): both questions as recommended; `Interpolated` is the default build.
 
 ## 1. Setup
 
@@ -173,6 +173,11 @@ Rank 0's peak resident size: 5.7 and 6.8 GB at 1 × 40 for kD = 500 (one process
 FMMs), 17.2 GB at kD = 1000; 1.2–1.3 GB at 40 × 1 for kD = 500, 3.9 GB at kD = 1000.
 
 ## 5. Questions for sign-off
+
+Signed off 2026-11-20 by the user on #241, both as recommended: "Both questions as
+recommended." The default build is `TransferBuild::Interpolated` (`DEFAULT_DIAGONAL_BUILD`) in
+the operator and the builder, applied on the branch before the merge; the runs above named
+both builds and are unchanged by it.
 
 1. **The default build.** The interpolated build gave the same errors (1.000× Rotation's) and
    the same classes per level as the direct build on every W1 case. Its tables are 4.0–5.7×

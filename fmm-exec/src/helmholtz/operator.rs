@@ -246,10 +246,11 @@
 //! such a level with E(l, c) ≤ θ ε ([`diagonal_rule_classes`]: the bound of
 //! `nd_fmm_tables::helmholtz::diagonal::class_bounds`, θ = 1/2, S6's constants of f64 for the
 //! transfer functions' build, or of f32 at ε ≥ 10⁻⁴ only, decision D3) takes `DiagonalM2l`'s
-//! transfer function; the others stay on RCR. The transfer functions are built per sample in
-//! double-double ([`TransferBuild::Direct`], the default, C_T = 0.15) or interpolated in ŝ · t̂
-//! from a double-double table ([`TransferBuild::Interpolated`], C_T = 0.23, so a class may need
-//! a looser tolerance; Helmholtz CH4.2c2,
+//! transfer function; the others stay on RCR. The transfer functions are interpolated in ŝ · t̂
+//! from a double-double table ([`TransferBuild::Interpolated`], C_T = 0.23, the default
+//! [`DEFAULT_DIAGONAL_BUILD`] since its sign-off) or built per sample in double-double
+//! ([`TransferBuild::Direct`], C_T = 0.15, so a class may pass at a tighter tolerance; the
+//! trusted path; Helmholtz CH4.2c2,
 //! [`with_diagonal_build`](HelmholtzOperator::with_diagonal_build)).
 //! [`HelmholtzDiagonal::Rule`] reads the FMM's tolerance
 //! ([`with_plane_wave_tolerance`](HelmholtzOperator::with_plane_wave_tolerance)),
@@ -378,8 +379,8 @@ mod plane_wave;
 mod rcr;
 
 pub use diagonal::{
-    DIAGONAL_F32_MIN_TOLERANCE, DiagonalCounts, DiagonalTimes, HelmholtzDiagonal,
-    diagonal_chunk_targets, diagonal_rule_classes,
+    DEFAULT_DIAGONAL_BUILD, DIAGONAL_F32_MIN_TOLERANCE, DiagonalCounts, DiagonalTimes,
+    HelmholtzDiagonal, diagonal_chunk_targets, diagonal_rule_classes,
 };
 use diagonal::{DiagonalBuffer, DiagonalLevel, DiagonalScratch, DiagonalSettings};
 pub use nd_fmm_tables::helmholtz::diagonal::TransferBuild;
@@ -1759,7 +1760,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// Builds the diagonal form's transfer functions by `build` (Helmholtz CH4.2c2; default
-    /// [`TransferBuild::Direct`]): the rule then reads that build's constants
+    /// [`DEFAULT_DIAGONAL_BUILD`], interpolated): the rule then reads that build's constants
     /// ([`diagonal_rule_classes`]; C_T = 0.15 direct, 0.23 interpolated, in f64), so the
     /// interpolated build may take fewer classes at a tolerance. The tables are chosen again.
     pub fn with_diagonal_build(mut self, build: TransferBuild) -> Self {

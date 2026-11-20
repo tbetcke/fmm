@@ -8,8 +8,8 @@
 //! takes the offset classes c with E(l, c) ≤ θ ε (`nd_fmm_tables::helmholtz::diagonal::
 //! class_bounds` at the level's degree and wavenumber, θ = `nd_fmm_ref`'s `THETA` = 1/2) to the
 //! diagonal form, by [`diagonal_rule_classes`]: S6's constants of the setting's build of the
-//! transfer functions in f64 ([`TransferBuild::Direct`]'s C_T = 0.15, `Interpolated`'s 0.23;
-//! Helmholtz CH4.2c2), or of f32 at ε ≥ [`DIAGONAL_F32_MIN_TOLERANCE`] only (decision D3) by
+//! transfer functions in f64 ([`TransferBuild::Direct`]'s C_T = 0.15, `Interpolated`'s 0.23,
+//! the default [`DEFAULT_DIAGONAL_BUILD`]; Helmholtz CH4.2c2), or of f32 at ε ≥ [`DIAGONAL_F32_MIN_TOLERANCE`] only (decision D3) by
 //! either build. Every other class stays on RCR. A level holds
 //! the transfer functions of its classes (`DiagonalM2l::build_by` of the setting's build, one
 //! part per (class, ring) on the pool)
@@ -205,8 +205,15 @@ impl DiagonalTimes {
     }
 }
 
+/// The default build of the diagonal form's transfer functions: interpolated in ŝ · t̂ from a
+/// double-double table (Helmholtz CH4.2c2, its question 1, signed off 2026-11-20 on #241; the
+/// rule's C_T = 0.23). On W1 at kD = 500 and 1000 it gave the direct build's errors and classes
+/// with tables 4.0–6.4× faster to build (fmm-validate/results/helmholtz-ch4-2c2.md).
+/// [`TransferBuild::Direct`] stays a named setting and the tests' trusted path.
+pub const DEFAULT_DIAGONAL_BUILD: TransferBuild = TransferBuild::Interpolated;
+
 /// The diagonal settings of the operator (module documentation, "The rule").
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(super) struct DiagonalSettings {
     pub(super) choice: HelmholtzDiagonal,
     /// The transfer functions' build (Helmholtz CH4.2c2), which the rule's constants follow.
@@ -217,6 +224,19 @@ pub(super) struct DiagonalSettings {
     pub(super) sources: Option<Vec<usize>>,
     /// The chunk width if named, else [`diagonal_chunk_targets`]'s.
     pub(super) chunk: Option<usize>,
+}
+
+impl Default for DiagonalSettings {
+    /// Off, [`DEFAULT_DIAGONAL_BUILD`], no budget, no source counts, the chunk width by rule.
+    fn default() -> Self {
+        Self {
+            choice: HelmholtzDiagonal::default(),
+            build: DEFAULT_DIAGONAL_BUILD,
+            budget: None,
+            sources: None,
+            chunk: None,
+        }
+    }
 }
 
 impl DiagonalSettings {

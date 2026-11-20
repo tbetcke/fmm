@@ -8,9 +8,9 @@
 
 use nd_fmm_exec::geometry::{self, Domain, radius};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DIAGONAL_F32_MIN_TOLERANCE, Densities, HelmholtzDiagonal, HelmholtzM2l,
-    HelmholtzOperator, TransferBuild, Wavenumber, diagonal_chunk_targets, diagonal_rule_classes,
-    s7_degree,
+    ChargeKind, Charges, DEFAULT_DIAGONAL_BUILD, DIAGONAL_F32_MIN_TOLERANCE, Densities,
+    HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, TransferBuild, Wavenumber,
+    diagonal_chunk_targets, diagonal_rule_classes, s7_degree,
 };
 use nd_fmm_math::Complex;
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
@@ -153,6 +153,9 @@ fn no_level_where_the_rule_does_not_apply() {
         HelmholtzOperator::<f64>::new(k, densities, &domain(), &degrees(&k, EPSILON), false, 64)
             .unwrap();
     assert_eq!(default.diagonal(), HelmholtzDiagonal::Off);
+    // The default build (Helmholtz CH4.2c2's sign-off).
+    assert_eq!(default.diagonal_build(), DEFAULT_DIAGONAL_BUILD);
+    assert_eq!(DEFAULT_DIAGONAL_BUILD, TransferBuild::Interpolated);
     assert!(none(&default));
     let rule = operator::<f64>(k, ChargeKind::Complex, 1, HelmholtzDiagonal::Rule);
     assert!(none(&rule));
