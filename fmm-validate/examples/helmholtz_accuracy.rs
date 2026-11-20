@@ -158,6 +158,11 @@
 //!   thread-seconds, GF/s; on one rank only, `–` on several), and the build of the level's transfer functions and conversions.
 //!   A Rotation row with the diagonal form has a "÷ Rotation" against the Rotation row
 //!   without it.
+//! - `--diagonal-build direct|interpolated,…` (Helmholtz CH4.2c2,
+//!   `HelmholtzFmmBuilder::diagonal_build`): the diagonal M2L's transfer functions per sample
+//!   (`direct`, the default) or interpolated in ŝ · t̂ (`interpolated`, the rule at C_T = 0.23),
+//!   each `--diagonal` run other than `off` with each build in turn; the column "M2L" ends
+//!   with `/interp` for the interpolated build.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
 //!   touches the buffers, which on a large exponential M2L's waves costs seconds).
@@ -189,7 +194,7 @@ use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzDiagonal, HelmholtzM2l, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, VNear, Wavenumber, WxNear, s7_degree,
+    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -224,6 +229,7 @@ struct Arguments {
     splits: Vec<Option<PlaneWaveSplit>>,
     rcr_splits: Vec<Option<RcrSplit>>,
     diagonals: Vec<HelmholtzDiagonal>,
+    diagonal_builds: Vec<TransferBuild>,
     raises: Vec<Option<PlaneWaveRaise>>,
     terms: Vec<bool>,
     blocks: Vec<Option<usize>>,
@@ -304,6 +310,7 @@ fn arguments() -> Arguments {
              [--reach corner|r,…] \
              [--split auto|parents|children,…] [--raise rule|level|leaves|m2l,…] \
              [--rcr-split auto|boxes|pairs,…] [--diagonal off|rule|<ε>,…] \
+             [--diagonal-build direct|interpolated,…] \
              [--term on|off,…] [--block auto|w,…] [--empty-boxes on|off,…] [--near-v off|cost|n|inf,…] [--near-wx off|cost|n|inf,…] \
              [--leaf-size auto|n,…] [--c-leaf auto|c,…] [--levels] \
              [--evaluations n]; got {args:?}"
@@ -330,6 +337,7 @@ fn arguments() -> Arguments {
         splits: vec![None],
         rcr_splits: vec![None],
         diagonals: vec![HelmholtzDiagonal::Off],
+        diagonal_builds: vec![TransferBuild::Direct],
         raises: vec![None],
         terms: vec![true],
         blocks: vec![None],
@@ -497,6 +505,16 @@ fn arguments() -> Arguments {
                         })
                         .collect::<Option<Vec<_>>>()
                         .map(|d| parsed.diagonals = d)
+                        .is_some(),
+                    "--diagonal-build" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "direct" => Some(TransferBuild::Direct),
+                            "interpolated" => Some(TransferBuild::Interpolated),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|b| parsed.diagonal_builds = b)
                         .is_some(),
                     "--raise" => value
                         .split(',')
@@ -798,12 +816,16 @@ fn setting_name(row: &Row) -> String {
 }
 
 /// For a row with the diagonal M2L `/diag` (at the FMM's tolerance) or `/diag<ε>` (Helmholtz
-/// CH4.2b2); else empty.
+/// CH4.2b2), followed by `/interp` for the interpolated build (Helmholtz CH4.2c2); else empty.
 fn diagonal_suffix(row: &Row) -> String {
+    let build = match row.diagonal_build_kind {
+        TransferBuild::Direct => "",
+        TransferBuild::Interpolated => "/interp",
+    };
     match row.diagonal {
         HelmholtzDiagonal::Off => String::new(),
-        HelmholtzDiagonal::Rule => "/diag".into(),
-        HelmholtzDiagonal::Tolerance(e) => format!("/diag{e:e}"),
+        HelmholtzDiagonal::Rule => format!("/diag{build}"),
+        HelmholtzDiagonal::Tolerance(e) => format!("/diag{e:e}{build}"),
     }
 }
 
@@ -1412,21 +1434,37 @@ fn main() {
                 .flat_map(|&n| arguments.c_leaves.iter().map(move |&c| (n, c)))
                 .collect();
             // `--rcr-split` outermost (Helmholtz CH4.0i): no bit depends on it.
-            // `--diagonal` outside it (Helmholtz CH4.2b2).
-            let mut runs_by_rule = Vec::new();
+            // `--diagonal` outside it (Helmholtz CH4.2b2), each with each `--diagonal-build`
+            // (Helmholtz CH4.2c2; `off` once, with the first build).
+            let mut diagonals = Vec::new();
             for &diagonal in &arguments.diagonals {
+                if diagonal == HelmholtzDiagonal::Off {
+                    diagonals.push((diagonal, arguments.diagonal_builds[0]));
+                } else {
+                    diagonals.extend(arguments.diagonal_builds.iter().map(|&b| (diagonal, b)));
+                }
+            }
+            let mut runs_by_rule = Vec::new();
+            for &(diagonal, build) in &diagonals {
                 for &rcr in &arguments.rcr_splits {
                     for &tree in &trees {
                         for &rule in &rules {
-                            runs_by_rule.push((diagonal, rcr, tree, rule));
+                            runs_by_rule.push((diagonal, build, rcr, tree, rule));
                         }
                     }
                 }
             }
             let rules = runs_by_rule;
-            for (diagonal, rcr_split, (leaf_size, c_leaf), (empty_boxes, near_v, near_wx)) in rules
+            for (
+                diagonal,
+                diagonal_build,
+                rcr_split,
+                (leaf_size, c_leaf),
+                (empty_boxes, near_v, near_wx),
+            ) in rules
             {
                 case.diagonal = diagonal;
+                case.diagonal_build = diagonal_build;
                 case.rcr_split = rcr_split;
                 case.max_points_per_leaf = leaf_size;
                 case.c_leaf = c_leaf;

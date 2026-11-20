@@ -57,7 +57,10 @@
 //!   [`Row::diagonal_classes`] per level the classes it took, [`Row::diagonal_pairs`] the
 //!   pairs on each form, [`Row::diagonal_seconds`] the level call's passes and parts,
 //!   [`Row::diagonal_conversions`] the conversions computed, [`Row::diagonal_build`] the
-//!   tables' build and [`Row::diagonal_multiply_adds`] a conversion's multiply-adds.
+//!   tables' build and [`Row::diagonal_multiply_adds`] a conversion's multiply-adds;
+//!   [`Case::diagonal_build`] (Helmholtz CH4.2c2) the transfer functions' build
+//!   (`HelmholtzFmmBuilder::diagonal_build`, direct or interpolated), [`Row::diagonal_build_kind`]
+//!   as built.
 //!   [`Case::empty_boxes`] (Helmholtz CH4.0d1) whether the plan leaves out the work of boxes
 //!   whose subtree holds no target or no source point (on by default, the library's);
 //!   [`Row::left_out`] what it left out and [`Row::remote_multipoles`] the multipoles the
@@ -86,7 +89,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DiagonalCounts, DiagonalTimes,
     HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l,
     LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit,
-    PlaneWaveTimes, RcrSplit, VNear, Wavenumber, WxNear,
+    PlaneWaveTimes, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -206,6 +209,10 @@ pub struct Case {
     /// CH4.2b2; [`HelmholtzDiagonal::Off`] in [`Case::new`], the library's default until
     /// CH4.3; named always, as `near_v`).
     pub diagonal: HelmholtzDiagonal,
+    /// The diagonal M2L's transfer functions' build (`HelmholtzFmmBuilder::diagonal_build`,
+    /// Helmholtz CH4.2c2; [`TransferBuild::Direct`] in [`Case::new`], the library's default;
+    /// named always).
+    pub diagonal_build: TransferBuild,
 }
 
 impl Case {
@@ -248,6 +255,7 @@ impl Case {
             block_budget: None,
             rcr_split: None,
             diagonal: HelmholtzDiagonal::Off,
+            diagonal_build: TransferBuild::Direct,
         }
     }
 }
@@ -767,6 +775,9 @@ pub struct Row {
     pub near_interactions: Vec<u64>,
     /// The diagonal M2L's setting as built (Helmholtz CH4.2b2).
     pub diagonal: HelmholtzDiagonal,
+    /// The diagonal M2L's transfer functions' build as built (Helmholtz CH4.2c2;
+    /// `HelmholtzOperator::diagonal_build`).
+    pub diagonal_build_kind: TransferBuild,
     /// Per level, the offset classes that took the diagonal form (0 where the level has none;
     /// `HelmholtzOperator::diagonal_classes`), the same on every rank.
     pub diagonal_classes: Vec<usize>,
@@ -1043,7 +1054,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(split) = case.rcr_split {
         builder = builder.rcr_split(split);
     }
-    builder = builder.diagonal(case.diagonal);
+    builder = builder
+        .diagonal(case.diagonal)
+        .diagonal_build(case.diagonal_build);
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
     }
@@ -1386,6 +1399,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         p2p_seconds,
         near_interactions,
         diagonal: fmm.operator().diagonal(),
+        diagonal_build_kind: fmm.operator().diagonal_build(),
         diagonal_classes: diagonal.classes,
         diagonal_pairs: diagonal.pairs,
         diagonal_conversions: diagonal.conversions,
