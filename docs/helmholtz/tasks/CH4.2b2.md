@@ -126,3 +126,6 @@ For sign-off on the PR (report §7): 1, the acceptance as read; 2, a new task CH
 interpolated transfer build in parts finer than a class) before CH4.3; 3, CH4.2d (dispatched
 kernels for the pair and the conversions) off the list; 4, an Also on CH4.3: the order between
 the exponential M2L (D8) and the diagonal form per level.
+
+Signed off 2026-11-20 by the user on #239, all four as recommended: "All 4 questions as
+recommended."

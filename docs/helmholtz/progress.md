@@ -3849,10 +3849,11 @@ request, using this template:
   (about 1–2 s at opt-level 1). Not measured on a quiet M6. Not run: `cargo deny` (no
   manifest), Laplace's benchmarks (no Laplace path changed), 8 ranks (no distributed code).
   Nothing pending.
-- Decisions: questions for sign-off on the PR: 1, the acceptance as read; 2, CH4.2c (the
-  interpolated transfer build, in parts finer than a class) before CH4.3; 3, CH4.2d (kernels for
-  the pair and the conversions) off the list; 4, an Also on CH4.3, the order between the
-  exponential M2L (D8) and the diagonal form.
+- Decisions: signed off 2026-11-20 by the user on #239, "All 4 questions as recommended.": 1,
+  the acceptance as read; 2, CH4.2c (the interpolated transfer build, in parts finer than a
+  class) before CH4.3; 3, CH4.2d (kernels for the pair and the conversions) off the list,
+  reconsidered at CH4.5; 4, an Also on CH4.3, the order between the exponential M2L (D8) and the
+  diagonal form.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness).
-- Follow-ups: CH4.2c and CH4.2d (roadmap, proposed, pending sign-off); CH4.3's Also on the
-  order against the exponential M2L (roadmap, pending sign-off).
+- Follow-ups: CH4.2c (roadmap, item 10, before CH4.3) and CH4.2d (roadmap, off the list);
+  CH4.3's Also on the order against the exponential M2L.

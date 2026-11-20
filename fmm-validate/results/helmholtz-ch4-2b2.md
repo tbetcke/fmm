@@ -291,6 +291,9 @@ one-rank rates only.
 
 ## 7. Questions for sign-off
 
+Signed off 2026-11-20 by the user on #239, all four as recommended: "All 4 questions as
+recommended."
+
 1. **The acceptance as read.** On W1 at kD = 500 (10⁻⁶, 10⁻⁸) and kD = 1000 (10⁻⁶), at 1 × 40 on
    Kathleen and 1 × 72 on locust:
    - the FMM with the diagonal form is 1.000× Rotation's errors;
