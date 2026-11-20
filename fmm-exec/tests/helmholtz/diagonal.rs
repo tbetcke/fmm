@@ -1,14 +1,16 @@
 //! The operator's diagonal M2L (Helmholtz CH4.2b1): the rule per level (the classes with
-//! E(l, c) ≤ θ ε, none when off, without a tolerance, in f32 below 10⁻⁴, on levels whose M2L is
-//! not RCR's, or where the scratch budget binds), and the pair body against Rotation's within
-//! 2E in the measure of CH1.3d1 (P2M of charges in the source box, L2P at points of the target
-//! box, relative ℓ2 of the potential), with the classes on RCR Rotation's bits. The level call
-//! in the FMM is tested in `tests/helmholtz_fmm.rs` (`check_diagonal`).
+//! E(l, c) ≤ θ ε by the constants of the transfer functions' build (Helmholtz CH4.2c2), none
+//! when off, without a tolerance, in f32 below 10⁻⁴, on levels whose M2L is not RCR's, or where
+//! the scratch budget binds), and the pair body against Rotation's within 2E in the measure of
+//! CH1.3d1 (P2M of charges in the source box, L2P at points of the target box, relative ℓ2 of
+//! the potential), with the classes on RCR Rotation's bits, by both builds. The level call in
+//! the FMM is tested in `tests/helmholtz_fmm.rs` (`check_diagonal`).
 
 use nd_fmm_exec::geometry::{self, Domain, radius};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DIAGONAL_F32_MIN_TOLERANCE, Densities, HelmholtzDiagonal, HelmholtzM2l,
-    HelmholtzOperator, Wavenumber, diagonal_chunk_targets, diagonal_rule_classes, s7_degree,
+    ChargeKind, Charges, DEFAULT_DIAGONAL_BUILD, DIAGONAL_F32_MIN_TOLERANCE, Densities,
+    HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, TransferBuild, Wavenumber,
+    diagonal_chunk_targets, diagonal_rule_classes, s7_degree,
 };
 use nd_fmm_math::Complex;
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
@@ -68,45 +70,67 @@ fn class_index(o: [i64; 3]) -> usize {
         .expect("every V offset has a class")
 }
 
-/// The rule's classes per level: those with E ≤ θ ε, the same as `diagonal_rule_classes`.
+/// The rule's classes per level: those with E ≤ θ ε by the constants of the build, the same as
+/// `diagonal_rule_classes`; the interpolated build's (C_T = 0.23) a subset of the direct build's
+/// (0.15) on every level, and fewer on some (Helmholtz CH4.2c2).
 #[test]
 fn the_rule_takes_the_classes_within_the_bound() {
+    let mut fewer = 0;
     for (re, im) in [(40.0, 0.0), (40.0, 4.0)] {
         let k = Wavenumber::new(re, im).unwrap();
-        let op = operator::<f64>(
-            k,
-            ChargeKind::Complex,
-            1,
-            HelmholtzDiagonal::Tolerance(EPSILON),
-        );
         let p = degrees(&k, EPSILON);
-        let mut some_level = false;
-        for (l, &p_l) in p.iter().enumerate() {
-            let expected: Vec<usize> = if l < 2 {
-                Vec::new()
-            } else {
-                class_bounds(p_l, k_hat(&k, l), BoundConstants::F64)
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, &e)| e <= THETA * EPSILON)
-                    .map(|(c, _)| c)
-                    .collect()
-            };
-            if l >= 2 {
-                assert_eq!(
-                    diagonal_rule_classes::<f64>(p_l, k_hat(&k, l), EPSILON),
-                    expected
-                );
+        let mut by_build = Vec::new();
+        for build in [TransferBuild::Direct, TransferBuild::Interpolated] {
+            let op = operator::<f64>(
+                k,
+                ChargeKind::Complex,
+                1,
+                HelmholtzDiagonal::Tolerance(EPSILON),
+            )
+            .with_diagonal_build(build);
+            assert_eq!(op.diagonal_build(), build);
+            let mut some_level = false;
+            let mut levels = Vec::new();
+            for (l, &p_l) in p.iter().enumerate() {
+                let expected: Vec<usize> = if l < 2 {
+                    Vec::new()
+                } else {
+                    class_bounds(p_l, k_hat(&k, l), build.bound_constants(false))
+                        .iter()
+                        .enumerate()
+                        .filter(|&(_, &e)| e <= THETA * EPSILON)
+                        .map(|(c, _)| c)
+                        .collect()
+                };
+                if l >= 2 {
+                    assert_eq!(
+                        diagonal_rule_classes::<f64>(p_l, k_hat(&k, l), EPSILON, build),
+                        expected
+                    );
+                }
+                let got = op.diagonal_classes(l).unwrap_or_default();
+                println!("k = {re} + {im}i, {build:?}, level {l}, p {p_l}: classes {got:?}");
+                assert_eq!(got, expected, "{build:?}, level {l}");
+                some_level |= !got.is_empty();
+                // The M2L reported stays Rotation's (the RCR pairs of the level).
+                assert_eq!(op.m2l_on(l), HelmholtzM2l::Rotation);
+                levels.push(got);
             }
-            let got = op.diagonal_classes(l).unwrap_or_default();
-            println!("k = {re} + {im}i, level {l}, p {p_l}: classes {got:?}");
-            assert_eq!(got, expected, "level {l}");
-            some_level |= !got.is_empty();
-            // The M2L reported stays Rotation's (the RCR pairs of the level).
-            assert_eq!(op.m2l_on(l), HelmholtzM2l::Rotation);
+            assert!(some_level, "{build:?}: some level takes the diagonal form");
+            by_build.push(levels);
         }
-        assert!(some_level, "some level takes the diagonal form");
+        for (l, (direct, interpolated)) in by_build[0].iter().zip(&by_build[1]).enumerate() {
+            assert!(
+                interpolated.iter().all(|c| direct.contains(c)),
+                "k = {re} + {im}i, level {l}: {interpolated:?} not within {direct:?}"
+            );
+            fewer += usize::from(interpolated.len() < direct.len());
+        }
     }
+    assert!(
+        fewer > 0,
+        "the interpolated build's rule took fewer classes on no level"
+    );
     // Level 3 at k = 40, 10⁻⁴ (k a = 4.3): the near classes on RCR, so the level is mixed.
     let k = Wavenumber::new(40.0, 0.0).unwrap();
     let op = operator::<f64>(
@@ -129,6 +153,9 @@ fn no_level_where_the_rule_does_not_apply() {
         HelmholtzOperator::<f64>::new(k, densities, &domain(), &degrees(&k, EPSILON), false, 64)
             .unwrap();
     assert_eq!(default.diagonal(), HelmholtzDiagonal::Off);
+    // The default build (Helmholtz CH4.2c2's sign-off).
+    assert_eq!(default.diagonal_build(), DEFAULT_DIAGONAL_BUILD);
+    assert_eq!(DEFAULT_DIAGONAL_BUILD, TransferBuild::Interpolated);
     assert!(none(&default));
     let rule = operator::<f64>(k, ChargeKind::Complex, 1, HelmholtzDiagonal::Rule);
     assert!(none(&rule));
@@ -160,7 +187,9 @@ fn no_level_where_the_rule_does_not_apply() {
         HelmholtzDiagonal::Tolerance(DIAGONAL_F32_MIN_TOLERANCE / 2.0),
     );
     assert!((0..LEVELS).all(|l| below.diagonal_classes(l).is_none()));
-    assert!(diagonal_rule_classes::<f32>(20, k_hat(&k, 2), 5e-5).is_empty());
+    for build in [TransferBuild::Direct, TransferBuild::Interpolated] {
+        assert!(diagonal_rule_classes::<f32>(20, k_hat(&k, 2), 5e-5, build).is_empty());
+    }
     let f32_op = operator::<f32>(
         k,
         ChargeKind::Complex,
@@ -176,6 +205,11 @@ fn no_level_where_the_rule_does_not_apply() {
             .map(|(c, _)| c)
             .collect();
         assert_eq!(f32_op.diagonal_classes(l).unwrap_or_default(), expected);
+        // f32 tables are the f64 tables rounded: F32's constants by either build.
+        assert_eq!(
+            diagonal_rule_classes::<f32>(p_l, k_hat(&k, l), 1e-3, TransferBuild::Interpolated),
+            expected
+        );
     }
 }
 
@@ -276,23 +310,29 @@ fn source_chunk(
 
 /// The pair body on every V offset of levels 2 and 3 against Rotation's: the diagonal classes within
 /// 2E(l, c) in CH1.3d1's measure (relative ℓ2 of the potential at points of the target box
-/// from charges in the source box), each vector; the RCR classes Rotation's bits.
+/// from charges in the source box), each vector, E by the constants of the transfer functions'
+/// build (the interpolated build, Helmholtz CH4.2c2, on the one-vector cases); the RCR classes
+/// Rotation's bits.
 #[test]
 fn the_pair_body_against_rotation_within_the_bound() {
-    for (level, (re, im, kind, m)) in [2, 3].into_iter().flat_map(|level| {
+    use TransferBuild::{Direct, Interpolated};
+    for (level, (re, im, kind, m, build)) in [2, 3].into_iter().flat_map(|level| {
         [
-            (40.0, 0.0, ChargeKind::Complex, 1),
-            (40.0, 0.0, ChargeKind::Real, 2),
-            (40.0, 4.0, ChargeKind::Complex, 1),
+            (40.0, 0.0, ChargeKind::Complex, 1, Direct),
+            (40.0, 0.0, ChargeKind::Real, 2, Direct),
+            (40.0, 4.0, ChargeKind::Complex, 1, Direct),
+            (40.0, 0.0, ChargeKind::Complex, 1, Interpolated),
+            (40.0, 4.0, ChargeKind::Complex, 1, Interpolated),
         ]
         .map(|case| (level, case))
     }) {
         let k = Wavenumber::new(re, im).unwrap();
         let densities = Densities::new(k.kind(), kind, m);
-        let mut diagonal = operator::<f64>(k, kind, m, HelmholtzDiagonal::Tolerance(EPSILON));
+        let mut diagonal = operator::<f64>(k, kind, m, HelmholtzDiagonal::Tolerance(EPSILON))
+            .with_diagonal_build(build);
         let mut rotation = operator::<f64>(k, kind, m, HelmholtzDiagonal::Off);
         let p = diagonal.degree(level);
-        let bounds = class_bounds(p, k_hat(&k, level), BoundConstants::F64);
+        let bounds = class_bounds(p, k_hat(&k, level), build.bound_constants(false));
         let stored = diagonal
             .diagonal_classes(level)
             .expect("level 2 is diagonal");
@@ -341,14 +381,14 @@ fn the_pair_body_against_rotation_within_the_bound() {
                 worst = worst.max(ratio);
                 assert!(
                     ratio <= 2.0,
-                    "k = {re} + {im}i, offset {d}, class {class}, vector {v}: {error:.2e} against E = {:.2e}",
+                    "k = {re} + {im}i, {build:?}, offset {d}, class {class}, vector {v}: {error:.2e} against E = {:.2e}",
                     bounds[class]
                 );
             }
         }
         assert!(taken > 0);
         println!(
-            "level {level}, k = {re} + {im}i, {kind:?}, m = {m}: {taken} offsets diagonal, worst {worst:.3} E"
+            "level {level}, k = {re} + {im}i, {kind:?}, m = {m}, {build:?}: {taken} offsets diagonal, worst {worst:.3} E"
         );
     }
 }

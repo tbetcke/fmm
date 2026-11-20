@@ -122,11 +122,11 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use thiserror::Error;
 
 use super::{
-    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities, DensityError,
-    HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TableTimings, Wavenumber,
-    WavenumberKind, auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree,
-    min_leaf_level,
+    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DIAGONAL_BUILD, DegreeError, Degrees,
+    Densities, DensityError, HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, LevelShape,
+    OperatorError, Output, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit,
+    TableTimings, TransferBuild, Wavenumber, WavenumberKind, auto_batched_max_degree,
+    auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{FmmError, PointSet, SettingsError};
 use crate::geometry::{Domain, radius};
@@ -344,6 +344,7 @@ pub struct HelmholtzFmmBuilder {
     rcr_split: RcrSplit,
     rcr_budget: usize,
     diagonal: HelmholtzDiagonal,
+    diagonal_build: TransferBuild,
     diagonal_budget: usize,
     diagonal_chunk: Option<usize>,
     c_leaf: f64,
@@ -364,7 +365,8 @@ impl HelmholtzFmmBuilder {
     /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the Rotation M2L by pairs on levels
     /// of high degree ([`RcrSplit::Auto`]) within [`DEFAULT_RCR_NODE_BUDGET`] per node, no
     /// diagonal M2L ([`HelmholtzDiagonal::Off`]; its scratch within
-    /// [`DEFAULT_SIGNATURE_NODE_BUDGET`] per node when named), the leaf width [`DEFAULT_C_LEAF`],
+    /// [`DEFAULT_SIGNATURE_NODE_BUDGET`] per node and its transfer functions by
+    /// [`DEFAULT_DIAGONAL_BUILD`] when named), the leaf width [`DEFAULT_C_LEAF`],
     /// the P2P kernel of [`P2pChoice::Auto`], the empty-box rule and the V, W and X pairs
     /// near pairs by the cost model.
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
@@ -396,6 +398,7 @@ impl HelmholtzFmmBuilder {
             rcr_split: RcrSplit::Auto,
             rcr_budget: DEFAULT_RCR_NODE_BUDGET,
             diagonal: HelmholtzDiagonal::Off,
+            diagonal_build: DEFAULT_DIAGONAL_BUILD,
             diagonal_budget: DEFAULT_SIGNATURE_NODE_BUDGET,
             diagonal_chunk: None,
             c_leaf: DEFAULT_C_LEAF,
@@ -714,6 +717,17 @@ impl HelmholtzFmmBuilder {
             );
         }
         self.diagonal = choice;
+        self
+    }
+
+    /// The build of the diagonal M2L's transfer functions (default [`DEFAULT_DIAGONAL_BUILD`],
+    /// [`TransferBuild::Interpolated`]; Helmholtz CH4.2c2; `HelmholtzOperator::with_diagonal_build`):
+    /// interpolated in ŝ · t̂ from a double-double table, faster to build (4.0–6.4× per W1 run on
+    /// Kathleen) with the bound's C_T = 0.23, or [`TransferBuild::Direct`] per sample in
+    /// double-double with C_T = 0.15, so a class may pass at a tighter tolerance. The rule reads
+    /// the build's constants.
+    pub fn diagonal_build(mut self, build: TransferBuild) -> Self {
+        self.diagonal_build = build;
         self
     }
 
@@ -1216,6 +1230,7 @@ impl HelmholtzFmmBuilder {
         )
         .with_diagonal_sources(Some(diagonal_sources))
         .with_diagonal_chunk(self.diagonal_chunk)
+        .with_diagonal_build(self.diagonal_build)
         .with_diagonal(self.diagonal);
         if let Some(mul_add) = self.m2l_mul_add {
             operator = operator.with_m2l_mul_add(mul_add);

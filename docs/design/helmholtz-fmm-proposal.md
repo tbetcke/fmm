@@ -720,7 +720,10 @@ spherical harmonics (Section 5.2). The transfer functions are the diagonal forms
 translation operator, with bandwidth 2P − 2, computed in extended precision and rounded
 once, never summed in the working precision (Section 3.6): per sample in O(p³) per class at
 build time, or interpolated in ŝ · t̂ from an extended-precision table in O(p²) per class
-with C_T = 0.23 (S6: 11× faster to build at p = 256; amended at CH0.6). Their memory is the dominant table cost (Section 7).
+with C_T = 0.23 (S6: 11× faster to build at p = 256; amended at CH0.6). The interpolated build
+is the default, the per-sample build the trusted path (amended at CH4.2c2: on W1 at kD = 500
+and 1000 both gave Rotation's errors and the same classes, the interpolated tables 4.0–6.4×
+faster to build). Their memory is the dominant table cost (Section 7).
 
 **Reflection classes.** The reflection symmetries of the grid reduce the 316 offsets per
 level to 34 classes, as Cecka and Darve (2013) show for their uniform grid. On this grid the
@@ -1918,6 +1921,10 @@ these.
   Section 6.7, the product's count as built (2P³ + 8P³ real multiply-adds per conversion,
   against about 68P³ in the table's count), the measured per-box cost (1–3 RCR pairs) and the
   FFT's bound (about 1–2 % of W1 at kD = 500's run).
+- **Amended at CH4.2c2, 2026-11-20** (`fmm-validate/results/helmholtz-ch4-2c2.md` §2–§3; PR #241,
+  its question 1, signed off by the user, "Both questions as recommended"): Section 5.4, the
+  interpolated build of the transfer functions the default, the per-sample build the trusted
+  path.
 
 ## Appendix B. The stability check behind Section 3.6
 

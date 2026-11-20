@@ -27,7 +27,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzDiagonal, HelmholtzM2l, LevelShape, Output,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, VNear, Wavenumber,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, VNear, Wavenumber,
     WavenumberKind, WxNear, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
@@ -1151,7 +1151,8 @@ fn check_box_study(world: &SimpleCommunicator) {
 /// level and no columns; by the rule some level takes it, the row's columns the operator's
 /// counts and times (pairs on the level's V pairs, signatures and conversions back, the parts
 /// timed, the multiply-adds and build), the errors within 1.1× Rotation's without it, and the
-/// same checksum at 1 and 2 threads.
+/// same checksum at 1 and 2 threads; the same with interpolated transfer functions (Helmholtz
+/// CH4.2c2), its classes at most the direct build's per level.
 fn check_diagonal(world: &SimpleCommunicator) {
     let off = case(Workload::W1, (30.0, 0.0), Degrees::Tolerance(1e-4));
     assert_eq!(off.diagonal, HelmholtzDiagonal::Off, "Case::new's");
@@ -1219,6 +1220,41 @@ fn check_diagonal(world: &SimpleCommunicator) {
             "diagonal on W1 at kD = 30, 1e-4: levels {levels:?}, classes {:?}, errors {:?} \
              against {:?}",
             row_on.diagonal_classes, row_on.errors, row_off.errors
+        );
+    }
+    // The interpolated build (Helmholtz CH4.2c2): reported, its classes at most the direct
+    // build's per level, within 1.1× Rotation's errors, 1 and 2 threads the same checksum.
+    assert_eq!(off.diagonal_build, TransferBuild::Direct, "Case::new's");
+    assert_eq!(row_on.diagonal_build_kind, TransferBuild::Direct);
+    let interpolated = Case {
+        diagonal_build: TransferBuild::Interpolated,
+        ..on.clone()
+    };
+    let row_i = run(&interpolated, &problem, &oracle, 1, world).expect("the FMM runs");
+    let row_i_two = run(&interpolated, &problem, &oracle, 2, world).expect("the FMM runs");
+    assert_eq!(row_i.diagonal_build_kind, TransferBuild::Interpolated);
+    assert!(
+        row_i
+            .diagonal_classes
+            .iter()
+            .zip(&row_on.diagonal_classes)
+            .all(|(i, d)| i <= d),
+        "{:?} against {:?}",
+        row_i.diagonal_classes,
+        row_on.diagonal_classes
+    );
+    assert!(row_i.diagonal_classes.iter().any(|&c| c > 0));
+    for (got, want) in row_i.errors.iter().zip(&row_off.errors) {
+        assert!(
+            got[0] <= 1.1 * want[0] && got[1] <= 1.1 * want[1],
+            "interpolated: {got:?} against {want:?}"
+        );
+    }
+    assert_eq!(row_i_two.checksum, row_i.checksum);
+    if world.rank() == 0 {
+        println!(
+            "interpolated: classes {:?}, errors {:?}",
+            row_i.diagonal_classes, row_i.errors
         );
     }
 }
