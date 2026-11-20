@@ -174,10 +174,10 @@
 //! - `--diagonal-costs machine|form|rcr,…` (Helmholtz CH4.3b2a,
 //!   `HelmholtzFmmBuilder::diagonal_costs`): the time rule's costs, the machine class's
 //!   (`machine`, the default), or costs that force one option on every level the rule reaches
-//!   (`form`: the diagonal form where a class passes, else RCR, `helmholtz_accuracy::FORM_COSTS`;
-//!   `rcr`: RCR, `RCR_COSTS`), each `--diagonal auto` run with each in turn; the column "M2L"
-//!   ends `/diagauto:form` or `/diagauto:rcr` for them. With `auto` under the defaults the levels
-//!   the rule takes from the waves keep their resolving degree, so the three time the options at
+//!   where a class passes (`form`: the diagonal form, `helmholtz_accuracy::FORM_COSTS`; `rcr`:
+//!   RCR, `RCR_COSTS`), each `--diagonal auto` run with each in turn; the column "M2L" ends
+//!   `/diagauto:form` or `/diagauto:rcr` for them. With `auto` under the defaults the levels the
+//!   rule takes from the waves keep their resolving degree, so the three time the options at
 //!   matched accuracy.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
@@ -1275,23 +1275,21 @@ fn main() {
                         let [ka, bound, diagonal, rcr, waves] = row.diagonal_model[l];
                         let ran = level_m2l(row, l);
                         // The operator's choice from the model, without the scratch budget:
-                        // nothing below k a = 2.8; the form against RCR (a tie to RCR); on a
-                        // level with Auto's waves, or one the rule took from them (Helmholtz
-                        // CH4.3b2a), the cheaper of those against the waves (a tie to the
-                        // waves), all at the level's degree as run.
+                        // nothing below k a = 2.8; on a level with Auto's waves, or one the rule
+                        // took from them (Helmholtz CH4.3b2a), the waves unless the form beats
+                        // them (a tie to the waves); then, and elsewhere, the form against RCR
+                        // (a tie to RCR); all at the level's degree as run.
                         let waves_level = row.m2l == HelmholtzM2l::Auto
                             && (row.plane_wave[l].is_some() || row.taken_from_waves[l]);
-                        let (cheaper, name) = if bound > 0.0 && diagonal < rcr {
-                            (diagonal, "diagonal")
-                        } else {
-                            (rcr, "rcr")
-                        };
+                        let form = bound > 0.0 && diagonal < rcr;
                         let choice = if ka < DIAGONAL_AUTO_MIN_KA {
                             if row.plane_wave[l].is_some() { "waves" } else { "other" }
-                        } else if waves_level && cheaper >= waves {
+                        } else if waves_level && !(bound > 0.0 && diagonal < waves) {
                             "waves"
-                        } else if waves_level || name == "diagonal" {
-                            name
+                        } else if form {
+                            "diagonal"
+                        } else if waves_level {
+                            "rcr"
                         } else {
                             "other"
                         };
@@ -1871,13 +1869,15 @@ fn main() {
             println!(
                 "Per level with V pairs of a run with the diagonal form (Helmholtz CH4.3b1): the \
                  degree run, k a = Re(k) √3 r_l, the bound's classes at the FMM's tolerance (at \
-                 the base degree) and those taken, the M2L that ran and its seconds, the time \
-                 rule's model of the level (seconds: thread-ns over ranks × threads, on the \
-                 agreed shape) with the bound's classes diagonal, by RCR and by the waves at \
-                 their degree, the model's diagonal level over the measured M2L, and the model's \
-                 choice without the scratch budget (the form from k a = 2.8 and from Auto's \
-                 waves only; \"other\": the level's own M2L, not the form; a level the rule took \
-                 from the waves compares with RCR)."
+                 the degree run: a level the waves raise keeps its resolving degree under the \
+                 time rule, Helmholtz CH4.3b2a) and those taken, the M2L that ran and its \
+                 seconds, the time rule's model of the level (seconds: thread-ns over ranks × \
+                 threads, on the agreed shape) with the bound's classes diagonal and by RCR at \
+                 the degree run, and by the waves at their degree, the model's diagonal level \
+                 over the measured M2L, and the model's choice without the scratch budget \
+                 (nothing from below k a = 2.8; on a level with Auto's waves, or one the rule \
+                 took from them, the waves unless the form beats them, then the cheaper of the \
+                 form and RCR; elsewhere the form or \"other\", the level's own M2L)."
             );
             println!();
             println!(

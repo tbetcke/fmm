@@ -1722,7 +1722,9 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
     assert_eq!(fmm.degrees(), raised, "{name}: Auto's degrees");
     assert_same(&format!("{name}, Auto"), &auto, &output, comm);
     drop(fmm);
-    if matches!(scenario.layout, Layout::Cube) {
+    // The cubes at kD = 20 + 2i pass no class at p_w, so their levels keep the waves: in
+    // release builds only.
+    if matches!(scenario.layout, Layout::Cube) && !cfg!(debug_assertions) {
         check_time_rule_raised(scenario, comm);
     }
     if rank == 0 {
@@ -1731,7 +1733,8 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
     deep
 }
 
-/// Costs under which RCR beats every other M2L (the diagonal pair and the waves dear).
+/// Costs under which RCR beats the form and the form the waves (the diagonal pair dear, the
+/// waves dearer).
 const FREE_RCR: DiagonalCosts = DiagonalCosts {
     pair: [1e9, 1e9],
     rotation: [0.0, 0.0],
@@ -1740,14 +1743,15 @@ const FREE_RCR: DiagonalCosts = DiagonalCosts {
 
 /// The diagonal form's time rule at matched accuracy (Helmholtz CH4.3b2a) on a scenario whose
 /// levels raised by the defaults' waves lie in the rule's range (the cubes of
-/// [`check_resolving_degree`] at kD = 20 + 2i, level 2 at k a 4.3, where no class passes at p_w;
+/// [`check_resolving_degree`] at kD = 20 + 2i, level 2 at k a 4.3, where no class passes at p_w,
+/// in release builds;
 /// [`time_rule_scenario`] at kD = 40 + 2i, level 2 at k a 8.7, where some do), under the
-/// defaults: at the machine's costs, at free form costs (the form where a class passes at p_w,
-/// else RCR) and at free RCR costs (RCR), the degrees and translation degrees the defaults',
-/// some raised level with waves under the defaults taken from them by the free costs, the errors
-/// within [`DIAGONAL_RATIO`] of the defaults' (or of ε/100 where the defaults err less:
+/// defaults: at the machine's costs, at free form costs (the form where a class passes at p_w)
+/// and at free RCR costs (RCR there), the degrees and translation degrees the defaults', the
+/// errors within [`DIAGONAL_RATIO`] of the defaults' (or of ε/100 where the defaults err less:
 /// rounding's regime), 2 threads and on P ranks the one-rank FMM bit for bit. Returns the most
-/// classes a raised level took from the waves at free form costs.
+/// classes a raised level took from the waves at free form costs (0 on the cubes at
+/// kD = 20 + 2i, whose levels keep their waves).
 fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
     let Degrees::Tolerance(epsilon) = scenario.degrees else {
         panic!("{}: the rule reads a tolerance", scenario.name);
@@ -1767,11 +1771,15 @@ fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usi
     drop(fmm);
     let plain = errors(scenario, inputs, &auto, 0, comm);
     let mut most = 0;
-    for (costs_name, costs) in [
+    // In debug builds the forced costs alone, and 2 threads at free form costs alone (each build
+    // at p_w = 28 costs seconds at opt-level 0).
+    let debug = cfg!(debug_assertions);
+    let all = [
         ("its machine's costs", None),
         ("free form costs", Some(FREE_DIAGONAL)),
         ("free RCR costs", Some(FREE_RCR)),
-    ] {
+    ];
+    for &(costs_name, costs) in &all[usize::from(debug)..] {
         let what = format!(
             "{}: the time rule at the resolving degree, {costs_name}",
             scenario.name
@@ -1793,12 +1801,10 @@ fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usi
             })
             .collect();
         drop(fmm);
-        if costs.is_some() {
-            assert!(
-                taken.iter().any(|&(l, p_w, _)| p_w > given[l]),
-                "{what}: no raised level taken from the waves: {taken:?}"
-            );
-        }
+        assert!(
+            taken.iter().all(|&(l, p_w, _)| p_w > given[l]),
+            "{what}: a level taken from the waves not raised: {taken:?}"
+        );
         if costs == Some(FREE_DIAGONAL) {
             most = taken.iter().map(|&(_, _, c)| c).max().unwrap_or(0);
         }
@@ -1822,9 +1828,11 @@ fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usi
             within(errors.0, plain.0) && within(errors.1, plain.1),
             "{what}: errors {errors:?} against the defaults' {plain:?}"
         );
-        if costs.is_some() {
+        if costs == Some(FREE_DIAGONAL) || (costs.is_some() && !debug) {
             let (_, threaded) = run(&rule.clone().threads(2), inputs, kind, comm);
             assert_same(&format!("{what}, 2 threads"), &threaded, &want, comm);
+        }
+        if costs.is_some() {
             check_one_rank(&what, &rule, inputs, kind, &want, comm);
         }
     }
@@ -1837,7 +1845,7 @@ fn time_rule_scenario() -> Scenario {
     Scenario {
         name: "cube, kD = 40 + 2i, ε = 1e-7, complex charges",
         layout: Layout::Cube,
-        n: (1000, None),
+        n: (600, None),
         k: (40.0, 2.0),
         degrees: Degrees::Tolerance(1e-7),
         bound: ERROR_FACTOR * 1e-7,

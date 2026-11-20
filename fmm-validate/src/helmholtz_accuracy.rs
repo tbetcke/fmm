@@ -222,9 +222,9 @@ pub struct Case {
 }
 
 /// Time-rule costs under which the diagonal form beats every other M2L wherever a class passes
-/// the bound, and RCR beats the exponential M2L elsewhere (Helmholtz CH4.3b2a): the form free,
-/// RCR 1 per (p + 1)² + (p + 1)³, the waves 10¹² per box. Under `HelmholtzDiagonal::Auto` each
-/// level the rule reaches then runs the form or RCR at its degree, for timing those options.
+/// the bound (Helmholtz CH4.3b2a): the form free, RCR 1 per (p + 1)² + (p + 1)³, the waves 10¹²
+/// per box. Under `HelmholtzDiagonal::Auto` each level the rule reaches with a class that passes
+/// then runs the form at its degree (a level with waves at its resolving degree), for timing it.
 pub const FORM_COSTS: DiagonalCosts = DiagonalCosts {
     s2f: [0.0, 0.0],
     f2r: [0.0, 0.0],
@@ -233,9 +233,10 @@ pub const FORM_COSTS: DiagonalCosts = DiagonalCosts {
     plane_wave: [1e12, 1e12],
 };
 
-/// Time-rule costs under which RCR beats every other M2L (Helmholtz CH4.3b2a): the diagonal
-/// pair and the waves dear, RCR free. Under `HelmholtzDiagonal::Auto` each level the rule
-/// reaches then runs RCR at its degree.
+/// Time-rule costs under which RCR beats the form and the form the waves (Helmholtz CH4.3b2a):
+/// the diagonal pair dear, the waves dearer, RCR free. Under `HelmholtzDiagonal::Auto` each level
+/// the rule reaches with a class that passes then runs RCR at its degree (the rule never puts RCR
+/// against the waves alone).
 pub const RCR_COSTS: DiagonalCosts = DiagonalCosts {
     pair: [1e9, 1e9],
     rotation: [0.0, 0.0],

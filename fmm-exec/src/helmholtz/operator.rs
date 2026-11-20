@@ -281,17 +281,24 @@
 //! row and the pairs per class,
 //! [`with_diagonal_shapes`](HelmholtzOperator::with_diagonal_shapes), which the builder counts
 //! in its plan and sums over the ranks; the uniform level's without them): on an RCR level
-//! against RCR ([`diagonal_beats_rcr`]); under [`HelmholtzM2l::Auto`] on a level with waves
-//! against the waves at their degree ([`diagonal_beats_plane_waves`]: the waves cost per box,
-//! the form per pair, so the order turns on the pairs per box). A level taken from the waves
-//! runs at its own degree, not the waves' raised one, takes no batched tables, and runs the
-//! cheaper of the form and RCR by the same model (where RCR is the cheaper, it also beats the
-//! waves: at 10⁻⁸ the waves' raised degree made a sparse level 31× RCR's on Kathleen). The builder's V rule reads `wave_levels` before the plan, a
-//! superset of the operator's levels with waves; its grouping per (parent, source) converts
-//! exact pairs under every M2L. Each choice is a function of agreed counts, (p, k̂, ε, T) and
-//! agreed constants, so the same on every rank and at every rank count; the scratch budget's
-//! whole-level fallback comes first. It takes no level below k a = [`DIAGONAL_AUTO_MIN_KA`]
-//! (2.8, S6's calibrated range).
+//! against RCR ([`diagonal_beats_rcr`]); under [`HelmholtzM2l::Auto`] on a level with waves the
+//! waves unless the form beats them, then the cheaper of the form and RCR
+//! ([`wave_level_choice`]; the waves cost per box, the form per pair, so the order turns on the
+//! pairs per box; RCR never against the waves alone, Helmholtz CH4.3b2a: at the resolving
+//! degree RCR's constant under-predicts RCR on sparse levels). A
+//! level with waves keeps its resolving degree p_w whatever the time rule gives it (Helmholtz
+//! CH4.3b2a, matched accuracy: at 10⁻⁸ the raise made the defaults 1.07–2.2× more accurate than
+//! the form at p_l, CH4.3b1): its stores, its M2L and its leaves' operators at p_w, its
+//! translations as `PlaneWaveRaise` gives the waves, the form's classes the bound's at p_w (at a
+//! higher degree the bound's rounding term passes fewer classes at low k a); the form's scratch
+//! at p_w must fit the budget, or the level keeps its waves. A level taken
+//! from the waves takes no batched tables
+//! ([`taken_from_waves`](HelmholtzOperator::taken_from_waves)). The builder's V rule reads
+//! `wave_levels` before the plan, a superset of the operator's levels with waves; its grouping
+//! per (parent, source) converts exact pairs under every M2L. Each choice is a function of
+//! agreed counts, (p, k̂, ε, T) and agreed constants, so the same on every rank and at every
+//! rank count; the scratch budget's whole-level fallback comes first. It takes no level below
+//! k a = [`DIAGONAL_AUTO_MIN_KA`] (2.8, S6's calibrated range), and there leaves the waves too.
 //!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
