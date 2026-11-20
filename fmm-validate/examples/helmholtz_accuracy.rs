@@ -147,9 +147,10 @@
 //!   library's), the outermost loop of the runs; the column "M2L" of a row with a named split
 //!   ends with `/rcr-boxes` or `/rcr-pairs`, and `--levels`' column "ran" says `rotation by
 //!   pairs` where a level call ran by pairs. No bit depends on it.
-//! - `--diagonal off|rule|<ε>,…` (Helmholtz CH4.2b2, `HelmholtzFmmBuilder::diagonal`): the
+//! - `--diagonal off|rule|auto|<ε>,…` (Helmholtz CH4.2b2, `HelmholtzFmmBuilder::diagonal`): the
 //!   diagonal M2L on the levels whose M2L is RCR's (`off`, the default, the library's until
-//!   CH4.3; `rule` at the FMM's tolerance; `<ε>` at a named tolerance), outside
+//!   CH4.3; `rule` at the FMM's tolerance; `auto` the time rule, Helmholtz CH4.3b1, which may
+//!   also take Auto's levels with waves; `<ε>` at a named tolerance), outside
 //!   `--rcr-split`'s loop; the column "M2L" of a row with it lists its levels and classes
 //!   (`; diagonal 2:34,3:20`) and ends with `/diag` or `/diag<ε>`, and `--levels`' column
 //!   "ran" says `diagonal c/34` on a level that took c classes. With `--levels` a table
@@ -160,7 +161,10 @@
 //!   conversions' rate per thread (2 × the multiply-adds of every conversion over their
 //!   thread-seconds, GF/s; on one rank only, `–` on several), and the build of the level's transfer functions and conversions.
 //!   A Rotation row with the diagonal form has a "÷ Rotation" against the Rotation row
-//!   without it.
+//!   without it. A table "Time rule" (Helmholtz CH4.3b1, `Row::diagonal_model`) before it has a
+//!   row per run with the form and level with V pairs: k a, the bound's classes, the classes
+//!   taken, the M2L that ran and its seconds, and the time rule's model of the level by the
+//!   form, by RCR and by the waves (seconds over ranks × threads) with its choice.
 //! - `--diagonal-build direct|interpolated,…` (Helmholtz CH4.2c2,
 //!   `HelmholtzFmmBuilder::diagonal_build`): the diagonal M2L's transfer functions per sample
 //!   (`direct`, the harness's default, so that CH4.2b2's runs repeat) or interpolated in ŝ · t̂
@@ -197,8 +201,9 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzDiagonal, HelmholtzM2l, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear, s7_degree,
+    ChargeKind, DEFAULT_DENSE_BUDGET, DIAGONAL_AUTO_MIN_KA, Degrees, HelmholtzDiagonal,
+    HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild,
+    VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -506,6 +511,7 @@ fn arguments() -> Arguments {
                         .map(|v| match v {
                             "off" => Some(HelmholtzDiagonal::Off),
                             "rule" => Some(HelmholtzDiagonal::Rule),
+                            "auto" => Some(HelmholtzDiagonal::Auto),
                             e => e
                                 .parse::<f64>()
                                 .ok()
@@ -828,8 +834,9 @@ fn setting_name(row: &Row) -> String {
     format!("{}{split}{}", m2l_setting_name(row), diagonal_suffix(row))
 }
 
-/// For a row with the diagonal M2L `/diag` (at the FMM's tolerance) or `/diag<ε>` (Helmholtz
-/// CH4.2b2), followed by `/interp` for the interpolated build (Helmholtz CH4.2c2); else empty.
+/// For a row with the diagonal M2L `/diag` (at the FMM's tolerance), `/diag<ε>` (Helmholtz
+/// CH4.2b2) or `/diagauto` (the time rule, Helmholtz CH4.3b1), followed by `/interp` for the
+/// interpolated build (Helmholtz CH4.2c2); else empty.
 fn diagonal_suffix(row: &Row) -> String {
     let build = match row.diagonal_build_kind {
         TransferBuild::Direct => "",
@@ -839,6 +846,7 @@ fn diagonal_suffix(row: &Row) -> String {
         HelmholtzDiagonal::Off => String::new(),
         HelmholtzDiagonal::Rule => format!("/diag{build}"),
         HelmholtzDiagonal::Tolerance(e) => format!("/diag{e:e}{build}"),
+        HelmholtzDiagonal::Auto => format!("/diagauto{build}"),
     }
 }
 
@@ -964,6 +972,7 @@ fn main() {
     let mut leaf_rows: Vec<String> = Vec::new();
     let mut build_rows: Vec<String> = Vec::new();
     let mut diagonal_rows: Vec<String> = Vec::new();
+    let mut time_rows: Vec<String> = Vec::new();
     let mut leaf_operators: Vec<String> = Vec::new();
     // Whether `--leaf-size` and `--c-leaf` named a value (Helmholtz CH4.0d3): the column
     // "M2L" then ends with it.
@@ -1217,6 +1226,49 @@ fn main() {
                             1e9 * row.m2l_seconds[l] / (diagonal + rcr).max(1) as f64,
                             rate(forward, s2f),
                             rate(back, f2r),
+                        )
+                    })
+                    .collect()
+            };
+            // `--levels`: the rows of the table "Time rule" (Helmholtz CH4.3b1), a row per level
+            // with V pairs of a run with the diagonal form.
+            let time_lines = |row: &Row| -> Vec<String> {
+                if row.diagonal == HelmholtzDiagonal::Off {
+                    return Vec::new();
+                }
+                (2..row.levels)
+                    .filter(|&l| row.v_pairs[l] > 0)
+                    .map(|l| {
+                        let [ka, bound, diagonal, rcr, waves] = row.diagonal_model[l];
+                        let ran = level_m2l(row, l);
+                        // The operator's choice from the model, without the scratch budget:
+                        // the form only from k a = 2.8 and only from Auto's waves; a level the
+                        // rule took from the waves has no precision in the row and compares
+                        // with RCR.
+                        let waves_level =
+                            row.m2l == HelmholtzM2l::Auto && row.plane_wave[l].is_some();
+                        let other = if waves_level { waves } else { rcr };
+                        let choice =
+                            if bound > 0.0 && ka >= DIAGONAL_AUTO_MIN_KA && diagonal < other {
+                                if diagonal < rcr { "diagonal" } else { "rcr" }
+                            } else if row.plane_wave[l].is_some() {
+                                "waves"
+                            } else {
+                                "other"
+                            };
+                        format!(
+                            "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {} | {l} | {} \
+                             | {ka:.2} | {bound:.0} | {} | {ran} | {:.6} | {diagonal:.6} \
+                             | {rcr:.6} | {waves:.6} | {:.3} | {choice} |",
+                            workload.name(),
+                            problem.len(),
+                            setting_name(row),
+                            row.ranks,
+                            row.threads,
+                            row.degrees[l],
+                            row.diagonal_classes[l],
+                            row.m2l_seconds[l],
+                            diagonal / row.m2l_seconds[l].max(f64::MIN_POSITIVE),
                         )
                     })
                     .collect()
@@ -1625,6 +1677,7 @@ fn main() {
                                                     levels.extend(per_level(&row));
                                                     scratch_rows.extend(scratch_lines(&row));
                                                     diagonal_rows.extend(diagonal_lines(&row));
+                                                    time_rows.extend(time_lines(&row));
                                                 }
                                                 left_out.push(left_out_line(&row));
                                                 near.extend(near_lines(&row));
@@ -1759,6 +1812,35 @@ fn main() {
             println!("{line}");
         }
         println!();
+        if !time_rows.is_empty() {
+            println!("## Time rule");
+            println!();
+            println!(
+                "Per level with V pairs of a run with the diagonal form (Helmholtz CH4.3b1): the \
+                 degree run, k a = Re(k) √3 r_l, the bound's classes at the FMM's tolerance (at \
+                 the base degree) and those taken, the M2L that ran and its seconds, the time \
+                 rule's model of the level (seconds: thread-ns over ranks × threads, on the \
+                 agreed shape) with the bound's classes diagonal, by RCR and by the waves at \
+                 their degree, the model's diagonal level over the measured M2L, and the model's \
+                 choice without the scratch budget (the form from k a = 2.8 and from Auto's \
+                 waves only; \"other\": the level's own M2L, not the form; a level the rule took \
+                 from the waves compares with RCR)."
+            );
+            println!();
+            println!(
+                "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | k a \
+                 | bound classes | classes | ran | M2L s | model diagonal s | model RCR s \
+                 | model waves s | model diagonal ÷ M2L s | model's choice (no budget) |"
+            );
+            println!(
+                "| --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- \
+                 | ---: | ---: | ---: | ---: | ---: | --- |"
+            );
+            for line in &time_rows {
+                println!("{line}");
+            }
+            println!();
+        }
         if !diagonal_rows.is_empty() {
             println!("## Diagonal M2L");
             println!();

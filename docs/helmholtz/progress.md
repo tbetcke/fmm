@@ -4000,3 +4000,60 @@ request, using this template:
 - Laplace: not touched (a test of `nd-fmm-tables`, a flag of the validation harness, scripts).
 - Follow-ups: CH4.3b's Also (the rule below k a 2.8) and CH5.1's Also (a fitted damping factor),
   in the roadmap; CH4.3b–CH4.3e.
+
+## 2026-11-20: CH4.3b1 The diagonal form's time rule, built and calibrated
+- Done: CH4.3b split into CH4.3b1 (the rule, opt-in) and CH4.3b2 (the default), by the size rule.
+  - `nd_fmm_exec::helmholtz`: `HelmholtzDiagonal::Auto`; `DiagonalCosts` (S → F, F → R, the
+    diagonal pair, RCR's pair, the waves per box, each a (p + 1)² + b (p + 1)³ thread-ns of a whole
+    level call), `DIAGONAL_COSTS_X86` (Kathleen), `DIAGONAL_COSTS_NEON` (locust), `diagonal_costs`;
+    `DiagonalShape` (boxes with a V row, pairs per class, `offset_class`; `uniform`), counted in the
+    builder's plan and summed over the ranks; `diagonal_beats_rcr`, `diagonal_beats_plane_waves`
+    (after the plan, in `select_tables`: a level leaves its waves only where its form fits the
+    budget, then runs the cheaper of form and RCR); `DIAGONAL_AUTO_MIN_KA` = 2.8;
+    `HelmholtzOperator::{with_diagonal_costs, diagonal_costs, with_diagonal_shapes,
+    diagonal_shapes}`, `HelmholtzFmmBuilder::diagonal_costs`.
+  - `nd-fmm-validate`: `--diagonal auto`, `Case::diagonal_costs`, `Row::diagonal_model`, the table
+    "Time rule". `tools/helmholtz/ch4-3b1-runs.sh` and `ch4-3b1-fit.py` (`fit`, `check`,
+    `summary`). Report `fmm-validate/results/helmholtz-ch4-3b1.md`; record
+    `docs/helmholtz/tasks/CH4.3b1.md`.
+  - The plan decided the order against the waves before the plan on a uniform level, the waves per
+    pair; the first runs refuted it (the waves cost per box, the form per pair: W3's dense levels on
+    the form at up to 1.9× the waves' time, 5.1 s lost of 64.8 s on Kathleen), so the order is
+    decided after the plan on the agreed counts; the builder's V rule reads `wave_levels` before the
+    plan, a superset (exact under every M2L). Question 2.
+- Tests: unit (the uniform level's 8 × 189 pairs by class, the model by hand against RCR and against
+  the waves by the pairs per box, the pair below RCR's at every p ≤ 256 on both classes);
+  `tests/helmholtz/diagonal.rs` `the_time_rule_on_the_rcr_levels` and
+  `the_time_rule_against_the_waves` (the choice by the model, named costs, shapes, the budget's
+  fallback first on both kinds of level, f32, the waves' levels at their own degree, none below
+  k a 2.8); `wave_levels_are_the_operators` (the operator's levels with waves within the
+  function's); `check_diagonal_auto` in `tests/helmholtz_fmm.rs` (both settings, the machine's and
+  free costs: the agreed shapes against the one-rank FMM's, the classes on every rank, the errors
+  within `DIAGONAL_RATIO`, 2 threads, chunk widths and the one-rank FMM bit for bit);
+  `fmm-validate`'s `check_diagonal` an `auto` row.
+- Measurements (Kathleen jobs 653672 and 653681, node-c11a-080, `singlenode`, 1 × 40; locust
+  1 × 72, idle): W1 at kD = 100–1000 and W3 at N = 10⁶, kD = 200 and 500, 10⁻³–10⁻⁸, Rotation and
+  the defaults, each off, with the rule and with the time rule:
+  - a diagonal pair 0.08–0.44× RCR's (Kathleen) and 0.09–0.52× (locust) at p = 8–245: the
+    per-class crossover is never reached;
+  - the final runs' choices within 1.05× of the fastest option on 123/127 levels (Kathleen; 0.96 s
+    lost of 64.8 s) and 132/140 (locust; 0.14 of 18.5 s); misses on W3's small dense levels;
+  - under Rotation 1.000–1.001× its errors, evaluation 0.27–1.00×; under the defaults their own
+    errors at 10⁻³ and 10⁻⁶ (0.99–1.04×; they err up to 1.35× Rotation's), evaluation 0.34–1.00×;
+    at 10⁻⁸ Rotation's errors, 1.07–2.2× the defaults' (the waves' raised degree);
+  - below k a 2.8 the bound passed classes on one level (locust, W1 at kD = 200, level 6, k a
+    2.71), which the time rule did not take;
+  - raw outputs in `~/projects/fmm-archive/{kathleen,locust}/runs/ch4-3b1{,-auto}/`.
+- Checks: see the PR (fmt; Clippy default, workspace all-targets; rustdoc `-D warnings`; the
+  workspace tests at opt-level 1; the MPI list at 2 and 4 ranks, `helmholtz_fmm` again after the
+  self-review's fixes; the Helmholtz executables at opt-level 0). Not run: `cargo deny` (no
+  manifest), Laplace's benchmarks (no Laplace path), 8 ranks (no distributed code beyond two
+  all-reduces of the builder, run at 2 and 4).
+- Decisions: signed off 2026-11-20 by the user on #243, "1-4 as recommended": 1, the acceptance
+  as read; 2, the order against the waves after the plan (the roadmap's CH4.3b1 line as amended);
+  3, no level below k a 2.8 under the time rule; 4, 10⁻⁸ at matched accuracy left to CH4.3b2.
+- Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
+- Follow-ups: CH4.3b2's Also (roadmap): matched accuracy at 10⁻⁸ against the raised waves (and
+  their cost on sparse levels, up to 31× RCR's), the model's misses on W3's small dense levels, the
+  constants at many ranks per node, the V rule's crossover and the defaults' errors on the levels
+  the form takes from the waves.

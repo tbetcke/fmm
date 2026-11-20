@@ -626,6 +626,15 @@ interpolated` named: the example's own default build is the direct one), `ch4-3a
 report's tables (the acceptance at s = 1, the margin by s). Its report is
 `results/helmholtz-ch4-3a.md`.
 
+Helmholtz CH4.3b1 (the diagonal form's time rule; docs/helmholtz/tasks/CH4.3b1.md) added
+`helmholtz_accuracy::Case::diagonal_costs` (`HelmholtzFmmBuilder::diagonal_costs`, `None` in
+`Case::new`) and `Row::diagonal_model` (per level k a, the bound's classes, and the rule's modelled
+seconds of the level by the form, by RCR and by the waves on the agreed shape), and to the example
+`--diagonal auto` (the column "M2L" ending `/diagauto`) and, with `--levels`, a table "Time rule".
+`tests/helmholtz_accuracy.rs` (`check_diagonal`) checks an `auto` row on W1 at kD = 30.
+`tools/helmholtz/ch4-3b1-runs.sh` runs the task's stages, `ch4-3b1-fit.py` fits the costs. Its
+report is `results/helmholtz-ch4-3b1.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

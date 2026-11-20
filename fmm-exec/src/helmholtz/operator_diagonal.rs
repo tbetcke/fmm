@@ -56,22 +56,23 @@
 //!
 //! [`with_diagonal_sources`]: super::HelmholtzOperator::with_diagonal_sources
 
-use std::sync::PoisonError;
+use std::sync::{LazyLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_plan::operator::M2l;
 use nd_fmm_ref::helmholtz::Level;
-use nd_fmm_ref::helmholtz::diagonal::THETA;
+use nd_fmm_ref::helmholtz::diagonal::{THETA, class_of, classes};
+use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
 use nd_fmm_tables::helmholtz::diagonal::{
-    BLOCK_BOXES, ConversionScratch, Conversions, DiagonalM2l, Signatures, TransferBuild,
-    class_bounds, scratch_shape,
+    BLOCK_BOXES, CLASS_COUNT, ConversionScratch, Conversions, DiagonalM2l, Signatures,
+    TransferBuild, class_bounds, scratch_shape,
 };
 use nd_fmm_tables::parts::Parts;
 
-use super::{HelmholtzOperator, Kernel, SimdScalar};
+use super::{HelmholtzOperator, Isa, Kernel, SimdScalar};
 
-/// The diagonal M2L of the high-frequency levels (Helmholtz CH4.2b1; opt-in until CH4.3;
+/// The diagonal M2L of the high-frequency levels (Helmholtz CH4.2b1; opt-in until CH4.3b2;
 /// module documentation of [`operator`](super), "M2L").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum HelmholtzDiagonal {
@@ -86,6 +87,15 @@ pub enum HelmholtzDiagonal {
     /// The rule at the named tolerance ε (for the tests and the measurements, with named
     /// degrees too).
     Tolerance(f64),
+    /// The rule at the FMM's tolerance, then by time (Helmholtz CH4.3b1; module documentation
+    /// of [`operator`](super), "M2L", the time rule), on the levels of k a ≥
+    /// [`DIAGONAL_AUTO_MIN_KA`] only: a level takes the bound's classes only
+    /// where the model ([`DiagonalCosts`]) puts its diagonal level below the M2L it would run
+    /// otherwise by the level's agreed V lists ([`DiagonalShape`]): RCR's
+    /// ([`diagonal_beats_rcr`]), or under [`HelmholtzM2l::Auto`](super::HelmholtzM2l::Auto) the
+    /// exponential M2L's ([`diagonal_beats_plane_waves`]), the level then at its own degree by
+    /// the cheaper of the form and RCR.
+    Auto,
 }
 
 impl HelmholtzDiagonal {
@@ -94,7 +104,7 @@ impl HelmholtzDiagonal {
     pub fn tolerance(self, fmm: Option<f64>) -> Option<f64> {
         match self {
             Self::Off => None,
-            Self::Rule => fmm,
+            Self::Rule | Self::Auto => fmm,
             Self::Tolerance(epsilon) => Some(epsilon),
         }
     }
@@ -138,6 +148,244 @@ pub fn diagonal_chunk_targets(rows: usize, threads: usize) -> usize {
         return BLOCK_BOXES;
     }
     rows.div_ceil(threads).clamp(1, BLOCK_BOXES)
+}
+
+/// The smallest k a = Re(k̂_l) √3 at which the time rule ([`HelmholtzDiagonal::Auto`]) takes a
+/// level: S6's calibrated range (Helmholtz CH4.3b1, CH4.3a's question 3: below it one damped
+/// class measured 2.9 E per pair, direct build, η = 0.1, k a 1.69). The bound's rule under
+/// [`HelmholtzDiagonal::Rule`] and [`HelmholtzDiagonal::Tolerance`] reaches below it. On W1 and
+/// W3 the time rule took no level below it before the bound (fmm-validate/results/
+/// helmholtz-ch4-3b1.md): the levels there are small, and RCR is the cheaper.
+pub const DIAGONAL_AUTO_MIN_KA: f64 = 2.8;
+
+/// Whether the time rule may take a level of wavenumber `k_hat` in its units: k a ≥
+/// [`DIAGONAL_AUTO_MIN_KA`], a = √3 the circumradius of a box of half-width 1.
+pub fn diagonal_auto_in_range(k_hat: Complex<f64>) -> bool {
+    k_hat.re * 3f64.sqrt() >= DIAGONAL_AUTO_MIN_KA
+}
+
+/// The class of each V offset, by the offset's table index (`nd_fmm_tables::geometry::
+/// m2l_offsets`), an index into `nd_fmm_ref::helmholtz::diagonal::classes()`.
+static OFFSET_CLASSES: LazyLock<[u8; M2L_OFFSET_COUNT]> = LazyLock::new(|| {
+    let classes = classes();
+    m2l_offsets().map(|d| {
+        let (representative, _) = class_of(d.map(|x| x as i32));
+        let class = classes
+            .iter()
+            .position(|c| c.representative == representative)
+            .expect("every V offset lies in a class");
+        u8::try_from(class).expect("34 classes")
+    })
+});
+
+/// The class of the V offset of table index `offset` (an index into
+/// `nd_fmm_ref::helmholtz::diagonal::classes()`; Helmholtz CH4.3b1).
+///
+/// # Panics
+///
+/// If `offset` is not below 316.
+pub fn offset_class(offset: usize) -> usize {
+    usize::from(OFFSET_CLASSES[offset])
+}
+
+/// A level's V lists as the diagonal form's time rule reads them (Helmholtz CH4.3b1): the
+/// boxes with a V row and the V pairs of each offset class, each target counted by the rank
+/// that computes it and summed over the ranks, so the same on every rank and at every rank
+/// count (`HelmholtzFmmBuilder::build`'s one all-reduce).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagonalShape {
+    /// The level's boxes with a V row.
+    pub targets: u64,
+    /// The V pairs of each class (indices into `nd_fmm_ref::helmholtz::diagonal::classes()`).
+    pub class_pairs: [u64; CLASS_COUNT],
+}
+
+impl Default for DiagonalShape {
+    fn default() -> Self {
+        Self {
+            targets: 0,
+            class_pairs: [0; CLASS_COUNT],
+        }
+    }
+}
+
+impl DiagonalShape {
+    /// The V pairs.
+    pub fn pairs(&self) -> u64 {
+        self.class_pairs.iter().sum()
+    }
+
+    /// The V lists of the 8 children of an interior box of a uniform level: each child's 189
+    /// offsets, 8 targets and 1,512 pairs, by class. The time rule's shape on an operator
+    /// without the builder's counts.
+    pub fn uniform() -> Self {
+        let mut shape = Self {
+            targets: 8,
+            ..Self::default()
+        };
+        for child in 0..8i64 {
+            let c = [child & 1, (child >> 1) & 1, (child >> 2) & 1];
+            for (offset, d) in m2l_offsets().iter().enumerate() {
+                // The source child of the parent's neighbour: target + d must lie in a box
+                // whose parent is the target's parent's neighbour (or the parent itself).
+                let parent = [0, 1, 2].map(|k| (c[k] + d[k]).div_euclid(2));
+                if parent.iter().all(|x| x.abs() <= 1) {
+                    shape.class_pairs[offset_class(offset)] += 1;
+                }
+            }
+        }
+        shape
+    }
+}
+
+/// The cost model of the diagonal form's time rule for one machine class (Helmholtz CH4.3b1,
+/// [`HelmholtzDiagonal::Auto`]): each unit's cost a (p + 1)² + b (p + 1)³ thread-ns, [a, b],
+/// at the level's degree p. Each is a level call's wall time × its threads per unit, idle
+/// threads included (one rank, every core a thread), so that the rule compares whole level
+/// calls: S → F per source and F → R per target, the diagonal pair, RCR's pair, and the
+/// exponential M2L per box at its degree p_w. Fitted by `tools/helmholtz/ch4-3b1-fit.py`
+/// (fmm-validate/results/helmholtz-ch4-3b1.md); [`VCosts`](super::super::VCosts) fits thread
+/// time on the leaf levels for the V near rule, a different measure.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiagonalCosts {
+    /// S → F per source signature.
+    pub s2f: [f64; 2],
+    /// F → R per target converted back.
+    pub f2r: [f64; 2],
+    /// The diagonal pair.
+    pub pair: [f64; 2],
+    /// RCR's pair (Rotation's M2L).
+    pub rotation: [f64; 2],
+    /// The exponential M2L per box with a V row, at its degree p_w: the waves of its source
+    /// and merge and shift into it, both per box (on W1 and W3 alike, whatever the pairs per
+    /// box; fmm-validate/results/helmholtz-ch4-3b1.md).
+    pub plane_wave: [f64; 2],
+}
+
+/// The number of constants of a [`DiagonalCosts`], for its agreement over the ranks.
+pub const DIAGONAL_COST_CONSTANTS: usize = 10;
+
+impl DiagonalCosts {
+    /// A unit's cost a (p + 1)² + b (p + 1)³ at degree p.
+    pub fn unit(unit: [f64; 2], p: usize) -> f64 {
+        let q = (p + 1) as f64;
+        unit[0] * q * q + unit[1] * q * q * q
+    }
+
+    /// The modelled cost of a level of degree `p` and V lists `shape` with the classes
+    /// `classes` diagonal and the others RCR's: S → F and F → R once per box with a V row (the
+    /// model's one approximation: the distinct sources are taken as the targets, which the V
+    /// relation makes them on a level whose boxes all hold sources and targets), each diagonal
+    /// class's pairs at the pair's cost and the rest at RCR's.
+    pub fn diagonal_level(&self, p: usize, shape: &DiagonalShape, classes: &[usize]) -> f64 {
+        let boxes = shape.targets as f64 * (Self::unit(self.s2f, p) + Self::unit(self.f2r, p));
+        let diagonal: u64 = classes.iter().map(|&c| shape.class_pairs[c]).sum();
+        let rcr = shape.pairs() - diagonal;
+        boxes
+            + diagonal as f64 * Self::unit(self.pair, p)
+            + rcr as f64 * Self::unit(self.rotation, p)
+    }
+
+    /// The modelled cost of the level by RCR alone.
+    pub fn rcr_level(&self, p: usize, shape: &DiagonalShape) -> f64 {
+        shape.pairs() as f64 * Self::unit(self.rotation, p)
+    }
+
+    /// The modelled cost of the level by the exponential M2L at its degree `p_w`: per box
+    /// with a V row.
+    pub fn plane_wave_level(&self, p_w: usize, shape: &DiagonalShape) -> f64 {
+        shape.targets as f64 * Self::unit(self.plane_wave, p_w)
+    }
+
+    /// The constants in field order, for their agreement over the ranks.
+    pub fn to_array(&self) -> [f64; DIAGONAL_COST_CONSTANTS] {
+        let [s2f, f2r, pair, rotation, plane_wave] = [
+            self.s2f,
+            self.f2r,
+            self.pair,
+            self.rotation,
+            self.plane_wave,
+        ];
+        [
+            s2f[0],
+            s2f[1],
+            f2r[0],
+            f2r[1],
+            pair[0],
+            pair[1],
+            rotation[0],
+            rotation[1],
+            plane_wave[0],
+            plane_wave[1],
+        ]
+    }
+
+    /// The costs of [`to_array`](Self::to_array)'s constants.
+    pub fn from_array(c: [f64; DIAGONAL_COST_CONSTANTS]) -> Self {
+        Self {
+            s2f: [c[0], c[1]],
+            f2r: [c[2], c[3]],
+            pair: [c[4], c[5]],
+            rotation: [c[6], c[7]],
+            plane_wave: [c[8], c[9]],
+        }
+    }
+}
+
+/// [`DiagonalCosts`] of x86 (AVX-512 and AVX2; measured on Kathleen, Xeon Gold 6248, one rank
+/// × 40 threads).
+pub const DIAGONAL_COSTS_X86: DiagonalCosts = DiagonalCosts {
+    s2f: [383.0, 2.3],
+    f2r: [313.0, 5.85],
+    pair: [28.1, 0.548],
+    rotation: [0.0, 8.4],
+    plane_wave: [3700.0, 129.0],
+};
+
+/// [`DiagonalCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads; the M6
+/// takes them unmeasured).
+pub const DIAGONAL_COSTS_NEON: DiagonalCosts = DiagonalCosts {
+    s2f: [108.0, 1.58],
+    f2r: [92.0, 3.26],
+    pair: [13.0, 0.224],
+    rotation: [0.0, 3.2],
+    plane_wave: [1210.0, 39.2],
+};
+
+/// The [`DiagonalCosts`] of the machine class of `isa`: NEON's on NEON, x86's elsewhere.
+pub fn diagonal_costs(isa: Isa) -> DiagonalCosts {
+    match isa {
+        Isa::Neon => DIAGONAL_COSTS_NEON,
+        _ => DIAGONAL_COSTS_X86,
+    }
+}
+
+/// Whether the time rule ([`HelmholtzDiagonal::Auto`]) takes a level of degree `p` and V
+/// lists `shape` from RCR with the bound's `classes`: the model's diagonal level below RCR's.
+/// A function of its arguments alone (constraint 9).
+pub fn diagonal_beats_rcr(
+    costs: &DiagonalCosts,
+    p: usize,
+    shape: &DiagonalShape,
+    classes: &[usize],
+) -> bool {
+    !classes.is_empty() && costs.diagonal_level(p, shape, classes) < costs.rcr_level(p, shape)
+}
+
+/// Whether the time rule takes a level of degree `p` and V lists `shape` from the exponential
+/// M2L at its degree `p_w`, with the bound's `classes`: the model's diagonal level below the
+/// waves'. Decided after the plan, on the agreed shape, since the waves cost per box and the
+/// diagonal form per pair, so their order turns on the pairs per box (W1's surface about 45,
+/// W3's volume about 165). A function of its arguments alone (constraint 9).
+pub fn diagonal_beats_plane_waves(
+    costs: &DiagonalCosts,
+    p: usize,
+    p_w: usize,
+    shape: &DiagonalShape,
+    classes: &[usize],
+) -> bool {
+    !classes.is_empty()
+        && costs.diagonal_level(p, shape, classes) < costs.plane_wave_level(p_w, shape)
 }
 
 /// The counts of the diagonal level calls since the operator's M2L was last chosen
@@ -224,10 +472,17 @@ pub(super) struct DiagonalSettings {
     pub(super) sources: Option<Vec<usize>>,
     /// The chunk width if named, else [`diagonal_chunk_targets`]'s.
     pub(super) chunk: Option<usize>,
+    /// The time rule's costs if named (the builder's, agreed over the ranks), else those of the
+    /// column kernel's ISA (Helmholtz CH4.3b1).
+    pub(super) costs: Option<DiagonalCosts>,
+    /// Each level's V lists for the time rule, agreed over the ranks, if known; else the
+    /// uniform level's.
+    pub(super) shapes: Option<Vec<DiagonalShape>>,
 }
 
 impl Default for DiagonalSettings {
-    /// Off, [`DEFAULT_DIAGONAL_BUILD`], no budget, no source counts, the chunk width by rule.
+    /// Off, [`DEFAULT_DIAGONAL_BUILD`], no budget, no source counts, the chunk width by rule,
+    /// the costs of the ISA and no shapes.
     fn default() -> Self {
         Self {
             choice: HelmholtzDiagonal::default(),
@@ -235,11 +490,43 @@ impl Default for DiagonalSettings {
             budget: None,
             sources: None,
             chunk: None,
+            costs: None,
+            shapes: None,
         }
     }
 }
 
 impl DiagonalSettings {
+    /// Level l's V lists for the time rule: the agreed shape where given (a level past the
+    /// shapes has none), else the uniform level's.
+    pub(super) fn shape(&self, l: usize) -> DiagonalShape {
+        self.shapes
+            .as_ref()
+            .map_or_else(DiagonalShape::uniform, |s| {
+                s.get(l).copied().unwrap_or_default()
+            })
+    }
+
+    /// Whether level l of degree `p` may hold the form's tables for `vectors` vectors: some
+    /// V source on some rank (a count of 0 has none), and the scratch at the agreed sources
+    /// within the budget (the whole-level fallback; without a budget or the counts, always).
+    pub(super) fn fits<T: SimdScalar>(&self, l: usize, p: usize, vectors: usize) -> bool {
+        let sources = self
+            .sources
+            .as_ref()
+            .map(|s| s.get(l).copied().unwrap_or(0));
+        if sources == Some(0) {
+            return false;
+        }
+        match (self.budget, sources) {
+            (Some(budget), Some(sources)) => {
+                let accumulators = self.max_chunk() * vectors;
+                scratch_shape::<T>(p, sources * vectors, accumulators, 1, budget).is_some()
+            }
+            _ => true,
+        }
+    }
+
     /// The widest chunk a level call may take.
     fn max_chunk(&self) -> usize {
         self.chunk.unwrap_or(BLOCK_BOXES).max(1)
@@ -264,13 +551,17 @@ impl<T: SimdScalar> DiagonalLevel<T> {
 /// The levels that take the diagonal form and their tables (module documentation, "The
 /// rule"): for each level l ≥ 2 with `rcr[l]` (its M2L RCR's), degree `degrees[l]` and
 /// wavenumber `k_hat(l)` in its units, the classes of [`diagonal_rule_classes`] at the
-/// setting's tolerance and build, where some class passes and the scratch fits the budget;
-/// `None` elsewhere. The transfer functions are built by the setting's build on `parts`, one
-/// part per (class, ring).
+/// setting's tolerance and build, where some class passes and the scratch fits the budget,
+/// and under [`HelmholtzDiagonal::Auto`] where [`diagonal_beats_rcr`] by `costs` and the
+/// level's shape (on a level whose exponential M2L [`diagonal_beats_plane_waves`] gave up as on
+/// the others, so that it runs the cheaper of the form and RCR); `None` elsewhere. The transfer
+/// functions are built by the setting's build on `parts`, one part per (class, ring).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn select<T: SimdScalar>(
     settings: &DiagonalSettings,
     fmm_tolerance: Option<f64>,
     rcr: &[bool],
+    costs: &DiagonalCosts,
     degrees: &[usize],
     k_hat: impl Fn(usize) -> Complex<f64>,
     vectors: usize,
@@ -285,21 +576,23 @@ pub(super) fn select<T: SimdScalar>(
             if l < 2 || !rcr[l] {
                 return None;
             }
-            let sources = settings
-                .sources
-                .as_ref()
-                .map(|s| s.get(l).copied().unwrap_or(0));
-            if sources == Some(0) {
+            if !settings.fits::<T>(l, p, vectors) {
                 return None;
-            }
-            if let (Some(budget), Some(sources)) = (settings.budget, sources) {
-                let accumulators = settings.max_chunk() * vectors;
-                scratch_shape::<T>(p, sources * vectors, accumulators, 1, budget)?;
             }
             let k = k_hat(l);
             let classes = diagonal_rule_classes::<T>(p, k, epsilon, settings.build);
             if classes.is_empty() {
                 return None;
+            }
+            if settings.choice == HelmholtzDiagonal::Auto && !diagonal_auto_in_range(k) {
+                return None;
+            }
+            if settings.choice == HelmholtzDiagonal::Auto {
+                // A level taken from the waves too: the cheaper of the form and RCR.
+                let shape = settings.shape(l);
+                if !diagonal_beats_rcr(costs, p, &shape, &classes) {
+                    return None;
+                }
             }
             let level = Level::new(k, 1.0);
             let clock = Instant::now();
@@ -721,5 +1014,109 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 times.add_parts(&core::mem::take(&mut diagonal.parts));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The uniform level: 189 V offsets per child, every class present, and each class's
+    /// pairs over the 8 children by position: an offset with |d_k| = 3 along an axis lies in
+    /// the V list of one child in two along it, one with |d_k| ≤ 2 in that of both.
+    #[test]
+    fn the_uniform_level() {
+        let shape = DiagonalShape::uniform();
+        assert_eq!(shape.targets, 8);
+        assert_eq!(shape.pairs(), 8 * 189);
+        let mut expected = [0u64; CLASS_COUNT];
+        for (offset, d) in m2l_offsets().iter().enumerate() {
+            let children: u64 = d
+                .iter()
+                .map(|&x| if x.abs() == 3 { 1 } else { 2 })
+                .product();
+            expected[offset_class(offset)] += children;
+        }
+        assert_eq!(shape.class_pairs, expected);
+        assert!(shape.class_pairs.iter().all(|&n| n > 0));
+        // Class 0, (0, 0, 2), holds the two offsets (0, 0, ±2), each in every child's list.
+        assert_eq!(shape.class_pairs[0], 2 * 8);
+    }
+
+    /// The model by hand, and its two decisions.
+    #[test]
+    fn the_model_by_hand() {
+        let costs = DiagonalCosts {
+            s2f: [1.0, 0.0],
+            f2r: [0.0, 1.0],
+            pair: [2.0, 0.0],
+            rotation: [0.0, 3.0],
+            plane_wave: [5.0, 0.0],
+        };
+        let mut shape = DiagonalShape {
+            targets: 10,
+            ..DiagonalShape::default()
+        };
+        shape.class_pairs[0] = 7;
+        shape.class_pairs[5] = 3;
+        // p = 1: q = 2, q² = 4, q³ = 8.
+        let boxes = 10.0 * (4.0 + 8.0);
+        assert_eq!(
+            costs.diagonal_level(1, &shape, &[0]),
+            boxes + 7.0 * 8.0 + 3.0 * 24.0
+        );
+        assert_eq!(costs.diagonal_level(1, &shape, &[]), boxes + 10.0 * 24.0);
+        assert_eq!(costs.rcr_level(1, &shape), 240.0);
+        assert_eq!(costs.plane_wave_level(1, &shape), 200.0);
+        // 120 + 56 + 72 = 248 against RCR's 240: RCR; with every pair diagonal, 200: diagonal.
+        assert!(!diagonal_beats_rcr(&costs, 1, &shape, &[0]));
+        assert!(diagonal_beats_rcr(&costs, 1, &shape, &[0, 5]));
+        assert!(!diagonal_beats_rcr(&costs, 1, &shape, &[]));
+        assert_eq!(
+            DiagonalCosts::from_array(costs.to_array()),
+            costs,
+            "the constants' order"
+        );
+        // The waves cost per box and the form per pair: the order turns on the pairs per box.
+        // 10 boxes at 5 + 1 each and 2 per pair against the waves' 20 per box: 60 + 2n < 200
+        // for n < 70 pairs.
+        let mut sparse = DiagonalShape {
+            targets: 10,
+            ..DiagonalShape::default()
+        };
+        sparse.class_pairs[0] = 60;
+        let mut dense = sparse;
+        dense.class_pairs[0] = 80;
+        let waves = DiagonalCosts {
+            s2f: [1.25, 0.0],
+            f2r: [0.0, 0.125],
+            pair: [0.5, 0.0],
+            ..costs
+        };
+        assert_eq!(waves.plane_wave_level(1, &sparse), 200.0);
+        assert!(diagonal_beats_plane_waves(&waves, 1, 1, &sparse, &[0]));
+        assert!(!diagonal_beats_plane_waves(&waves, 1, 1, &dense, &[0]));
+        assert!(!diagonal_beats_plane_waves(&waves, 1, 1, &sparse, &[]));
+    }
+
+    /// The per-class crossover (proposal §10 CH4.3): on both machine classes the diagonal pair
+    /// costs less than RCR's at every degree of the high-frequency range, so once a level pays
+    /// its conversions every class that passes the bound is faster diagonal, and the time
+    /// rule decides per level.
+    #[test]
+    fn the_pair_against_rcrs_at_every_degree() {
+        for (isa, costs) in [
+            (Isa::Avx512, DIAGONAL_COSTS_X86),
+            (Isa::Neon, DIAGONAL_COSTS_NEON),
+        ] {
+            assert_eq!(diagonal_costs(isa), costs);
+            for p in 4..=256 {
+                let ratio =
+                    DiagonalCosts::unit(costs.pair, p) / DiagonalCosts::unit(costs.rotation, p);
+                assert!(ratio < 1.0, "{isa:?} p = {p}: {ratio}");
+            }
+        }
+        assert_eq!(diagonal_costs(Isa::Avx2), DIAGONAL_COSTS_X86);
+        assert_eq!(diagonal_costs(Isa::Scalar), DIAGONAL_COSTS_X86);
     }
 }
