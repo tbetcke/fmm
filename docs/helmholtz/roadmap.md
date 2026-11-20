@@ -9,11 +9,12 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged,
-and of item 10 CH4.1a–b, CH4.2a, CH4.2b1–2 and CH4.2c1 (the interpolated transfer functions,
-within 2E at C_T = 0.23, 2.3–9.6× faster per class; both builds by ring). Next CH4.2c2 (the build
-in the operator, W1's tables timed on Kathleen), then CH4.3; CH4.2d (kernels) off the list; the
-FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of
-H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
+and of item 10 CH4.1a–b, CH4.2a, CH4.2b1–2 and CH4.2c1; CH4.2c2 (the transfer functions' build
+a setting, the rule by its constants; W1's errors 1.000× Rotation's under both builds, the
+interpolated tables 4.0–6.4× faster on Kathleen) is in review with its default build for
+sign-off. Next CH4.3; CH4.2d (kernels) off the list; the FFT track stays item 11. HR, H0 and H2
+are still open; of H0, CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line
+until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
@@ -705,12 +706,14 @@ task's full line is in its record or report and its progress entry
   against RCR and the direct build on every class CI runs (at most 1.35 E), 2.3–9.6× faster per
   class at p = 41–245; both builds by ring, the direct build CH4.2a's bits. *Sign-off:* the
   PR's question 1 as recommended (the user on #240, 2026-11-20: "Sign off Q1 as recommended").
-- [ ] **CH4.2c2 The interpolated build in the operator, and W1's tables timed.** *Done when:*
-  the operator's build setting (the rule's constants by the build: C_T = 0.23 interpolated) and
-  the harness's; the FMM within 1.1× Rotation's errors with it; W1 at kD = 500 and 1000's
-  diagonal tables timed at 1 × 40 and 40 × 1 against CH4.2b2's (2.3 s and 61 s at p = 131), with
-  the errors and the classes per level against the direct build's; which build is the default,
-  for sign-off. *Needs:* CH4.2c1. *Machines:* Kathleen.
+- [x] **CH4.2c2 The interpolated build in the operator, and W1's tables timed.** Report:
+  `fmm-validate/results/helmholtz-ch4-2c2.md`; record `docs/helmholtz/tasks/CH4.2c2.md`.
+  `TransferBuild` a setting of the operator and builder (`with_diagonal_build`,
+  `diagonal_build`), the rule by its constants (C_T = 0.23 interpolated), the harness's
+  `--diagonal-build`. W1 at kD = 500 and 1000 (Kathleen 1 × 40 and 40 × 1): errors 1.000×
+  Rotation's and the same classes per level under both builds; at p = 131 the tables 2.3/61 s
+  (CH4.2b2) → 0.33/6.8 s interpolated. *Sign-off:* the PR's questions 1–2 (the default build;
+  the acceptance as read), pending.
 - [ ] **CH4.2d Dispatched kernels for the diagonal pair and the conversions.** (Added at
   CH4.2b2, its question 3, signed off 2026-11-20; off the list, reconsidered at CH4.5.) *Done when:*
   the pair and the conversions' column kernel on `nd-fmm-simd`'s ISAs, bit for bit or within
@@ -742,7 +745,9 @@ the projection rounding more than both). Also (CH4.1b's report §3, question 1, 
   4, signed off 2026-11-20): the order between the exponential M2L (D8) and the diagonal form per
   level, by time at matched accuracy: under Rotation the diagonal form ran W1's levels 4–8 at
   0.29–0.83× the defaults' waves, the evaluation 1.6–2.8× faster than the defaults'; D8 amended
-  here if it moves. *Needs:* CH4.2b2, CH4.2c2.
+  here if it moves. Also (CH4.2c2): C_T and θ confirmed for the default build of the transfer
+  functions (CH4.2c2's question 1; the interpolated build's C_T = 0.23 took the direct build's
+  classes on every W1 case). *Needs:* CH4.2b2, CH4.2c2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at

@@ -3909,3 +3909,48 @@ request, using this template:
 - Follow-ups: CH4.2c2 (roadmap: the operator's build setting and the rule's constants by the
   build, the harness, W1's tables timed at 1 × 40 and 40 × 1 on Kathleen, the default build for
   sign-off).
+
+## 2026-11-20: CH4.2c2 The interpolated build in the operator, and W1's tables timed
+- Done: the second half of CH4.2c.
+  - `nd_fmm_exec::helmholtz`: `TransferBuild` (re-exported from `nd-fmm-tables`),
+    `HelmholtzOperator::{with_diagonal_build, diagonal_build}`,
+    `HelmholtzFmmBuilder::diagonal_build` (default `Direct` until the sign-off);
+    `diagonal_rule_classes(p, k̂, ε, build)` reads `TransferBuild::bound_constants` (C_T = 0.15
+    direct, 0.23 interpolated, f32's by either); `select` builds by `DiagonalM2l::build_by`.
+  - `nd-fmm-validate`: `Case::diagonal_build`, `Row::diagonal_build_kind`, the example's
+    `--diagonal-build direct|interpolated,…` (the column "M2L" ending `/interp`).
+  - `tools/helmholtz/ch4-2c2-runs.sh` and `ch4-2c2-tables.py`. Report
+    `fmm-validate/results/helmholtz-ch4-2c2.md`; record `docs/helmholtz/tasks/CH4.2c2.md`.
+- Tests: `fmm-exec/tests/helmholtz/diagonal.rs`: the classes per build (the interpolated build's
+  a subset of the direct build's on every level, fewer on some: classes 0 and 1 of level 2 at
+  k = 40, 10⁻⁴), f32 the same by either build, the pair body with interpolated tables within 2E
+  of their constants (at most 0.67 E). `check_interpolated` in `tests/helmholtz_fmm.rs` (in
+  `check_diagonal`, under Rotation): the errors within `DIAGONAL_RATIO` of Rotation's (1.000× on
+  both scenarios), the classes within the direct build's and the same on every rank, 2 threads
+  and the one-rank FMM bit for bit. `check_diagonal` in `fmm-validate/tests/helmholtz_accuracy.rs`:
+  the interpolated row on W1 at kD = 30.
+- Measurements (Kathleen job 653605, node-c11a-058, `singlenode`; 1 × 40 bound to every core,
+  40 × 1 at 20 ranks per socket): W1 at kD = 500 (10⁻⁶, 10⁻⁸) and 1000 (10⁻⁶), Rotation with
+  the diagonal form by each build:
+  - errors 1.000× Rotation's under both builds; the same classes per level under both;
+  - the transfer functions at p = 131: CH4.2b2's 2.34 s (1 × 40) and 61.0 s (40 × 1), now
+    1.80 and 53.8 s direct by ring, 0.33 and 6.84 s interpolated (p = 245 at 1 × 40: 9.38 →
+    1.08 s); per run the diagonal tables 4.0–5.7× faster at 1 × 40 (0.14–0.18 of an
+    evaluation, from 0.58–0.82) and 3.3–6.4× at 40 × 1 (kD = 500: 65.4 → 10.2 s against an
+    evaluation of 3.8 s);
+  - each build one checksum at 1 × 40 and 40 × 1, the direct build CH4.2b2's
+    (`c74ca0e7954cf9ba`); kD = 1000 at 40 × 1 runs levels 2–3 on RCR (the scratch budget at 40
+    ranks per node, CH4.1b's census).
+  - Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-2c2/`.
+- Checks: `/verify` on the M6 (load 4–11 from other jobs): fmt; Clippy (default, examples,
+  workspace all-targets); rustdoc with `-D warnings`; the default and workspace tests at
+  opt-level 1 (1,361 and 1,405 passed); the MPI list at 2 and 4 ranks at opt-level 1 (every
+  executable passed; `helmholtz_fmm` 34 and 33 s). At opt-level 0: `nd-fmm-exec`'s Helmholtz
+  executable 51 s at load 4–9 (under its minute), `helmholtz_fmm`'s one-rank run 611 s at load
+  7–10 (CH4.2b2: 1,807 s at load 39–49), `nd-fmm-validate`'s `helmholtz_accuracy` 282 s at load 3–10 (CH4.0e: 246 s at load 2–3; CH4.2b2: 849 s at load 39–49).
+  Not run: `cargo deny` (no manifest), Laplace's benchmarks (no Laplace path changed), 8 ranks
+  (no distributed code). Nothing pending.
+- Decisions: questions for sign-off on the PR: 1, the default build (recommended
+  `Interpolated`); 2, the acceptance as read.
+- Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness).
+- Follow-ups: CH4.3's Also (roadmap): C_T and θ confirmed for the default build.

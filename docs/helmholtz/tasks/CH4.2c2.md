@@ -50,7 +50,7 @@ Rotation run without the diagonal form.
     recommendation is Interpolated, the PR asks for it and the default moves on this branch only
     on the user's answer.
 - `nd-fmm-validate`: `Case::diagonal_build` (named always, `Direct` in `Case::new`),
-  `Row::diagonal_build`; the example's `--diagonal-build direct|interpolated,…` (inside
+  `Row::diagonal_build_kind` (`Row::diagonal_build` already holds the build seconds); the example's `--diagonal-build direct|interpolated,…` (inside
   `--diagonal`'s loop; the column "M2L" ending `/interp`); `check_diagonal` with the interpolated
   build.
 - `tools/helmholtz/ch4-2c2-runs.sh` and `ch4-2c2-tables.py`; the report
@@ -110,7 +110,28 @@ is this task's.
   and one-rank reference only.
 
 ## Pending runs
-None yet.
+None. Kathleen job 653605 (node-c11a-058, `singlenode`, 2026-11-20 13:42–14:01, 19 min: the
+release build, `node` and `cores`). Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-2c2/`.
+
+## Results
+- Built as planned; `Row::diagonal_build_kind` in place of the plan's `Row::diagonal_build`
+  (taken by the build seconds). The default stays `Direct` until question 1.
+- Errors (report §2): the interpolated build 1.000× Rotation's errors (φ and ∇φ) on W1 at
+  kD = 500 (10⁻⁶, 10⁻⁸) and 1000 (10⁻⁶) at 1 × 40 and 40 × 1, as the direct build; in CI's
+  `check_interpolated` 1.000× on the cube at kD = 40 + 2i and the clusters at kD = 20.
+- Classes (report §2): the same per level under both builds on every W1 case (10⁻⁸ included);
+  the operator's unit test shows the looser C_T dropping classes 0 and 1 of level 2 at k = 40,
+  10⁻⁴.
+- Tables (report §3): at p = 131, CH4.2b2's 2.34 s (1 × 40) and 61.0 s (40 × 1) are now 1.80 and
+  53.8 s direct by ring, 0.33 and 6.84 s interpolated; per run the interpolated diagonal tables
+  4.0–5.7× faster at 1 × 40 (0.14–0.18 of an evaluation) and 3.3–6.4× at 40 × 1 (still 2.7× an
+  evaluation at kD = 500: every rank builds every class, CH8.0's).
+- Bits (report §4): each build one checksum at 1 × 40 and 40 × 1; the direct build CH4.2b2's
+  `c74ca0e7954cf9ba`, so the ring split is CH4.2b2's FMM bit for bit.
+- Debug times at opt-level 0 on the M6: `nd-fmm-exec`'s Helmholtz executable 51 s at load 4–9
+  (under its minute; CH4.2b2 116 s at load 39–49); `helmholtz_fmm`'s one-rank run 611 s at load
+  7–10 (CH4.2b2 1,807 s at load 39–49); `helmholtz_accuracy` 282 s at load 3–10 (CH4.2b2 849 s at load 39–49).
 
 ## Open questions
-None yet.
+For sign-off on the PR (report §5): 1, the default build (recommended: `Interpolated`, with
+`Direct` named and the tests' trusted path); 2, the acceptance as read.
