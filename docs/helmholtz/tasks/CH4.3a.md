@@ -123,10 +123,11 @@ form); k a = 216 (W1 at kD = 1000's level 2, p = 245) in the FMM only, its pairs
   two jobs if one would exceed the `singlenode` limit.
 
 ## Pending runs
-- Kathleen job (submitted 2026-11-20 after the report): `run.sbatch 'cargo test -p
-  nd-fmm-tables --release -- --ignored'`, the crate's rule for a task that adds an ignored test
-  (`fmm-tables/CLAUDE.md`). It decides nothing of the acceptance; the new test alone passed on the
-  M6 (below).
+None. The crate's rule for a task that adds an ignored test (`fmm-tables/CLAUDE.md`): Kathleen job
+653633 (`singlenode`, 2026-11-20 16:02–17:50, 1 h 49 min), `cargo test -p nd-fmm-tables --release
+-- --ignored` at 70f78c7: every ignored test passed (26 in 8 executables; the Helmholtz executable's
+17 in 94 min). The study's last change (real k asserted at every k a, e6d3e6d) came after it and
+passed on the M6.
 
 The FMM runs are done: Kathleen job 653621 (node-c11a-013, `singlenode`, 2026-11-20
 15:21–16:00, 38 min; the release build, then `ch4-3a-runs.sh w1 w3 damped densities w1-large`,

@@ -3988,8 +3988,9 @@ request, using this template:
   - Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-3a/`.
 - Checks: `/verify` on the M6 (load 6–44): fmt; Clippy (default, examples, workspace all-targets,
   the last after fixing a range loop in the study); rustdoc with `-D warnings`; the default and
-  workspace tests at opt-level 1 (1,361 and 1,405 passed). Pending: the tables' whole ignored
-  suite in release (Kathleen, the crate's rule for a task that adds an ignored test). Not run:
+  workspace tests at opt-level 1 (1,361 and 1,405 passed); the tables' whole ignored suite in
+  release on Kathleen (job 653633, at 70f78c7, 26 passed, 1 h 49 min; the study's last change
+  passed on the M6). Not run:
   the MPI list (no exec, plan or octree change), `cargo deny` (no manifest), Laplace's benchmarks
   (no Laplace path changed), the debug-time budgets (no non-ignored test added).
 - Decisions: questions for sign-off on the PR: 1, the acceptance as read, C_T and θ kept (C₀ is
