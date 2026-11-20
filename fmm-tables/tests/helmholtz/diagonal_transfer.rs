@@ -1126,3 +1126,283 @@ fn the_rcr_pairs_after_f2r_at_every_chunk_size() {
     println!("mixed level: measured {worst:.3e}, max E {e:.3e}");
     assert!(worst <= e / THETA, "{worst:.2e} > 2E = {:.2e}", e / THETA);
 }
+
+// ---------------------------------------------------------------------------------------
+// CH4.3a: the bound on the FMM's levels (docs/helmholtz/tasks/CH4.3a.md).
+
+/// The calibrated degree of `nd_fmm_exec::helmholtz::DegreeRule::CALIBRATED` (proposal §3.5,
+/// CH3.3), restated: this crate cannot depend on nd-fmm-exec. x = Re(k) a, L = log₁₀(1/ε); the
+/// ceilings forgive 10⁻⁹ as the rule's do.
+fn calibrated_degree(x: f64, eps: f64) -> usize {
+    let l = (1.0 / eps).log10();
+    let ceil = |v: f64| (v - 1e-9).ceil() as usize;
+    let plateau = ceil(0.30 * l * l + 0.25 * l + 2.60);
+    let high = ceil(x + 0.80 * (1.0 / eps).ln().powf(2.0 / 3.0) * x.cbrt());
+    plateau.max(high)
+}
+
+/// The field of complex charges `q` at `sources` on the targets `x`, Σ q e^{ikr}/r and its
+/// gradient in x, in the units of `leaf::l2p` on a level of half-width 1 (1/(4π) left out,
+/// §3.1).
+fn direct_field(k: C, sources: &[[f64; 3]], q: &[C], x: &[[f64; 3]]) -> Field {
+    let i = C::new(0.0, 1.0);
+    let mut field = Field {
+        potential: vec![C::new(0.0, 0.0); x.len()],
+        gradient: vec![[C::new(0.0, 0.0); 3]; x.len()],
+    };
+    for (t, xt) in x.iter().enumerate() {
+        for (y, &qj) in sources.iter().zip(q) {
+            let d: [f64; 3] = core::array::from_fn(|c| xt[c] - y[c]);
+            let r = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            let e = (i * k * r).exp() * qj;
+            field.potential[t] += e / r;
+            let radial = e * (i * k * r - 1.0) / (r * r * r);
+            for c in 0..3 {
+                field.gradient[t][c] += radial * d[c];
+            }
+        }
+    }
+    field
+}
+
+/// max(‖φ̃_a − φ̃_b‖ / ‖φ̃_s‖, ‖∇φ̃_a − ∇φ̃_b‖ / ‖∇φ̃_s‖): the difference of `a` and `b` relative
+/// to the field `scale`.
+fn error_over(a: &Field, b: &Field, scale: &Field) -> f64 {
+    let flat = |f: &Field| f.gradient.iter().flatten().copied().collect::<Vec<_>>();
+    let norm = |v: &[C]| v.iter().map(|c| c.norm_sqr()).sum::<f64>().sqrt();
+    let diff = |u: &[C], v: &[C]| {
+        u.iter()
+            .zip(v)
+            .map(|(x, y)| (x - y).norm_sqr())
+            .sum::<f64>()
+    };
+    let phi = diff(&a.potential, &b.potential).sqrt() / norm(&scale.potential);
+    let (ga, gb, gs) = (flat(a), flat(b), flat(scale));
+    phi.max(diff(&ga, &gb).sqrt() / norm(&gs))
+}
+
+/// One (build, k a, η, ε) of the study: the 34 classes at the calibrated degree.
+struct StudyRow {
+    build: TransferBuild,
+    ka: f64,
+    eta: f64,
+    eps: f64,
+    p: usize,
+    /// The largest per-pair relative error over E (CH1.3d1's measure, `against`'s), with the
+    /// classes read against the projection at E's floor counted at their projection's error.
+    worst: f64,
+    /// The largest input-relative error (over the undamped field) over E, and over E without
+    /// the damping factor e^{Im(k)(|t| + 2a)}.
+    input_worst: f64,
+    input_worst_without: f64,
+    /// The classes the rule takes (E ≤ θ ε), with and without the damping factor.
+    passes: usize,
+    passes_without: usize,
+    /// The classes the input-relative measure keeps within ε, (the measured error ≤ ε).
+    input_within: usize,
+    /// The real-k unit check: the RCR chain against the direct sum (relative, η = 0 only).
+    units: f64,
+    failures: Vec<String>,
+}
+
+fn study_row(build: TransferBuild, ka: f64, eta: f64, eps: f64, seed: u64) -> StudyRow {
+    let p = calibrated_degree(ka, eps);
+    let k = k_hat(ka, eta);
+    let level = Level::new(k, 1.0);
+    let constants = build.bound_constants(false);
+    let m2l = DiagonalM2l::<f64>::build_by(p, k, &ALL, build, &Serial);
+    let conversions = Conversions::<f64>::new(p, level.scale());
+    let bounds = class_bounds(p, k, constants);
+    let a = 3f64.sqrt();
+    let floor = constants.c_0 * constants.unit_roundoff;
+    let mut row = StudyRow {
+        build,
+        ka,
+        eta,
+        eps,
+        p,
+        worst: 0.0,
+        input_worst: 0.0,
+        input_worst_without: 0.0,
+        passes: 0,
+        passes_without: 0,
+        input_within: 0,
+        units: 0.0,
+        failures: Vec::new(),
+    };
+    for (c, class) in classes().iter().enumerate() {
+        let o = class.representative;
+        let e = bounds[c];
+        let t = 2.0 * f64::from(o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt();
+        let e_without = (e - floor) * (-(k.im * (t + 2.0 * a))).exp() + floor;
+        row.passes += usize::from(e <= THETA * eps);
+        row.passes_without += usize::from(e_without <= THETA * eps);
+        let s = seed + 7 * c as u64;
+        let sources = in_box([0.0; 3], 40, s);
+        let q = charges(sources.len(), s + 1);
+        let m = multipole(p, &level, [0.0; 3], s);
+        let centre = frame(o).centre;
+        let targets = in_box(centre, 24, s + 3);
+        let d = m2l_offset_index(o.map(i64::from)).unwrap();
+        let reference = evaluate(p, &level, centre, &rcr_local(p, &level, o, &m), &targets);
+        let got = evaluate(
+            p,
+            &level,
+            centre,
+            &tables_local(&m2l, &conversions, d, &m),
+            &targets,
+        );
+        let mut measured = error(&got, &reference);
+        if !measured.is_finite() {
+            row.failures.push(format!("{o:?}: not finite"));
+            continue;
+        }
+        if measured > e / THETA {
+            // E's floor at large p: read against ref's projection, as `against` does.
+            let projected = evaluate(
+                p,
+                &level,
+                centre,
+                &projected_local(p, &level, o, &m),
+                &targets,
+            );
+            let (diagonal, rcr) = (error(&got, &projected), error(&reference, &projected));
+            if p >= 72 && diagonal <= (e / THETA).max(rcr) {
+                measured = diagonal.min(measured);
+            } else {
+                row.failures.push(format!(
+                    "{o:?}: {measured:.2e} > 2E = {:.2e} (projection: {diagonal:.2e}, RCR \
+                     {rcr:.2e})",
+                    e / THETA
+                ));
+            }
+        }
+        row.worst = row.worst.max(measured / e);
+        let undamped = direct_field(C::new(k.re, 0.0), &sources, &q, &targets);
+        let input = error_over(&got, &reference, &undamped);
+        row.input_worst = row.input_worst.max(input / e);
+        row.input_worst_without = row.input_worst_without.max(input / e_without);
+        row.input_within += usize::from(input <= eps);
+        if eta == 0.0 {
+            row.units = row.units.max(error_over(&reference, &undamped, &undamped));
+        }
+    }
+    row
+}
+
+/// CH4.3a's pair evidence (docs/helmholtz/tasks/CH4.3a.md): the 34 classes at the (k a, p) of
+/// the FMM's levels on W1 and W3 at kD = 100, 200, 500 and 1000 (k a = kD √3 / 2^{l+1} for the
+/// levels l ≥ 2 down to k a ≈ 1.35; 216 at kD = 1000's level 2 is CH4.3c's), the calibrated p at
+/// ε = 10⁻³, 10⁻⁴, 10⁻⁶ and 10⁻⁸, real k and η = Im k / Re k = 0.1 (every k a: W1 at
+/// kD = 500 + 50i) and 1 (k a ≤ 21.65, kD = 100 + 100i's levels; at k a = 108 and η = 1 the
+/// transfer functions leave f64's range), both builds of the transfer functions. Asserted, in S6's
+/// calibrated range k a ≥ 2.8 (`S6_MIN_KA`): every class within 2E per pair against RCR (read
+/// against ref's projection at E's floor, p ≥ 72); everywhere: the RCR chain against the direct
+/// sum at real k within 10⁻⁴ at 10⁻⁸ (the units of the input-relative measure). Below k a = 2.8 a
+/// class above 2E is printed as a finding (on the M6: the direct build's (0, 0, 3) at k a = 1.69,
+/// η = 0.1, 10⁻⁴, 2.9 E with E ≪ ε; CH4.3a's record). Printed per row: the largest measured over E
+/// per pair and input-relative (over the undamped field, CH1.3c's input-side weighting), also over
+/// E without the damping factor, and the classes each would take. Release, one case per thread on
+/// the machine's threads; about nine minutes on the M6.
+/// The smallest k a of S6's sweep (2.83, `spikes/diagonal/SPIKE_REPORT.md` §2), on which C_T
+/// was fitted.
+const S6_MIN_KA: f64 = 2.8;
+
+#[test]
+#[ignore = "a study on the FMM's levels: run in release by hand"]
+fn the_bound_on_the_fmms_levels() {
+    let mut kas: Vec<f64> = Vec::new();
+    for kd in [100.0, 200.0, 500.0, 1000.0f64] {
+        let mut l = 2;
+        loop {
+            let ka = kd * 3f64.sqrt() / f64::from(1u32 << (l + 1));
+            if ka < 1.3 {
+                break;
+            }
+            if ka < 200.0 && !kas.iter().any(|&x| (x - ka).abs() < 1e-9) {
+                kas.push(ka);
+            }
+            l += 1;
+        }
+    }
+    kas.sort_by(|a, b| b.total_cmp(a));
+    let mut cases = Vec::new();
+    for &eta in &[0.0, 0.1, 1.0] {
+        for &ka in kas.iter().filter(|&&ka| eta < 1.0 || ka < 22.0) {
+            for &eps in &[1e-3, 1e-4, 1e-6, 1e-8] {
+                for build in [TransferBuild::Direct, TransferBuild::Interpolated] {
+                    cases.push((build, ka, eta, eps));
+                }
+            }
+        }
+    }
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let rows = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(&(build, ka, eta, eps)) = cases.get(i) else {
+                        break;
+                    };
+                    let row = study_row(build, ka, eta, eps, 40_000 + 1_000 * i as u64);
+                    rows.lock().unwrap().push((i, row));
+                }
+            });
+        }
+    });
+    let mut rows = rows.into_inner().unwrap();
+    rows.sort_by_key(|(i, _)| *i);
+    println!(
+        "| build | k a | η | ε | p | per pair ÷ E | input ÷ E | input ÷ E w/o factor | rule \
+         | rule w/o factor | input ≤ ε | units |"
+    );
+    println!(
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    );
+    let mut failures = Vec::new();
+    for (_, r) in &rows {
+        println!(
+            "| {:?} | {:.2} | {} | {:.0e} | {} | {:.3} | {:.2e} | {:.2e} | {}/34 | {}/34 | {}/34 \
+             | {} |",
+            r.build,
+            r.ka,
+            r.eta,
+            r.eps,
+            r.p,
+            r.worst,
+            r.input_worst,
+            r.input_worst_without,
+            r.passes,
+            r.passes_without,
+            r.input_within,
+            if r.eta == 0.0 {
+                format!("{:.1e}", r.units)
+            } else {
+                "–".into()
+            },
+        );
+        for f in &r.failures {
+            if r.ka < S6_MIN_KA {
+                println!(
+                    "FINDING below S6's range: {:?} k a {:.2} η {} ε {:e}: {f}",
+                    r.build, r.ka, r.eta, r.eps
+                );
+                continue;
+            }
+            failures.push(format!(
+                "{:?} k a {:.2} η {} ε {:e}: {f}",
+                r.build, r.ka, r.eta, r.eps
+            ));
+        }
+        if r.eta == 0.0 && r.eps == 1e-8 && r.units > 1e-4 {
+            failures.push(format!("units at k a {:.2}: {:.2e}", r.ka, r.units));
+        }
+    }
+    for f in &failures {
+        println!("FAIL {f}");
+    }
+    assert!(failures.is_empty(), "{} failures", failures.len());
+}
