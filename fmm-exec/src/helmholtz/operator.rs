@@ -276,7 +276,11 @@
 //! reads more, no value changed; and merge and shift's thread-seconds by part, on each
 //! worker's own clock (Helmholtz CH6.2f): its tasks (busy), the accumulators' shifts, the
 //! children's sums and shifts, and the conversions, a few clock reads per parent or child
-//! and frame, drained from the scratch sets after the level call.
+//! and frame, drained from the scratch sets after the level call. The diagonal level call
+//! times its two passes, S → F and the targets, and the workers' thread-seconds of S → F, the
+//! diagonal pairs, F → R and the RCR pairs, the same way
+//! ([`diagonal_times`](HelmholtzOperator::diagonal_times); Helmholtz CH4.2b2), with each
+//! level's tables' build ([`diagonal_build_time`](HelmholtzOperator::diagonal_build_time)).
 //!
 //! # The tables' build
 //!
@@ -369,8 +373,8 @@ mod plane_wave;
 mod rcr;
 
 pub use diagonal::{
-    DIAGONAL_F32_MIN_TOLERANCE, DiagonalCounts, HelmholtzDiagonal, diagonal_chunk_targets,
-    diagonal_rule_classes,
+    DIAGONAL_F32_MIN_TOLERANCE, DiagonalCounts, DiagonalTimes, HelmholtzDiagonal,
+    diagonal_chunk_targets, diagonal_rule_classes,
 };
 use diagonal::{DiagonalBuffer, DiagonalLevel, DiagonalScratch, DiagonalSettings};
 pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveSplit, PlaneWaveTimes};
@@ -1835,6 +1839,31 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// ([`DiagonalCounts`]).
     pub fn diagonal_counts(&self) -> &DiagonalCounts {
         &self.diagonal_buffer.counts
+    }
+
+    /// The diagonal level calls' times per level since the operator's M2L was last chosen
+    /// ([`DiagonalTimes`]; Helmholtz CH4.2b2): one entry per level, zero where no diagonal
+    /// level call ran; the passes within the level's [`m2l_times`](Self::m2l_times) entry.
+    /// This rank's.
+    pub fn diagonal_times(&self) -> &[DiagonalTimes] {
+        &self.diagonal_buffer.times
+    }
+
+    /// The wall time of building `level`'s transfer functions (one part per class on the
+    /// pool) and its conversions when the tables were last chosen (Helmholtz CH4.2b2), or
+    /// `None` where the level has no diagonal form. This rank's.
+    pub fn diagonal_build_time(&self, level: usize) -> Option<(Duration, Duration)> {
+        self.kernel.diagonal_level(level).map(|d| d.build)
+    }
+
+    /// The real multiply-adds of one conversion (S → F or F → R) of a box on `level`, both
+    /// steps (`nd_fmm_tables::helmholtz::diagonal::Conversions::multiply_adds`; Helmholtz
+    /// CH4.2b2), or `None` where the level has no diagonal form.
+    pub fn diagonal_multiply_adds(&self, level: usize) -> Option<u64> {
+        self.kernel.diagonal_level(level).map(|d| {
+            let (legendre, phi) = d.conversions.multiply_adds();
+            legendre + phi
+        })
     }
 
     /// The wall time of building the tables by part since the operator was constructed

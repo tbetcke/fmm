@@ -111,12 +111,12 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
-    DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzDiagonal, HelmholtzFmm,
-    HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
-    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes,
-    RCR_PAIR_FEW_DEGREE, RcrSplit, VNear, Wavenumber, WxNear, auto_batched_max_degree,
-    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree,
-    default_max_points_per_leaf,
+    DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, DiagonalTimes, HelmholtzDiagonal,
+    HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES,
+    OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit,
+    PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, VNear, Wavenumber, WxNear,
+    auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
+    auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -2165,6 +2165,7 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
             everywhere(fmm.operator().diagonal_buffer_peak_bytes() == peak, comm),
             "{what}: the buffer grew in an evaluation"
         );
+        check_diagonal_times(&what, &fmm, 1, 1, comm);
         let op = fmm.operator();
         let nlevels = fmm.nlevels();
         let counts = op.diagonal_counts().clone();
@@ -2252,7 +2253,9 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
         runs.push((2, Some(3)));
         for (threads, chunk) in runs {
             let named = diagonal.clone().threads(threads).diagonal_chunk(chunk);
-            let (_, got) = run(&named, &inputs, kind, comm);
+            let (fmm, got) = run(&named, &inputs, kind, comm);
+            check_diagonal_times(&what, &fmm, threads, 1, comm);
+            drop(fmm);
             assert_same(
                 &format!("{what} at {threads} threads, chunks of {chunk:?}"),
                 &got,
@@ -2309,6 +2312,83 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
     let mut mixed_anywhere = 0;
     comm.all_reduce_into(&mixed, &mut mixed_anywhere, SystemOperation::max());
     mixed_anywhere
+}
+
+/// Checks the diagonal level call's times and counts (Helmholtz CH4.2b2) after the evaluations
+/// of `fmm` on `threads` threads with `vectors` vectors: on every diagonal level where this rank
+/// has V pairs both passes timed and within the level's M2L time, S → F, the pairs and F → R
+/// timed, the RCR pairs exactly where some pair stayed RCR, the threads' parts within the
+/// threads × the passes; the parts zero on every other level; each level call converts back
+/// one accumulator per target with a diagonal pair and vector (all its V rows where the level
+/// takes every class, at most those elsewhere); the build times and the multiply-adds on the
+/// diagonal levels alone; on every rank or none.
+fn check_diagonal_times(
+    what: &str,
+    fmm: &HelmholtzFmm<'_, f64>,
+    threads: usize,
+    vectors: usize,
+    comm: &SimpleCommunicator,
+) {
+    let op = fmm.operator();
+    let (times, parts, counts) = (op.m2l_times(), op.diagonal_times(), op.diagonal_counts());
+    let mut problems: Vec<String> = Vec::new();
+    if parts.len() != fmm.nlevels() || counts.back.len() != fmm.nlevels() {
+        problems.push(format!("{} levels of times", parts.len()));
+    }
+    for level in 0..fmm.nlevels().min(parts.len()) {
+        let t = parts[level];
+        let view = fmm.plan().level(level).v();
+        let rows = (0..view.nrows())
+            .filter(|&r| !view.row(r).0.is_empty())
+            .count();
+        let calls = counts.level_calls[level];
+        let built = op.diagonal_build_time(level);
+        let adds = op.diagonal_multiply_adds(level);
+        match op.diagonal_classes(level) {
+            Some(classes) => {
+                let thread_time = t.s2f + t.pairs + t.f2r + t.rcr;
+                let wall = threads as u32 * (t.signatures + t.targets);
+                let (diagonal, rcr) = (
+                    counts.diagonal_pairs[level] > 0,
+                    counts.rcr_pairs[level] > 0,
+                );
+                let ok = if rows == 0 {
+                    thread_time.is_zero() && counts.back[level] == 0
+                } else {
+                    !t.targets.is_zero()
+                        && t.signatures + t.targets <= times[level]
+                        && t.signatures.is_zero() != diagonal
+                        && t.s2f.is_zero() != diagonal
+                        && t.pairs.is_zero() != diagonal
+                        && t.f2r.is_zero() != diagonal
+                        && (counts.back[level] > 0) == diagonal
+                        && t.rcr.is_zero() != rcr
+                        && thread_time <= wall
+                        && match classes.len() {
+                            34 => counts.back[level] == calls * rows * vectors,
+                            _ => counts.back[level] <= calls * rows * vectors,
+                        }
+                };
+                if !ok || built.is_none_or(|(w, c)| w.is_zero() || c.is_zero()) || adds.is_none() {
+                    problems.push(format!(
+                        "level {level}: {t:?}, M2L {:?}, {rows} rows, {calls} calls, back {}, \
+                         RCR pairs {}, built {built:?}, multiply-adds {adds:?}",
+                        times[level], counts.back[level], counts.rcr_pairs[level]
+                    ));
+                }
+            }
+            None => {
+                if t != DiagonalTimes::default() || built.is_some() || adds.is_some() {
+                    problems.push(format!("level {level} not diagonal: {t:?}, {built:?}"));
+                }
+            }
+        }
+    }
+    assert!(
+        everywhere(problems.is_empty(), comm),
+        "{what} at {threads} threads: the diagonal times (rank {}: {problems:?})",
+        comm.rank()
+    );
 }
 
 /// The scenarios of [`check_diagonal`], at ε = 10⁻⁴: the cube at complex k, whose levels 2 and
