@@ -9,9 +9,10 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged,
-and of item 10 CH4.1a, CH4.1b and CH4.2a. CH4.2b is split into CH4.2b1 (the diagonal M2L in
-the operator, opt-in; signed off on #238) and CH4.2b2 (W1 measured on Kathleen and locust), next; then
-CH4.3; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
+and of item 10 CH4.1a, CH4.1b, CH4.2a and CH4.2b1. CH4.2b2 (W1 measured: errors 1.000× RCR's,
+the diagonal levels 0.08–0.46× RCR's M2L) waits for its sign-off, which proposes CH4.2c (the
+interpolated transfer build) before CH4.3 and CH4.2d (kernels) off the list; the FFT track
+stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
 done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this
 file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
@@ -86,12 +87,13 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.3, CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20; CH4.2c proposed at CH4.2b2), CH4.3, CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211);
+CH4.2d (proposed at CH4.2b2, pending sign-off);
 CH4.0k (added at CH4.0h; the user, 2026-11-16, on #221: off the list; kept off at CH4.0j, on
 #223); CH4.0l (added at CH4.0i;
 the user, 2026-11-16, on #222: off the list);
@@ -681,15 +683,26 @@ task's full line is in its record or report and its progress entry
   errors on the cube (kD = 40 + 2i) and the clusters (kD = 20, a mixed level 4) at 10⁻⁴,
   threads, chunk widths and ranks bit for bit. *Sign-off:* the PR's question 1 (the user on
   #238, 2026-11-20: "Yes to Q1"): the whole-level fallback built here, from CH4.3's Also.
-- [ ] **CH4.2b2 The diagonal M2L on W1, measured.** *Done when:* the FMM against the direct
-  sum on W1 (kD = 500 at 10⁻⁶ and 10⁻⁸; kD = 1000 at 10⁻⁶) within 1.1× RCR's error, the
-  diagonal levels' M2L time against RCR's per level, at 1 × 40 (Kathleen) and 1 × 72 (locust).
-  Also (CH4.1a's report §2, moved from CH4.1b): the column kernel of
-  `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core (baseline SSE2
-  codegen, no fma) and 6–10 on a Grace core; measure the level's conversions here and, if they
-  matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1). Also: the transfer
-  tables' build time per level (one part per class), against the interpolated build of
-  proposal §5.4 if it dominates. *Needs:* CH4.2b1. *Machines:* Kathleen, locust.
+- [x] **CH4.2b2 The diagonal M2L on W1, measured.** Report:
+  `fmm-validate/results/helmholtz-ch4-2b2.md`; record `docs/helmholtz/tasks/CH4.2b2.md`. W1 at
+  kD = 500 (10⁻⁶, 10⁻⁸) and 1000 (10⁻⁶), 1 × 40 Kathleen and 1 × 72 locust: errors 1.000×
+  Rotation's; the diagonal levels 0.08–0.46× RCR's M2L (0.95–1.02× on mixed levels), the
+  evaluation 1.5–2.9× faster than Rotation's; the conversions 24–49 % of the call; the transfer
+  build one class at the top level per node, every class serially at one rank per core (61 s).
+  *Sign-off:* pending, the PR's questions 1–4.
+- [ ] **CH4.2c The transfer functions interpolated, and built in parts finer than a class.**
+  (Proposed at CH4.2b2, its question 2, pending sign-off.) *Done when:* T interpolated in
+  ŝ · t̂ from an extended-precision table (proposal §5.4; S6: 11× faster at p = 256, C_T = 0.23)
+  against the direct build within the bound at C_T = 0.23 on every class CI runs; the build in
+  parts by ring, bit for bit the build by class; W1 at kD = 500 and 1000's diagonal tables timed
+  at 1 × 40 and 40 × 1 against CH4.2b2's (2.3 s and 61 s at p = 131). *Needs:* CH4.2b2.
+  *Machines:* Kathleen.
+- [ ] **CH4.2d Dispatched kernels for the diagonal pair and the conversions.** (Proposed at
+  CH4.2b2, its question 3, pending sign-off; off the list, reconsidered at CH4.5.) *Done when:*
+  the pair and the conversions' column kernel on `nd-fmm-simd`'s ISAs, bit for bit or within
+  rounding of the scalar path as the crate's rules say (constraint 1); the diagonal levels'
+  call timed against CH4.2b2's (pairs 50–80 %, conversions 24–49 % of its thread time).
+  *Needs:* CH4.2b2. *Machines:* Kathleen, locust.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
@@ -711,7 +724,11 @@ the projection rounding more than both). Also (CH4.1b's report §3, question 1, 
   fallback to RCR decided from the largest need over the ranks (`scratch_shape` on every rank,
   one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9), built in
   CH4.2b1 (the opt-in needs it); here its place in the time rule; at 40 ranks per node W1 at
-  kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2b2.
+  kD = 1000's levels 2–3 do not fit a rank's 205 MiB. Also (CH4.2b2's report §3.2, its question
+  4, pending sign-off): the order between the exponential M2L (D8) and the diagonal form per
+  level, by time at matched accuracy: under Rotation the diagonal form ran W1's levels 4–8 at
+  0.29–0.83× the defaults' waves, the evaluation 1.6–2.8× faster than the defaults'; D8 amended
+  here if it moves. *Needs:* CH4.2b2, CH4.2c.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at

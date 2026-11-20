@@ -90,13 +90,39 @@ These decide nothing by themselves: CH4.3 takes the crossover per class and the 
 ## Constraints and risks
 - Constraint 1: no Laplace path (Helmholtz modules of `nd-fmm-exec`, the harness).
 - Constraint 2: the timings read clocks only; the bits unchanged (`check_diagonal`'s bit checks).
-- Constraint 7: W1 at kD = 1000's levels 2–3 at 40 × 1 fall back (CH4.1b); reported.
+- Constraint 7: W1 at kD = 1000's levels 2–3 at 40 × 1 fall back (CH4.1b); not run here (Results).
 - Risk: the transfer tables at p = 131–245 (kD = 1000's level 2) are built in double-double per
   class (ref's `Transfer`); their build may take minutes. Measured here, the reason for the Also.
 - Risk: the debug cost of `helmholtz_fmm` (CI's 900 s): the new checks read reports only.
 
 ## Pending runs
-(filled in step 6)
+None. Kathleen job 653533 (node-c11a-025, `singlenode`, 11 min: the build, `w1` and `ranks`);
+locust 2026-11-20 08:44–08:48 (1 × 72, idle before: load 0.00, GPU 0 %). Raw outputs in
+`~/projects/fmm-archive/{kathleen,locust}/runs/ch4-2b2/`.
+
+## Results
+- Built as planned. Deviations: the counts' `back` and the times live in the operator's
+  diagonal buffer (reset with the counts), not in a new operator field; `DiagonalTimes` is the
+  passes' wall time and the parts' thread-seconds in one type; the build times are
+  `diagonal_build_time(level)` per level; the harness's "÷ Rotation" counts a Rotation row with
+  the diagonal form against the one without; the GF/s column on one rank only (the
+  self-review: counts summed against the slowest rank's seconds). Not done: the build against
+  the interpolated build of §5.4 (none exists yet; proposed as CH4.2c), and kD = 1000 at 40 × 1
+  (CH4.1b's fallback levels; its build alone would take minutes, report §5–6).
+- The acceptance (report §2): 1.000× Rotation's errors (φ and ∇φ) on all three cases on both
+  machines; under the defaults the form takes the levels Auto leaves on RCR, errors unchanged.
+- The levels (report §3): 0.08–0.46× RCR's M2L where every class is diagonal, 0.95–1.02× on
+  mixed levels (12 or 21 classes); Rotation with the form 1.6–2.8× faster than the defaults on
+  the evaluation, its levels 0.29–0.83× the defaults' waves (a question for CH4.3).
+- The conversions (report §4): 24–49 % of the call's thread time, 1.7–5.1 GF/s per thread at
+  p ≥ 41 on Kathleen (40 threads), 3.3–11 on locust; the pairs 50–80 %.
+- The build (report §5): one class at the top level per node (2.3 s at p = 131, 11.9 s at p = 245
+  on Kathleen); every class serially at 40 × 1 (61 s at p = 131, against an evaluation of 3.9 s).
+- Ranks (report §6): the same checksum at 1 × 40, 2 × 20 and 40 × 1; no level falls back at
+  kD = 500 at 40 ranks per node.
 
 ## Open questions
-(filled when they arise)
+For sign-off on the PR (report §7): 1, the acceptance as read; 2, a new task CH4.2c (the
+interpolated transfer build in parts finer than a class) before CH4.3; 3, CH4.2d (dispatched
+kernels for the pair and the conversions) off the list; 4, an Also on CH4.3: the order between
+the exponential M2L (D8) and the diagonal form per level.
