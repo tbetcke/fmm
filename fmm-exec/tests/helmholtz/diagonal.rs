@@ -214,18 +214,20 @@ fn no_level_where_the_rule_does_not_apply() {
     }
 }
 
-/// Costs under which the diagonal form beats every other M2L wherever a class passes.
+/// Costs under which the diagonal form beats every other M2L wherever a class passes (the
+/// waves cost more per box than any level's RCR pairs).
 const FREE: DiagonalCosts = DiagonalCosts {
     s2f: [0.0, 0.0],
     f2r: [0.0, 0.0],
     pair: [0.0, 0.0],
     rotation: [1.0, 1.0],
-    plane_wave: [1.0, 1.0],
+    plane_wave: [1e12, 1e12],
 };
 
 /// Costs under which it never does.
 const DEAR: DiagonalCosts = DiagonalCosts {
     pair: [1e9, 1e9],
+    plane_wave: [0.0, 0.0],
     ..FREE
 };
 

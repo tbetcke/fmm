@@ -276,18 +276,20 @@
 //! level below the M2L the level would run otherwise ([`DiagonalCosts`], per machine class,
 //! [`diagonal_costs`]; named by [`with_diagonal_costs`](HelmholtzOperator::with_diagonal_costs)):
 //! S → F and F → R per box with a V row, the diagonal pair per pair of a diagonal class, RCR's
-//! pair per pair of the others, each a (p + 1)² + b (p + 1)³ thread-ns. On an RCR level it reads
-//! the level's V lists ([`DiagonalShape`]: the boxes with a V row and the pairs per class,
+//! pair per pair of the others, the exponential M2L per box with a V row, each a (p + 1)² +
+//! b (p + 1)³ thread-ns. It reads the level's V lists ([`DiagonalShape`]: the boxes with a V
+//! row and the pairs per class,
 //! [`with_diagonal_shapes`](HelmholtzOperator::with_diagonal_shapes), which the builder counts
-//! and sums over the ranks; the uniform level's without them) against RCR's
-//! ([`diagonal_beats_rcr`]). Under [`HelmholtzM2l::Auto`] a level with waves goes to the
-//! diagonal form where, on the uniform level, the model puts it below the waves at their degree
-//! ([`diagonal_beats_plane_waves`]): decided in `wave_levels` before the plan, from the
-//! settings and degrees alone, so that the builder's V rule reads the same levels (Helmholtz
-//! CHA.11); such a level runs at its own degree, not the waves' raised one, takes no batched
-//! tables, and keeps the form whatever its shape. Each choice is a function of agreed counts,
-//! (p, k̂, ε, T) and agreed constants, so the same on every rank and at every rank count; the
-//! scratch budget's whole-level fallback comes first.
+//! in its plan and sums over the ranks; the uniform level's without them): on an RCR level
+//! against RCR ([`diagonal_beats_rcr`]); under [`HelmholtzM2l::Auto`] on a level with waves
+//! against the waves at their degree ([`diagonal_beats_plane_waves`]: the waves cost per box,
+//! the form per pair, so the order turns on the pairs per box). A level taken from the waves
+//! runs at its own degree, not the waves' raised one, takes no batched tables, and keeps the
+//! form whatever RCR would cost. The builder's V rule reads `wave_levels` before the plan, a
+//! superset of the operator's levels with waves; its grouping per (parent, source) converts
+//! exact pairs under every M2L. Each choice is a function of agreed counts, (p, k̂, ε, T) and
+//! agreed constants, so the same on every rank and at every rank count; the scratch budget's
+//! whole-level fallback comes first.
 //!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
@@ -596,10 +598,6 @@ pub(crate) struct WaveSettings<'a> {
     /// The FMM's tolerance, if it has one
     /// ([`HelmholtzOperator::with_plane_wave_tolerance`]).
     pub(crate) tolerance: Option<f64>,
-    /// Under [`HelmholtzDiagonal::Auto`] the diagonal form's build and the time rule's costs
-    /// (Helmholtz CH4.3b1): Auto's levels with waves that [`diagonal_beats_plane_waves`] at
-    /// the tolerance go to the diagonal form; `None` under the other diagonal settings.
-    pub(crate) diagonal: Option<(TransferBuild, DiagonalCosts)>,
 }
 
 /// The levels whose M2L is the exponential one, each with its quadrature's precision (`None`
@@ -609,12 +607,13 @@ pub(crate) struct WaveSettings<'a> {
 /// levels from 2 whose κ_l = 2 k̂_0 / 2^l lies in the tables (`domain_of`; the tables build
 /// none elsewhere); under [`HelmholtzM2l::Auto`] with waves, in f64 only, the rule's on the
 /// levels of degree at least the smallest with Im κ_l < [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`]
-/// (Helmholtz CH6.2h, D8), less, under [`HelmholtzDiagonal::Auto`], the levels whose bound's
-/// classes at the base degree make the diagonal form faster by the time rule
-/// ([`diagonal_beats_plane_waves`] against the waves at `plane_wave_degree`; Helmholtz
-/// CH4.3b1). A function of the settings and the degrees alone: the operator builds these
-/// levels' tables, and `HelmholtzFmmBuilder` reads them before the plan for the V rule
-/// (Helmholtz CH4.0d2), so the two cannot differ.
+/// (Helmholtz CH6.2h, D8). A function of the settings and the degrees alone:
+/// `HelmholtzFmmBuilder` reads these levels before the plan for the V rule (Helmholtz
+/// CH4.0d2), and the operator builds their tables, less, under [`HelmholtzDiagonal::Auto`],
+/// those the diagonal form's time rule takes after the plan (Helmholtz CH4.3b1): the
+/// operator's levels with waves are these or fewer, never more. The V rule's grouping per
+/// (parent, source) converts exact pairs under every M2L, so a level the form takes keeps
+/// an exact plan.
 pub(crate) fn wave_levels<T>(
     settings: &WaveSettings<'_>,
     k_root: Complex<f64>,
@@ -641,34 +640,13 @@ pub(crate) fn wave_levels<T>(
                 .enumerate()
                 .map(|(l, precision)| {
                     precision.filter(|_| {
-                        base[l] >= settings.min_degree
-                            && kappa(l).im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
-                            && !diagonal_takes_waves(settings, k_root, base, l)
+                        base[l] >= settings.min_degree && kappa(l).im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
                     })
                 })
                 .collect(),
         ),
         _ => None,
     }
-}
-
-/// Whether, under [`HelmholtzDiagonal::Auto`], the time rule gives level `l` of an Auto level
-/// with waves to the diagonal form (Helmholtz CH4.3b1): the bound's classes at the base degree
-/// p_l, k̂_l = k̂_0 / 2^l (`HelmholtzTables`' wavenumber) and the tolerance, in f64 (the
-/// waves' precision), against the exponential M2L at its degree `plane_wave_degree(p_l, ε)`.
-fn diagonal_takes_waves(
-    settings: &WaveSettings<'_>,
-    k_root: Complex<f64>,
-    base: &[usize],
-    l: usize,
-) -> bool {
-    let (Some((build, costs)), Some(epsilon)) = (settings.diagonal, settings.tolerance) else {
-        return false;
-    };
-    let p = base[l];
-    let k_hat = k_root * (0.5f64).powi(l as i32);
-    let classes = diagonal_rule_classes::<f64>(p, k_hat, epsilon, build);
-    diagonal_beats_plane_waves(&costs, p, plane_wave_degree(p, epsilon), &classes)
 }
 
 /// Whether the setting is [`HelmholtzM2l::Auto`] with the exponential M2L, which runs in f64
@@ -1535,27 +1513,45 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         // Im κ_l (since CH6.1h's sign-off, 2026-11-11, at every tolerance with a quadrature),
         // less those the diagonal form's time rule takes (Helmholtz CH4.3b1).
         let costs = kernel.diagonal_costs();
-        let mut settings = WaveSettings {
-            m2l: choice,
-            precision: &kernel.plane_wave_precision,
-            auto_plane_wave: kernel.auto_plane_wave,
-            min_degree: kernel.auto_plane_wave_min_degree(),
+        let mut precisions = wave_levels::<T>(
+            &WaveSettings {
+                m2l: choice,
+                precision: &kernel.plane_wave_precision,
+                auto_plane_wave: kernel.auto_plane_wave,
+                min_degree: kernel.auto_plane_wave_min_degree(),
+                tolerance,
+            },
+            k_root,
+            &base,
+        );
+        let mut from_waves = vec![false; base.len()];
+        if let (HelmholtzDiagonal::Auto, HelmholtzM2l::Auto, Some(epsilon), Some(levels)) = (
+            kernel.diagonal_settings.choice,
+            choice,
             tolerance,
-            diagonal: None,
-        };
-        let without = wave_levels::<T>(&settings, k_root, &base);
-        if kernel.diagonal_settings.choice == HelmholtzDiagonal::Auto {
-            settings.diagonal = Some((kernel.diagonal_settings.build, costs));
+            precisions.as_mut(),
+        ) {
+            for (l, precision) in levels.iter_mut().enumerate() {
+                if precision.is_none() {
+                    continue;
+                }
+                let p = base[l];
+                let k_hat = kernel.tables.k_hat(l);
+                let classes =
+                    diagonal_rule_classes::<T>(p, k_hat, epsilon, kernel.diagonal_settings.build);
+                let shape = kernel.diagonal_settings.shape(l);
+                if diagonal_beats_plane_waves(
+                    &costs,
+                    p,
+                    plane_wave_degree(p, epsilon),
+                    &shape,
+                    &classes,
+                ) {
+                    *precision = None;
+                    from_waves[l] = true;
+                }
+            }
         }
-        let precisions = wave_levels::<T>(&settings, k_root, &base);
-        // The levels whose waves the diagonal form took: it runs them whatever their shape.
-        let from_waves: Vec<bool> = (0..base.len())
-            .map(|l| {
-                let had = without.as_ref().is_some_and(|w| w[l].is_some());
-                let has = precisions.as_ref().is_some_and(|w| w[l].is_some());
-                had && !has
-            })
-            .collect();
         // The rule's resolving degree on the levels with waves (Helmholtz CH6.1g), under
         // PlaneWave's rule and under Auto: the level's stores, its M2L and its leaves at
         // p_w = max(p_l, d), and its translations to and from its parent too unless
@@ -3008,8 +3004,8 @@ mod tests {
     use nd_octree::PhysicalBox;
 
     use super::{
-        DEFAULT_BLOCK_BUDGET, DIAGONAL_COSTS_X86, DiagonalCosts, HelmholtzDiagonal, HelmholtzM2l,
-        HelmholtzOperator, PlaneWavePrecision, TransferBuild, WaveSettings, wave_levels,
+        DEFAULT_BLOCK_BUDGET, DiagonalCosts, HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator,
+        PlaneWavePrecision, WaveSettings, wave_levels,
     };
     use crate::geometry::{Domain, radius};
     use crate::helmholtz::{ChargeKind, Densities, Wavenumber};
@@ -3025,29 +3021,31 @@ mod tests {
         let domain = Domain::new(&PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])).unwrap();
         let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
         // The settings first and the tables once, as `HelmholtzFmmBuilder::build` does.
-        let op = HelmholtzOperator::<T>::unbuilt(
-            k,
-            densities,
-            &domain,
-            &DEGREES,
-            false,
-            8,
-            DEFAULT_BLOCK_BUDGET,
-        )
-        .unwrap()
-        .with_plane_wave_tolerance(settings.tolerance)
-        .with_m2l_plane_wave_min_degree(Some(settings.min_degree))
-        .with_auto_plane_wave(settings.auto_plane_wave)
-        .with_plane_wave_precision(settings.precision.clone())
-        .with_m2l(settings.m2l, 0);
-        let op = match settings.diagonal {
-            Some((build, costs)) => op
-                .with_diagonal(HelmholtzDiagonal::Auto)
-                .with_diagonal_build(build)
-                .with_diagonal_costs(Some(costs)),
-            None => op,
-        }
-        .build_tables();
+        let unbuilt = || {
+            HelmholtzOperator::<T>::unbuilt(
+                k,
+                densities,
+                &domain,
+                &DEGREES,
+                false,
+                8,
+                DEFAULT_BLOCK_BUDGET,
+            )
+            .unwrap()
+            .with_plane_wave_tolerance(settings.tolerance)
+            .with_m2l_plane_wave_min_degree(Some(settings.min_degree))
+            .with_auto_plane_wave(settings.auto_plane_wave)
+            .with_plane_wave_precision(settings.precision.clone())
+            .with_m2l(settings.m2l, 0)
+        };
+        let op = unbuilt().build_tables();
+        // The diagonal form's time rule at free costs takes levels from the waves after the
+        // plan (Helmholtz CH4.3b1): the operator's levels with waves then lie within the
+        // function's.
+        let free = unbuilt()
+            .with_diagonal(HelmholtzDiagonal::Auto)
+            .with_diagonal_costs(Some(FREE_DIAGONAL))
+            .build_tables();
         let r0 = radius(0, &domain);
         let k_root = Complex::new(k.re() * r0, k.im() * r0);
         let levels = wave_levels::<T>(settings, k_root, &DEGREES);
@@ -3060,6 +3058,10 @@ mod tests {
         };
         let case = format!("k {k:?}, {settings:?}, {}", std::any::type_name::<T>());
         assert_eq!(chosen, operator, "{case}");
+        for (l, chosen) in chosen.iter().enumerate() {
+            let waves = free.plane_wave_precision(l);
+            assert!(waves.is_none() || waves == *chosen, "{case}, level {l}");
+        }
         // `None` exactly where the setting runs no exponential M2L.
         let runs = settings.m2l == HelmholtzM2l::PlaneWave
             || (settings.m2l == HelmholtzM2l::Auto
@@ -3081,7 +3083,6 @@ mod tests {
             auto_plane_wave: false,
             min_degree: 0,
             tolerance,
-            diagonal: None,
         });
         let auto =
             [(true, 0), (true, 6), (false, 0)].map(|(auto_plane_wave, min_degree)| WaveSettings {
@@ -3090,26 +3091,17 @@ mod tests {
                 auto_plane_wave,
                 min_degree,
                 tolerance,
-                diagonal: None,
             });
-        // Auto with the diagonal form's time rule (Helmholtz CH4.3b1), at x86's costs and at
-        // costs under which the form takes every level where a class passes the bound.
-        let diagonal = [DIAGONAL_COSTS_X86, FREE_DIAGONAL].map(|costs| WaveSettings {
-            diagonal: Some((TransferBuild::Interpolated, costs)),
-            ..auto[0]
-        });
         let rotation = WaveSettings {
             m2l: HelmholtzM2l::Rotation,
             precision: precisions[1],
             auto_plane_wave: true,
             min_degree: 0,
             tolerance,
-            diagonal: Some((TransferBuild::Direct, FREE_DIAGONAL)),
         };
         plane_wave
             .into_iter()
             .chain(auto)
-            .chain(diagonal)
             .chain([rotation])
             .collect()
     }
@@ -3120,7 +3112,7 @@ mod tests {
         f2r: [0.0, 0.0],
         pair: [0.0, 0.0],
         rotation: [1.0, 1.0],
-        plane_wave: [1.0, 1.0],
+        plane_wave: [1e12, 1e12],
     };
 
     /// The levels with waves under every setting that chooses them (Helmholtz CHA.11), at no

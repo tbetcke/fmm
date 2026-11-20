@@ -998,15 +998,17 @@ impl HelmholtzFmmBuilder {
         let mut plane_wave_min_degree = 0u64;
         comm.all_reduce_into(&local, &mut plane_wave_min_degree, SystemOperation::min());
         // The levels whose M2L is the exponential one: the operator's choice from the same
-        // settings and degrees (`wave_levels`, Helmholtz CHA.11). There merge and shift serves a
-        // parent's sources to its children by geometric masks, so the V rule decides per parent
-        // and source (`v_group`).
+        // settings and degrees (`wave_levels`, Helmholtz CHA.11), less, under the diagonal
+        // form's time rule, those it takes after the plan (Helmholtz CH4.3b1). There merge and
+        // shift serves a parent's sources to its children by geometric masks, so the V rule
+        // decides per parent and source (`v_group`), which converts exact pairs under every
+        // M2L, so a level the form takes keeps an exact plan.
         let k_root = Complex::new(
             self.k.re() * radius(0, &domain),
             self.k.im() * radius(0, &domain),
         );
         // The diagonal form's time rule's costs (Helmholtz CH4.3b1), agreed alike (the
-        // largest of each constant), before the waves, which they may move.
+        // largest of each constant).
         let local = self
             .diagonal_costs
             .unwrap_or_else(|| diagonal_costs(isa))
@@ -1021,8 +1023,6 @@ impl HelmholtzFmmBuilder {
                 auto_plane_wave: self.auto_plane_wave,
                 min_degree: usize::try_from(plane_wave_min_degree).unwrap_or(usize::MAX),
                 tolerance,
-                diagonal: (self.diagonal == HelmholtzDiagonal::Auto)
-                    .then_some((self.diagonal_build, costs)),
             },
             k_root,
             &degrees,

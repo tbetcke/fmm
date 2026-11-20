@@ -2352,7 +2352,7 @@ const FREE_DIAGONAL: DiagonalCosts = DiagonalCosts {
     f2r: [0.0, 0.0],
     pair: [0.0, 0.0],
     rotation: [1.0, 1.0],
-    plane_wave: [1.0, 1.0],
+    plane_wave: [1e12, 1e12],
 };
 
 /// The diagonal form's time rule (Helmholtz CH4.3b1, `HelmholtzDiagonal::Auto`) on `base`'s
