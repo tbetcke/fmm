@@ -38,7 +38,14 @@
 //! thread count, every chunk width and on P ranks the one-rank output (proposal §2,
 //! constraint 2; §5.4, step 3). The accumulators are each thread's, a chunk of targets × m
 //! signatures in the [`Signatures`] layout; one allocation per store holds every level's layout
-//! (`Signatures::relayout`).
+//! (`Signatures::relayout`). The operator's store is sized from the source counts
+//! ([`with_diagonal_sources`]); without them, and for the slots of a level's boxes, the first
+//! level call of the largest level grows the buffer once.
+//!
+//! The levels depend on the budget per rank, the node's over the ranks per node, as the dense
+//! tables' do: where the budget binds, a level may take the diagonal form at one rank per node
+//! and not at many, so the output on P ranks is the one-rank FMM's bit for bit where the levels
+//! taken agree (always, where no level falls back).
 //!
 //! The pair body ([`PairOperator`](nd_fmm_plan::operator::PairOperator)) takes a diagonal
 //! offset by S → F of the source, the pair and F → R of the pair alone: the level call to
@@ -245,12 +252,6 @@ fn store_for<T: SimdScalar>(layouts: impl Iterator<Item = (usize, usize)>) -> Si
     Signatures::new(samples, boxes)
 }
 
-/// Whether `store` holds `boxes` signatures of `samples` samples in its allocation.
-fn holds<T: SimdScalar>(store: &Signatures<T>, samples: usize, boxes: usize) -> bool {
-    Signatures::<T>::bytes_for(samples, boxes)
-        <= Signatures::<T>::bytes_for(store.samples(), store.capacity())
-}
-
 /// One thread's scratch of the diagonal form: each level's conversion scratch, the
 /// accumulators of a chunk of targets × vectors (at least two signatures, for the pair body),
 /// and the gather buffer of `BLOCK_BOXES` expansions of two planes.
@@ -440,6 +441,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
         // 1. The slots, in ascending box index.
         let nboxes = multipoles.len();
+        // Grown at the first level call of the largest level (its boxes are the plan's, own
+        // and ghost, which the operator is not given), then reused.
         if buffer.slot_of.len() < nboxes {
             buffer.slot_of.resize(nboxes, 0);
             buffer.slot_source.resize(nboxes, 0);
@@ -473,9 +476,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         if !buffer
             .signatures
             .as_ref()
-            .is_some_and(|s| holds(s, samples, slots * m))
+            .is_some_and(|s| s.fits(samples, slots * m))
         {
-            // Not sized for this level (no source counts): grown once.
+            // Not sized for this level (no source counts given): grown here, once for the
+            // largest level met.
             buffer.signatures = Some(Signatures::new(samples, slots * m));
         }
         buffer.peak = buffer.peak.max(buffer.bytes());

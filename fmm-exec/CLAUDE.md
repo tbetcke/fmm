@@ -723,7 +723,10 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   Auto (where Auto leaves no RCR level, the setting's output unchanged): the errors within
   `DIAGONAL_RATIO` (1.1) of the setting's without it, 2 threads (4 in release) and chunks of
   1, 2, 3, 5 and 7 (1 and 3 in debug builds) bit for bit, the one-rank FMM, two vectors each
-  the one-vector FMM, and the budget's floor Rotation's bits. Its debug cost: about 110 s of the
+  the one-vector FMM, the budget's floor Rotation's bits, and a second evaluation the same bits
+  with the signature buffer not grown (sized from the agreed source counts; without them, and
+  for the slots, the first call of the largest level grows it once). Where the budget binds,
+  the levels depend on the ranks per node, as the dense tables' do. Its debug cost: about 110 s of the
   one-rank run on a loaded M6 (less with the debug widths), 8 s at opt-level 1.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread

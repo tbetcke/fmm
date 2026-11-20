@@ -238,6 +238,9 @@ fn a_store_laid_out_again_for_another_degree() {
     ] {
         let mut scratch = ConversionScratch::new(conversions);
         let (len, samples) = (conversions.expansion_len(), conversions.samples());
+        // Every layout of the four fits whatever the present one.
+        assert!(store.fits(small.samples(), 9) && store.fits(large.samples(), 2));
+        assert!(!store.fits(large.samples(), 3 * store_boxes.max(9)));
         store.relayout(samples, boxes);
         assert_eq!(
             (store.samples(), store.boxes(), store.capacity()),

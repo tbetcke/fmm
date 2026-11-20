@@ -20,7 +20,7 @@ level); Helmholtz CH4.1a (`helmholtz::diagonal`, S → F and F → R of the diag
 products over a batch of boxes); Helmholtz CH4.1b (`helmholtz::diagonal::level`, the level's
 signature buffers, scratch and driver, and `signed_permutation`); Helmholtz CH4.2a
 (`helmholtz::diagonal::transfer`, the transfer functions per (level, class) and the pair);
-Helmholtz CH4.2b1 (`Signatures::{strides_mut, relayout}` and `Conversions::s2f_strides`, for
+Helmholtz CH4.2b1 (`Signatures::{strides_mut, relayout, fits}` and `Conversions::s2f_strides`, for
 nd-fmm-exec's threaded level call).
 
 ## Rules
@@ -210,7 +210,8 @@ nd-fmm-exec's threaded level call).
   fallback to RCR). Since Helmholtz CH4.2b1 a threaded caller splits the held boxes'
   strides (`strides_mut`, one slice) into blocks and converts each with `s2f_strides` (each box
   `s2f`'s bits at every split), and lays one allocation out again for another degree
-  (`relayout`: the padding zeroed, the samples left until written, no allocation);
+  (`relayout`: the padding zeroed, the samples left until written, no allocation; `fits`
+  tells whether a layout fits the allocation);
   `tests/helmholtz/diagonal_level.rs` checks both. `signed_permutation` names ref's `diagonal::Symmetry` (flips, then the
   x ↔ y swap) as the element of O_h acting the same on offsets (review 2026-11-19, C5).
   `tests/helmholtz/diagonal_level.rs` checks the alignment (f64 and f32, padded and not), the

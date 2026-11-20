@@ -141,7 +141,7 @@ impl<T: RealScalar> Signatures<T> {
     pub fn relayout(&mut self, samples: usize, boxes: usize) {
         let stride = Self::stride_for(samples);
         assert!(
-            self.start + boxes * stride <= self.values.len(),
+            self.fits(samples, boxes),
             "{boxes} boxes of {samples} samples exceed the store's {} values",
             self.values.len()
         );
@@ -155,6 +155,12 @@ impl<T: RealScalar> Signatures<T> {
         self.stride = stride;
         self.capacity = boxes;
         self.boxes = boxes;
+    }
+
+    /// Whether the store's allocation holds `boxes` boxes of `samples` samples
+    /// ([`relayout`](Self::relayout)), whatever its present layout.
+    pub fn fits(&self, samples: usize, boxes: usize) -> bool {
+        self.start + boxes * Self::stride_for(samples) <= self.values.len()
     }
 
     /// The samples of a signature.

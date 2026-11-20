@@ -2131,7 +2131,7 @@ fn check_rcr_split(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// one; chunks of 1, 2, 3, 5 and 7 targets (1 and 3 in debug builds) and 3 at 2 threads bit
 /// for bit the default; on P ranks the one-rank
 /// FMM bit for bit; two vectors each the one-vector FMM; the budget's floor (every level RCR)
-/// Rotation's bits. Returns the levels that mixed the two forms on some rank.
+/// Rotation's bits; a second evaluation the same bits, the signature buffer not grown. Returns the levels that mixed the two forms on some rank.
 fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
     let name = scenario.name;
     let kind = scenario.charges;
@@ -2152,8 +2152,19 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
         let plain_errors = errors(scenario, &inputs, &plain, 0, comm);
         drop(fmm);
         let diagonal = base.clone().diagonal(HelmholtzDiagonal::Rule);
-        let (fmm, want) = run(&diagonal, &inputs, kind, comm);
+        let (mut fmm, want) = run(&diagonal, &inputs, kind, comm);
         let what = format!("{name}, {setting} with the diagonal M2L");
+        // A second evaluation: the same bits, and the buffer sized by the build holds every
+        // level (no growth between the levels' layouts).
+        let peak = fmm.operator().diagonal_buffer_peak_bytes();
+        let again = fmm
+            .evaluate(&inputs.charges(kind))
+            .unwrap_or_else(|error| panic!("rank {}: the evaluation: {error}", comm.rank()));
+        assert_same(&format!("{what}: evaluated again"), &again, &want, comm);
+        assert!(
+            everywhere(fmm.operator().diagonal_buffer_peak_bytes() == peak, comm),
+            "{what}: the buffer grew in an evaluation"
+        );
         let op = fmm.operator();
         let nlevels = fmm.nlevels();
         let counts = op.diagonal_counts().clone();
