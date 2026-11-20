@@ -19,7 +19,9 @@ a caller's threads); Helmholtz CH4.0j (the exponential M2L's tables in parts wit
 level); Helmholtz CH4.1a (`helmholtz::diagonal`, S → F and F → R of the diagonal form as
 products over a batch of boxes); Helmholtz CH4.1b (`helmholtz::diagonal::level`, the level's
 signature buffers, scratch and driver, and `signed_permutation`); Helmholtz CH4.2a
-(`helmholtz::diagonal::transfer`, the transfer functions per (level, class) and the pair).
+(`helmholtz::diagonal::transfer`, the transfer functions per (level, class) and the pair);
+Helmholtz CH4.2b1 (`Signatures::{strides_mut, relayout, fits}` and `Conversions::s2f_strides`, for
+nd-fmm-exec's threaded level call).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -205,7 +207,12 @@ signature buffers, scratch and driver, and `signed_permutation`); Helmholtz CH4.
   node's ranks): the tables (`Conversions::bytes_for`, the Legendre tables (p + 1)²(p + 2)
   values), a `ConversionScratch` and gather buffer per thread, the sources' signatures whole,
   the largest chunk of accumulators that fits, `None` below `BLOCK_BOXES` targets (CH4.3's
-  fallback to RCR). `signed_permutation` names ref's `diagonal::Symmetry` (flips, then the
+  fallback to RCR). Since Helmholtz CH4.2b1 a threaded caller splits the held boxes'
+  strides (`strides_mut`, one slice) into blocks and converts each with `s2f_strides` (each box
+  `s2f`'s bits at every split), and lays one allocation out again for another degree
+  (`relayout`: the padding zeroed, the samples left until written, no allocation; `fits`
+  tells whether a layout fits the allocation);
+  `tests/helmholtz/diagonal_level.rs` checks both. `signed_permutation` names ref's `diagonal::Symmetry` (flips, then the
   x ↔ y swap) as the element of O_h acting the same on offsets (review 2026-11-19, C5).
   `tests/helmholtz/diagonal_level.rs` checks the alignment (f64 and f32, padded and not), the
   store conversions bit for bit, the level call against the sum of `nd_fmm_ref`'s

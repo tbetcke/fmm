@@ -7,14 +7,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 `docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
 `docs/helmholtz/gates/<milestone>.md`.
 
-Status (2026-11-19): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
-`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged
-(CH4.0–CH4.0j, CHA.1–CHA.3, CH1.3d1–d2, CHA.11), and of item 10 CH4.1a and CH4.1b (the product
-conversions, the signature buffers and the level's scratch). CH4.2 is split into CH4.2a (the
-transfer functions per class and the pair, against RCR within 2E; signed off on #237) and CH4.2b (the operator, threaded, opt-in), next; then CH4.3;
-the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and
-of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's
-history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
+`gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged,
+and of item 10 CH4.1a, CH4.1b and CH4.2a. CH4.2b is split into CH4.2b1 (the diagonal M2L in
+the operator, opt-in; signed off on #238) and CH4.2b2 (W1 measured on Kathleen and locust), next; then
+CH4.3; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
+done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this
+file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
@@ -87,7 +86,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b; split on 2026-11-19), CH4.3, CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.3, CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -667,20 +666,30 @@ task's full line is in its record or report and its progress entry
   the RCR pairs after F → R bit for bit at every chunk size. *Sign-off:* the PR's questions 1–2
   (the user on #237, 2026-11-19: "Yes to both questions"): the acceptance as read, with the
   reading at E's floor; W stored with RCR's factor folded in.
-- [ ] **CH4.2b The diagonal M2L in the operator.** `nd-fmm-exec`: the high-frequency levels'
-  M2L by CH4.2a's tables, opt-in (the default unchanged until CH4.3), the classes by the bound
+- CH4.2b The diagonal M2L in the operator. `nd-fmm-exec`: the high-frequency levels' M2L by
+  CH4.2a's tables, opt-in (the default unchanged until CH4.3), the classes by the bound
   E ≤ θ ε with S6's constants and RCR on the rest. *Done when:* the FMM against the direct sum
   on W1 within RCR's errors (1.1×); every output bit for bit at every thread count, chunk size
-  and rank count (constraint 2). Also (CH4.1b): the threaded level call keeps `m2l_level`'s
-  order (each target's row in order, F → R after, the RCR pairs added after F → R), the
-  buffers' layout as signed off, and `scratch_shape`'s budget per rank from
-  `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node. Also (CH4.1a's report §2, moved from
-  CH4.1b): the column kernel of `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a
-  Kathleen core (baseline SSE2 codegen, no fma) and 6–10 on a Grace core; measure the level's
-  conversions here and, if they matter, propose a dispatched kernel (`nd-fmm-simd`:
-  constraint 1). Also: the transfer tables' build time per level (one part per class), against
-  the interpolated build of proposal §5.4 if it dominates. *Needs:* CH4.2a. *Machines:*
-  Kathleen, locust.
+  and rank count (constraint 2). Split on 2026-11-20 into CH4.2b1 (the operator) and CH4.2b2
+  (W1 on the machines), by the size rule of `/next-task` (a new operator plus measurements on
+  several machines).
+- [x] **CH4.2b1 The diagonal M2L in the operator: the level call and the rule.** Record
+  `docs/helmholtz/tasks/CH4.2b1.md` (no report: no timing). `HelmholtzDiagonal` (opt-in,
+  `Off` the default), each class with E ≤ θ ε on the RCR levels, the threaded level call (row
+  order, F → R, the RCR pairs after), the whole-level fallback from the agreed source counts
+  within `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node; the FMM 1.000× Rotation's
+  errors on the cube (kD = 40 + 2i) and the clusters (kD = 20, a mixed level 4) at 10⁻⁴,
+  threads, chunk widths and ranks bit for bit. *Sign-off:* the PR's question 1 (the user on
+  #238, 2026-11-20: "Yes to Q1"): the whole-level fallback built here, from CH4.3's Also.
+- [ ] **CH4.2b2 The diagonal M2L on W1, measured.** *Done when:* the FMM against the direct
+  sum on W1 (kD = 500 at 10⁻⁶ and 10⁻⁸; kD = 1000 at 10⁻⁶) within 1.1× RCR's error, the
+  diagonal levels' M2L time against RCR's per level, at 1 × 40 (Kathleen) and 1 × 72 (locust).
+  Also (CH4.1a's report §2, moved from CH4.1b): the column kernel of
+  `nd_fmm_tables::helmholtz::diagonal` runs at 3–5 GF/s on a Kathleen core (baseline SSE2
+  codegen, no fma) and 6–10 on a Grace core; measure the level's conversions here and, if they
+  matter, propose a dispatched kernel (`nd-fmm-simd`: constraint 1). Also: the transfer
+  tables' build time per level (one part per class), against the interpolated build of
+  proposal §5.4 if it dominates. *Needs:* CH4.2b1. *Machines:* Kathleen, locust.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
   back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
@@ -700,8 +709,9 @@ task's full line is in its record or report and its progress entry
 record: the diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245,
 the projection rounding more than both). Also (CH4.1b's report §3, question 1, signed off 2026-11-19 on #236): the whole-level
   fallback to RCR decided from the largest need over the ranks (`scratch_shape` on every rank,
-  one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9); at 40 ranks
-  per node W1 at kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2b.
+  one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9), built in
+  CH4.2b1 (the opt-in needs it); here its place in the time rule; at 40 ranks per node W1 at
+  kD = 1000's levels 2–3 do not fit a rank's 205 MiB. *Needs:* CH4.2b2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at

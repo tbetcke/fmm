@@ -239,6 +239,32 @@
 //! f64 only (§3.15, "Precision and range"): f32's range is untested (the factors reach
 //! about 10³⁴ at iprec 3).
 //!
+//! The diagonal form (Helmholtz CH4.2b1; proposal §3.6, §5.4; opt-in until CH4.3,
+//! [`with_diagonal`](HelmholtzOperator::with_diagonal), default [`HelmholtzDiagonal::Off`])
+//! runs on the levels whose M2L is RCR's under the setting above (no waves, no Dense, Classes
+//! or Batched tables), so it composes with every [`HelmholtzM2l`]: each offset class c of
+//! such a level with E(l, c) ≤ θ ε ([`diagonal_rule_classes`]: the bound of
+//! `nd_fmm_tables::helmholtz::diagonal::class_bounds`, θ = 1/2, S6's constants of f64, or of
+//! f32 at ε ≥ 10⁻⁴ only, decision D3) takes `DiagonalM2l`'s transfer function; the others stay
+//! on RCR. [`HelmholtzDiagonal::Rule`] reads the FMM's tolerance
+//! ([`with_plane_wave_tolerance`](HelmholtzOperator::with_plane_wave_tolerance)),
+//! [`HelmholtzDiagonal::Tolerance`] a named one. A level takes it only where its scratch fits
+//! the budget ([`with_diagonal_budget`](HelmholtzOperator::with_diagonal_budget)) at the largest
+//! count of its V sources over the ranks
+//! ([`with_diagonal_sources`](HelmholtzOperator::with_diagonal_sources)), else the whole level
+//! runs RCR, the same on every rank. Its level call forms the signature of every distinct
+//! source of a diagonal pair and vector once (S → F, blocks over the pool), then, in chunks of
+//! consecutive targets over the pool, zeroes each target's accumulator per vector, adds its
+//! diagonal pairs in row order, F → R into its local, then its RCR pairs in row order: each
+//! local's chain is its own row's, so the output is the same at every thread count and chunk
+//! width ([`with_diagonal_chunk`](HelmholtzOperator::with_diagonal_chunk)) and on P ranks the
+//! one-rank output (proposal §5.4, step 3). [`m2l_on`](HelmholtzOperator::m2l_on) reports such
+//! a level as [`HelmholtzM2l::Rotation`], [`diagonal_classes`](HelmholtzOperator::diagonal_classes)
+//! its classes, [`diagonal_counts`](HelmholtzOperator::diagonal_counts) its pairs. The pair body
+//! ([`PairOperator`]) takes a diagonal offset by S → F, the pair and F → R of the pair alone,
+//! the level call to rounding. Its tables are not cached; their build time is
+//! [`TableTimings::diagonal`].
+//!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
 //! clock reads per call, no value changed; so is every P2P level call
@@ -335,11 +361,18 @@ use crate::driver::{self, Columns, Execution, HostKernel, debug_check_octant, of
 use crate::geometry::{Domain, radius, relative_frame};
 use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
 
+#[path = "operator_diagonal.rs"]
+mod diagonal;
 #[path = "operator_plane_wave.rs"]
 mod plane_wave;
 #[path = "operator_rcr.rs"]
 mod rcr;
 
+pub use diagonal::{
+    DIAGONAL_F32_MIN_TOLERANCE, DiagonalCounts, HelmholtzDiagonal, diagonal_chunk_targets,
+    diagonal_rule_classes,
+};
+use diagonal::{DiagonalBuffer, DiagonalLevel, DiagonalScratch, DiagonalSettings};
 pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveSplit, PlaneWaveTimes};
 use plane_wave::{PlaneBuffer, PlaneScratch};
 use rcr::RcrBuffer;
@@ -715,6 +748,9 @@ pub struct TableTimings {
     pub matrices: Duration,
     /// The exponential M2L's tables (`PlaneWaveM2l`).
     pub plane_waves: Duration,
+    /// The diagonal form's transfer functions and conversions (`DiagonalM2l`, `Conversions`;
+    /// Helmholtz CH4.2b1).
+    pub diagonal: Duration,
     /// The scratch sets of every thread, sized for the tables.
     pub scratch: Duration,
 }
@@ -722,7 +758,7 @@ pub struct TableTimings {
 impl TableTimings {
     /// The sum of the parts.
     pub fn total(&self) -> Duration {
-        self.rcr + self.matrices + self.plane_waves + self.scratch
+        self.rcr + self.matrices + self.plane_waves + self.diagonal + self.scratch
     }
 }
 
@@ -735,6 +771,8 @@ pub struct HelmholtzOperator<T: SimdScalar> {
     plane_buffer: PlaneBuffer<T>,
     /// The Rotation M2L's buffer of contributions by pairs (Helmholtz CH4.0i).
     rcr_buffer: RcrBuffer<T>,
+    /// The diagonal M2L's source signatures and slots (Helmholtz CH4.2b1).
+    diagonal_buffer: DiagonalBuffer<T>,
     /// The M2L level calls' wall time per level since the tables were last chosen
     /// ([`m2l_times`](HelmholtzOperator::m2l_times)).
     m2l_times: Vec<Duration>,
@@ -821,6 +859,10 @@ struct Kernel<T: SimdScalar> {
     /// The exponential M2L's tables of the levels that have them, under
     /// [`HelmholtzM2l::PlaneWave`].
     plane_waves: Option<PlaneWaveM2l<T>>,
+    /// The diagonal M2L's settings (Helmholtz CH4.2b1).
+    diagonal_settings: DiagonalSettings,
+    /// The diagonal M2L's tables per level, where a level takes it.
+    diagonal: Vec<Option<DiagonalLevel<T>>>,
     /// The batched M2L's column kernel, on the P2P kernel's ISA (scalar for the reference).
     matrix: MatrixKernel<T>,
     /// The P2P kernel of `nd-fmm-simd`, or `None` for the reference.
@@ -849,6 +891,8 @@ struct Scratch<T: SimdScalar> {
     columns: Columns<T>,
     /// The exponential M2L's buffers, under [`HelmholtzM2l::PlaneWave`].
     plane: Option<PlaneScratch<T>>,
+    /// The diagonal M2L's buffers, where a level takes it (Helmholtz CH4.2b1).
+    diagonal: Option<DiagonalScratch<T>>,
 }
 
 impl<T: SimdScalar> HelmholtzOperator<T> {
@@ -981,6 +1025,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             plane_wave_reach: RHO_MAX,
             plane_wave_raise: PlaneWaveRaise::Rule,
             plane_waves: None,
+            diagonal_settings: DiagonalSettings::default(),
+            diagonal: Vec::new(),
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
         };
@@ -1000,6 +1046,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             execution,
             plane_buffer: PlaneBuffer::default(),
             rcr_buffer: RcrBuffer::default(),
+            diagonal_buffer: DiagonalBuffer::default(),
             m2l_times,
             p2p_times,
             kind_times,
@@ -1223,11 +1270,15 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// Gives [`PlaneWavePrecision::Rule`] the FMM's tolerance ε (`Degrees::Tolerance`'s;
     /// `None`, the default, for named degrees, when the rule reads each level's degree),
-    /// before or after [`with_m2l`](Self::with_m2l). Under PlaneWave the levels' tables are
-    /// built again.
+    /// before or after [`with_m2l`](Self::with_m2l); [`HelmholtzDiagonal::Rule`] reads it too
+    /// (Helmholtz CH4.2b1). Under PlaneWave, Auto with waves and the diagonal rule the levels'
+    /// tables are built again.
     pub fn with_plane_wave_tolerance(mut self, tolerance: Option<f64>) -> Self {
         self.kernel.plane_wave_tolerance = tolerance;
-        if self.kernel.m2l == HelmholtzM2l::PlaneWave || self.kernel.auto_takes_plane_waves() {
+        if self.kernel.m2l == HelmholtzM2l::PlaneWave
+            || self.kernel.auto_takes_plane_waves()
+            || self.kernel.diagonal_settings.choice == HelmholtzDiagonal::Rule
+        {
             self.select_tables();
         }
         self
@@ -1545,6 +1596,24 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             tables.set_m2l_blocks(&rcr, kernel.block_budget, &parts);
         }
         timings.rcr += clock.elapsed();
+        // The diagonal form on the RCR levels where the rule takes some class (Helmholtz
+        // CH4.2b1), after the RCR tables, whose wavenumbers it reads.
+        let clock = Instant::now();
+        kernel.diagonal = diagonal::select::<T>(
+            &kernel.diagonal_settings,
+            tolerance,
+            &rcr,
+            &degrees,
+            |l| kernel.tables.k_hat(l),
+            kernel.densities.vectors(),
+            &parts,
+        );
+        timings.diagonal += clock.elapsed();
+        self.diagonal_buffer.size(
+            &kernel.diagonal,
+            &kernel.diagonal_settings,
+            kernel.densities.vectors(),
+        );
         self.plane_buffer.size(kernel.plane_waves.as_ref());
         self.plane_buffer.counts = PlaneWaveCounts::default();
         self.rcr_buffer.counts = RcrCounts::default();
@@ -1582,7 +1651,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         };
         let m = self.kernel.densities.vectors();
         let rotation: Vec<bool> = (0..self.kernel.tables.nlevels())
-            .map(|l| self.m2l_on(l) == HelmholtzM2l::Rotation)
+            .map(|l| {
+                self.m2l_on(l) == HelmholtzM2l::Rotation && self.kernel.diagonal_level(l).is_none()
+            })
             .collect();
         let tables = &self.kernel.tables;
         self.rcr_buffer.size(
@@ -1649,6 +1720,121 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// ([`RcrCounts`]).
     pub fn rcr_counts(&self) -> &RcrCounts {
         &self.rcr_buffer.counts
+    }
+
+    /// Runs the M2L of the levels whose M2L is RCR's by the diagonal form where its rule takes
+    /// an offset class (Helmholtz CH4.2b1; module documentation, "M2L"; default
+    /// [`HelmholtzDiagonal::Off`]): each class with E(l, c) ≤ θ ε
+    /// ([`diagonal_rule_classes`]) on the diagonal form, RCR on the others. The tables are
+    /// chosen again.
+    ///
+    /// # Panics
+    ///
+    /// If [`HelmholtzDiagonal::Tolerance`] names ε ≤ 0 or NaN.
+    pub fn with_diagonal(mut self, choice: HelmholtzDiagonal) -> Self {
+        if let HelmholtzDiagonal::Tolerance(epsilon) = choice {
+            assert!(
+                epsilon > 0.0,
+                "the diagonal form's tolerance {epsilon} is not positive"
+            );
+        }
+        self.kernel.diagonal_settings.choice = choice;
+        self.select_tables();
+        self
+    }
+
+    /// The diagonal M2L's setting ([`with_diagonal`](Self::with_diagonal)).
+    pub fn diagonal(&self) -> HelmholtzDiagonal {
+        self.kernel.diagonal_settings.choice
+    }
+
+    /// Bounds the scratch of a diagonal level call on this rank at `bytes` (`None`, the
+    /// operator's default: no bound): a level takes the diagonal form only where
+    /// `nd_fmm_tables::helmholtz::diagonal::scratch_shape` of its degree, its sources'
+    /// signatures (the counts of [`with_diagonal_sources`](Self::with_diagonal_sources) times
+    /// the vectors) and a chunk of accumulators fits, else RCR (the whole-level fallback;
+    /// without the counts no level falls back). `HelmholtzFmmBuilder` passes
+    /// `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node. The tables are chosen again.
+    pub fn with_diagonal_budget(mut self, bytes: Option<usize>) -> Self {
+        self.kernel.diagonal_settings.budget = bytes;
+        self.select_tables();
+        self
+    }
+
+    /// The diagonal level call's scratch bound
+    /// ([`with_diagonal_budget`](Self::with_diagonal_budget)).
+    pub fn diagonal_budget(&self) -> Option<usize> {
+        self.kernel.diagonal_settings.budget
+    }
+
+    /// Gives the diagonal form each level's distinct V sources (own and ghost boxes), the
+    /// largest count over the ranks, which the budget's fallback reads and the buffer is sized
+    /// for, so that every rank takes the same levels (proposal §2, constraints 2 and 9; a level
+    /// of count 0 has no V pairs on any rank and takes no tables). `HelmholtzFmmBuilder`
+    /// counts them in its plan and agrees them (all-reduce max). The tables are chosen again.
+    pub fn with_diagonal_sources(mut self, sources: Option<Vec<usize>>) -> Self {
+        self.kernel.diagonal_settings.sources = sources;
+        self.select_tables();
+        self
+    }
+
+    /// Names the width of the diagonal level call's chunks of targets (`None`, the default:
+    /// [`diagonal_chunk_targets`] of the level's boxes and the pool's threads), for the tests;
+    /// no bit depends on it. The scratch is sized again.
+    ///
+    /// # Panics
+    ///
+    /// If the width is 0.
+    pub fn with_diagonal_chunk(mut self, chunk: Option<usize>) -> Self {
+        assert_ne!(chunk, Some(0), "a chunk holds at least one target");
+        self.kernel.diagonal_settings.chunk = chunk;
+        self.select_tables();
+        self
+    }
+
+    /// The offset classes (indices into `nd_fmm_ref::helmholtz::diagonal::classes()`) that
+    /// take the diagonal form on `level`, or `None` where the level has none.
+    pub fn diagonal_classes(&self, level: usize) -> Option<Vec<usize>> {
+        self.kernel
+            .diagonal_level(level)
+            .map(|d| d.m2l.stored_classes())
+    }
+
+    /// The bytes of the diagonal form: the transfer functions and conversions of its levels,
+    /// the operator's buffer of source signatures as sized, and every thread's scratch.
+    pub fn diagonal_bytes(&self) -> usize {
+        let tables: usize = self
+            .kernel
+            .diagonal
+            .iter()
+            .flatten()
+            .map(|d| d.m2l.bytes() + d.conversions.bytes())
+            .sum();
+        let scratch: usize = self
+            .execution
+            .scratch
+            .iter()
+            .map(|s| {
+                s.lock()
+                    .expect("no level call holds a scratch set")
+                    .diagonal
+                    .as_ref()
+                    .map_or(0, DiagonalScratch::bytes)
+            })
+            .sum();
+        tables + self.diagonal_buffer.bytes() + scratch
+    }
+
+    /// The most bytes the diagonal form's buffer of source signatures held since the operator
+    /// was built.
+    pub fn diagonal_buffer_peak_bytes(&self) -> usize {
+        self.diagonal_buffer.peak
+    }
+
+    /// The counts of the diagonal level calls since the operator's M2L was last chosen
+    /// ([`DiagonalCounts`]).
+    pub fn diagonal_counts(&self) -> &DiagonalCounts {
+        &self.diagonal_buffer.counts
     }
 
     /// The wall time of building the tables by part since the operator was constructed
@@ -1842,6 +2028,11 @@ impl<T: SimdScalar> Scratch<T> {
                 targets: Vec::with_capacity(pairs),
             },
             plane: kernel.plane_waves.as_ref().map(PlaneScratch::new),
+            diagonal: DiagonalScratch::new(
+                &kernel.diagonal,
+                &kernel.diagonal_settings,
+                kernel.densities.vectors(),
+            ),
         }
     }
 }
@@ -2042,6 +2233,16 @@ impl<T: SimdScalar> Kernel<T> {
         let m = self.densities.vectors();
         if let Some(merge) = self.plane_wave_level(level) {
             return self.plane_wave_pair(merge, (level, d, child), multipole, local, s);
+        }
+        if self
+            .diagonal_level(level)
+            .is_some_and(|diagonal| diagonal.m2l.has_offset(d))
+        {
+            let scratch = s
+                .diagonal
+                .as_mut()
+                .expect("the scratch has the diagonal form's buffers");
+            return self.diagonal_pair(level, d, multipole, local, scratch);
         }
         match (&self.dense, &self.classes, self.batched(level)) {
             (Some(dense), _, _) if dense.is_dense(level) => {
@@ -2459,6 +2660,8 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T>
         let start = Instant::now();
         if self.kernel.plane_wave_level(level).is_some() {
             self.plane_wave_m2l(batch);
+        } else if self.kernel.diagonal_level(level).is_some() {
+            self.diagonal_m2l(batch);
         } else {
             match self.kernel.batched(level) {
                 Some(batched) => {

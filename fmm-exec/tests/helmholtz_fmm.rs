@@ -85,6 +85,15 @@
 //! ISA this machine lacks among them), each on every rank or on none. One scenario leaves
 //! rank 0 without points.
 //!
+//! The diagonal M2L (Helmholtz CH4.2b1, `check_diagonal`): on the cube at kD = 40 + 2i and the
+//! clusters at kD = 20, ε = 10⁻⁴ (the clusters' level 4 mixes the diagonal form and RCR),
+//! under Rotation and the library's Auto, the errors against the direct sum within
+//! `DIAGONAL_RATIO` (1.1) of the setting's without it, the classes the same on every rank,
+//! 2 threads (4 in release) and chunk widths bit for bit, the one-rank FMM, two vectors each
+//! the one-vector FMM, and the budget's floor Rotation's bits; where Auto leaves no RCR level,
+//! the setting's output unchanged. Its debug cost: about 110 s of the one-rank run on a loaded
+//! M6 (load about 23), 8 s at CI's opt-level 1.
+//!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
 //! at several ranks under a timeout, e.g. on macOS
 //! `cargo test -p nd-fmm-exec --test helmholtz_fmm --no-run`, then
@@ -102,11 +111,12 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
-    DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE,
-    RcrSplit, VNear, Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns,
-    auto_m2l_mul_add, auto_plane_wave_min_degree, default_max_points_per_leaf,
+    DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzDiagonal, HelmholtzFmm,
+    HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
+    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes,
+    RCR_PAIR_FEW_DEGREE, RcrSplit, VNear, Wavenumber, WxNear, auto_batched_max_degree,
+    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree,
+    default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -152,6 +162,11 @@ const PLANE_PAIR_TOLERANCE: f64 = 1e-14;
 /// the precision rule (CH6.1's acceptance, "within about 1.1× Rotation's", Helmholtz
 /// CH6.1e).
 const PLANE_WAVE_RATIO: f64 = 1.1;
+
+/// The diagonal M2L's errors against the direct sum within this factor of Rotation's (or of
+/// the setting's without it), φ and ∇φ: the acceptance of Helmholtz CH4.2b
+/// (docs/helmholtz/roadmap.md).
+const DIAGONAL_RATIO: f64 = 1.1;
 
 /// SplitMix64, uniform in [0, 1).
 struct Rng(u64);
@@ -2109,6 +2124,225 @@ fn check_rcr_split(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_same(&format!("{name}: Auto's M2L by pairs"), &got, &want, comm);
 }
 
+/// The diagonal M2L (Helmholtz CH4.2b1) under Rotation and under the library's Auto, against
+/// the setting without it: some level diagonal, and (summed over the scenarios, returned)
+/// whether a level mixed classes on both forms; the errors against the direct sum within
+/// [`DIAGONAL_RATIO`] of the setting's without it; 2 threads (and 4 in release) bit for bit
+/// one; chunks of 1, 2, 3, 5 and 7 targets (1 and 3 in debug builds) and 3 at 2 threads bit
+/// for bit the default; on P ranks the one-rank
+/// FMM bit for bit; two vectors each the one-vector FMM; the budget's floor (every level RCR)
+/// Rotation's bits; a second evaluation the same bits, the signature buffer not grown. Returns the levels that mixed the two forms on some rank.
+fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
+    let name = scenario.name;
+    let kind = scenario.charges;
+    let inputs = Inputs::new(scenario, 1, comm);
+    let sum = |local: &[usize], nlevels: usize| -> Vec<usize> {
+        let mut local = local.to_vec();
+        local.resize(nlevels, 0);
+        let mut summed = vec![0usize; nlevels];
+        comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+        summed
+    };
+    let mut mixed = 0;
+    for (setting, base) in [
+        ("Rotation", builder(scenario)),
+        ("Auto", default_builder(scenario).near_v(VNear::Off)),
+    ] {
+        let (fmm, plain) = run(&base, &inputs, kind, comm);
+        let plain_errors = errors(scenario, &inputs, &plain, 0, comm);
+        drop(fmm);
+        let diagonal = base.clone().diagonal(HelmholtzDiagonal::Rule);
+        let (mut fmm, want) = run(&diagonal, &inputs, kind, comm);
+        let what = format!("{name}, {setting} with the diagonal M2L");
+        // A second evaluation: the same bits, and the buffer sized by the build holds every
+        // level (no growth between the levels' layouts).
+        let peak = fmm.operator().diagonal_buffer_peak_bytes();
+        let again = fmm
+            .evaluate(&inputs.charges(kind))
+            .unwrap_or_else(|error| panic!("rank {}: the evaluation: {error}", comm.rank()));
+        assert_same(&format!("{what}: evaluated again"), &again, &want, comm);
+        assert!(
+            everywhere(fmm.operator().diagonal_buffer_peak_bytes() == peak, comm),
+            "{what}: the buffer grew in an evaluation"
+        );
+        let op = fmm.operator();
+        let nlevels = fmm.nlevels();
+        let counts = op.diagonal_counts().clone();
+        let (diagonal_pairs, rcr_pairs) = (
+            sum(&counts.diagonal_pairs, nlevels),
+            sum(&counts.rcr_pairs, nlevels),
+        );
+        let levels: Vec<(usize, usize)> = (2..nlevels)
+            .filter_map(|l| op.diagonal_classes(l).map(|c| (l, c.len())))
+            .collect();
+        // The classes are the same on every rank (constraint 9).
+        let mut flat: Vec<u64> = (0..nlevels)
+            .flat_map(|l| {
+                let mut row = [0u64; 34];
+                for c in op.diagonal_classes(l).unwrap_or_default() {
+                    row[c] = 1;
+                }
+                row
+            })
+            .collect();
+        let mut agreed = flat.clone();
+        comm.all_reduce_into(&flat[..], &mut agreed[..], SystemOperation::max());
+        let same = agreed == flat;
+        flat.clear();
+        assert!(
+            everywhere(same, comm),
+            "{what}: the classes differ between ranks"
+        );
+        // Under Auto a level with waves or batched tables takes no diagonal form; with no RCR
+        // level the setting changes nothing.
+        if levels.is_empty() {
+            assert!(setting == "Auto", "{what}: no level diagonal");
+            drop(fmm);
+            assert_same(&format!("{what}: no RCR level"), &want, &plain, comm);
+            if comm.rank() == 0 {
+                println!("{what}: no RCR level, the output unchanged");
+            }
+            continue;
+        }
+        for &(l, _) in &levels {
+            assert!(
+                diagonal_pairs[l] > 0,
+                "{what}: level {l} took no diagonal pair"
+            );
+            assert_eq!(op.m2l_on(l), HelmholtzM2l::Rotation, "{what}: level {l}");
+        }
+        mixed += levels
+            .iter()
+            .filter(|&&(l, classes)| classes < 34 && rcr_pairs[l] > 0)
+            .count();
+        let diagonal_errors = errors(scenario, &inputs, &want, 0, comm);
+        if comm.rank() == 0 {
+            println!(
+                "{what}: levels (level, classes) {levels:?}, diagonal pairs {diagonal_pairs:?}, \
+                 RCR pairs {rcr_pairs:?}; φ {:.3e} against {:.3e} ({:.3}×), ∇φ {:.3e} against \
+                 {:.3e}",
+                diagonal_errors.0,
+                plain_errors.0,
+                diagonal_errors.0 / plain_errors.0,
+                diagonal_errors.1,
+                plain_errors.1,
+            );
+        }
+        assert!(
+            diagonal_errors.0 <= DIAGONAL_RATIO * plain_errors.0
+                && diagonal_errors.1 <= DIAGONAL_RATIO * plain_errors.1,
+            "{what}: errors {diagonal_errors:?} against {plain_errors:?} without it"
+        );
+        drop(fmm);
+        // Threads and chunks.
+        let mut runs: Vec<(usize, Option<usize>)> = vec![(2, None)];
+        if !cfg!(debug_assertions) {
+            runs.push((4, None));
+        }
+        // Every width in release builds; 1 and 3 in debug builds (each run there takes up to
+        // 5 s on the cube on the M6).
+        let widths: &[usize] = if cfg!(debug_assertions) {
+            &[1, 3]
+        } else {
+            &[1, 2, 3, 5, 7]
+        };
+        for &chunk in widths {
+            runs.push((1, Some(chunk)));
+        }
+        runs.push((2, Some(3)));
+        for (threads, chunk) in runs {
+            let named = diagonal.clone().threads(threads).diagonal_chunk(chunk);
+            let (_, got) = run(&named, &inputs, kind, comm);
+            assert_same(
+                &format!("{what} at {threads} threads, chunks of {chunk:?}"),
+                &got,
+                &want,
+                comm,
+            );
+        }
+        check_one_rank(&what, &diagonal, &inputs, kind, &want, comm);
+        if setting == "Rotation" {
+            // The budget's floor: every level falls back to RCR, Rotation's bits.
+            let (fmm, floor) = run(&diagonal.clone().diagonal_budget(0), &inputs, kind, comm);
+            assert!(
+                (0..fmm.nlevels()).all(|l| fmm.operator().diagonal_classes(l).is_none()),
+                "{what}: a level diagonal at the budget's floor"
+            );
+            drop(fmm);
+            assert_same(
+                &format!("{what} at the budget's floor"),
+                &floor,
+                &plain,
+                comm,
+            );
+            // Two vectors, each the one-vector FMM.
+            let two = Inputs::new(scenario, 2, comm);
+            let (_, both) = run(&diagonal.clone().vectors(2), &two, kind, comm);
+            for v in 0..2 {
+                let one = Inputs {
+                    sources: two.sources.clone(),
+                    targets: two.targets.clone(),
+                    charges: vec![two.charges[v].clone()],
+                };
+                let (_, single) = run(&diagonal, &one, kind, comm);
+                let column = |output: &Output<f64>, v: usize| {
+                    let phi = output.potential_of(v);
+                    let mut bits: Vec<u64> = phi
+                        .re
+                        .iter()
+                        .chain(phi.im.unwrap_or(&[]))
+                        .map(|x| x.to_bits())
+                        .collect();
+                    if let Some(g) = output.gradient_of(v) {
+                        let im = g.im.unwrap_or(&[]);
+                        bits.extend(g.re.iter().chain(im).flatten().map(|x| x.to_bits()));
+                    }
+                    bits
+                };
+                assert!(
+                    everywhere(column(&both, v) == column(&single, 0), comm),
+                    "{what}: vector {v} of two is not the one-vector FMM bit for bit"
+                );
+            }
+        }
+    }
+    let mut mixed_anywhere = 0;
+    comm.all_reduce_into(&mixed, &mut mixed_anywhere, SystemOperation::max());
+    mixed_anywhere
+}
+
+/// The scenarios of [`check_diagonal`], at ε = 10⁻⁴: the cube at complex k, whose levels 2 and
+/// 3 (k a 8.7 and 4.3) take every class, and the clusters at kD = 20, whose level 4 (k a 1.1)
+/// leaves the nearest classes on RCR.
+fn diagonal_scenarios() -> Vec<Scenario> {
+    vec![
+        Scenario {
+            name: "cube, kD = 40 + 2i, ε = 1e-4, complex charges, gradients, rank 0 empty",
+            layout: Layout::Cube,
+            n: (1500, None),
+            k: (40.0, 2.0),
+            degrees: Degrees::Tolerance(1e-4),
+            bound: ERROR_FACTOR * 1e-4,
+            charges: ChargeKind::Complex,
+            gradients: true,
+            debug: true,
+            empty_rank0: true,
+        },
+        Scenario {
+            name: "clusters, kD = 20, ε = 1e-4, real charges",
+            layout: Layout::Clusters,
+            n: (1200, None),
+            k: (20.0, 0.0),
+            degrees: Degrees::Tolerance(1e-4),
+            bound: ERROR_FACTOR * 1e-4,
+            charges: ChargeKind::Real,
+            gradients: false,
+            debug: true,
+            empty_rank0: false,
+        },
+    ]
+}
+
 /// Two vectors: each bit for bit its one-vector FMM, the second against its direct sum;
 /// and a reused output.
 fn check_vectors(scenario: &Scenario, comm: &SimpleCommunicator) {
@@ -3171,6 +3405,12 @@ fn helmholtz_fmm() {
     check_vectors(&scenarios()[2], &comm);
     check_real_charges(&scenarios()[2], &comm);
     check_real_charges(&scenarios()[3], &comm);
+    // The diagonal M2L (CH4.2b1): some level mixes the diagonal form and RCR.
+    let mixed: usize = diagonal_scenarios()
+        .iter()
+        .map(|scenario| check_diagonal(scenario, &comm))
+        .sum();
+    assert!(mixed > 0, "no level mixed the diagonal form and RCR");
     check_errors(&comm);
     if comm.rank() == 0 {
         println!(

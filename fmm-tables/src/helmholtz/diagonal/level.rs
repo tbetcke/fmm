@@ -127,6 +127,42 @@ impl<T: RealScalar> Signatures<T> {
         }
     }
 
+    /// Lays the store out again in its allocation for `boxes` boxes of `samples` samples each
+    /// (another level's degree; Helmholtz CH4.2b1), holding and able to hold `boxes` boxes,
+    /// each on its line as before, the padding zero. The samples are left as they lie (the
+    /// earlier layout's values) until the caller writes them (S → F) or
+    /// [`zero`](Self::zero)es them.
+    /// Allocates nothing; a store made by [`new`](Self::new) for the most
+    /// [`bytes_for`](Self::bytes_for) among several layouts holds each of them.
+    ///
+    /// # Panics
+    ///
+    /// If the layout does not fit the allocation.
+    pub fn relayout(&mut self, samples: usize, boxes: usize) {
+        let stride = Self::stride_for(samples);
+        assert!(
+            self.fits(samples, boxes),
+            "{boxes} boxes of {samples} samples exceed the store's {} values",
+            self.values.len()
+        );
+        // The padding, less than a line per box.
+        let zero = Complex::new(T::zero(), T::zero());
+        let end = self.start + boxes * stride;
+        for b in self.values[self.start..end].chunks_exact_mut(stride) {
+            b[samples..].fill(zero);
+        }
+        self.samples = samples;
+        self.stride = stride;
+        self.capacity = boxes;
+        self.boxes = boxes;
+    }
+
+    /// Whether the store's allocation holds `boxes` boxes of `samples` samples
+    /// ([`relayout`](Self::relayout)), whatever its present layout.
+    pub fn fits(&self, samples: usize, boxes: usize) -> bool {
+        self.start + boxes * Self::stride_for(samples) <= self.values.len()
+    }
+
     /// The samples of a signature.
     pub fn samples(&self) -> usize {
         self.samples
@@ -203,6 +239,15 @@ impl<T: RealScalar> Signatures<T> {
         self.values[self.start..end].chunks_exact_mut(self.stride)
     }
 
+    /// The strides of the boxes it holds as one slice, box b's signature at `b *`
+    /// [`stride`](Self::stride), for a caller that splits blocks of boxes over threads
+    /// (`chunks_mut(n * stride)`) and converts each with
+    /// [`Conversions::s2f_strides`] (Helmholtz CH4.2b1).
+    pub fn strides_mut(&mut self) -> &mut [Complex<T>] {
+        let end = self.start + self.boxes * self.stride;
+        &mut self.values[self.start..end]
+    }
+
     /// Sets the samples of every box it holds to zero.
     pub fn zero(&mut self) {
         let samples = self.samples;
@@ -249,6 +294,50 @@ impl<T: RealScalar> Conversions<T> {
                 stride,
                 scratch,
             );
+        }
+    }
+
+    /// S → F of a batch of boxes into a slice of strides (a block of
+    /// [`Signatures::strides_mut`]): box b's signature at `b * stride`, [`s2f`](Self::s2f)'s
+    /// bits, the padding untouched (Helmholtz CH4.2b1).
+    ///
+    /// # Panics
+    ///
+    /// If `multipoles` is not a whole number of expansions, `stride` is below
+    /// [`samples`](Self::samples), the boxes do not fit `strides`, or the scratch was made for
+    /// another degree.
+    pub fn s2f_strides(
+        &self,
+        multipoles: &[T],
+        strides: &mut [Complex<T>],
+        stride: usize,
+        scratch: &mut ConversionScratch<T>,
+    ) {
+        assert_eq!(
+            scratch.p, self.p,
+            "the scratch has degree {}, the conversions {}",
+            scratch.p, self.p
+        );
+        let len = self.expansion_len();
+        assert!(
+            multipoles.len().is_multiple_of(len),
+            "the multipoles hold {} values, not a multiple of 2(p + 1)² = {len}",
+            multipoles.len()
+        );
+        assert!(
+            stride >= self.samples(),
+            "a stride of {stride} below {} samples",
+            self.samples()
+        );
+        let boxes = multipoles.len() / len;
+        if boxes > 0 {
+            let need = (boxes - 1) * stride + self.samples();
+            assert!(
+                strides.len() >= need,
+                "{boxes} boxes need {need} samples of strides, not {}",
+                strides.len()
+            );
+            self.s2f_strided(multipoles, &mut strides[..need], stride, scratch);
         }
     }
 
