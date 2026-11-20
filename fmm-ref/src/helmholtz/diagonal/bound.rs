@@ -29,7 +29,8 @@ impl BoundConstants {
         unit_roundoff: f32::EPSILON as f64 / 2.0,
     };
     /// f64, T interpolated in ŝ · t̂ from an extended-precision table: C_T = 0.23,
-    /// C₀ = 200 (S6 §7; not built here).
+    /// C₀ = 200 (S6 §7; the interpolated build is `nd_fmm_tables`', from
+    /// [`AngleTable`](super::AngleTable)).
     pub const F64_INTERPOLATED: Self = Self {
         c_t: 0.23,
         c_0: 200.0,

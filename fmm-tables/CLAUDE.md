@@ -226,7 +226,8 @@ and the build by ring).
   for the classes a caller names (indices into ref's `classes()`), each stored once as
   W = 4π ik̂ e^{2β − Im(k̂)|t|} T̂_rep: T̂ from ref's `Transfer::<f64>` (double-double, rounded
   once), the factor formed in f64 as `HelmholtzTables` forms the RCR M2L's and multiplied in
-  f64, then rounded to T; built one part per class (`build_on`). Each V offset reads its class
+  f64, then rounded to T; built one part per class (`build_on`; per (class, ring) since
+  CH4.2c1). Each V offset reads its class
   through an `OffsetMap` (the ring flip and the azimuth map j ↦ (start ± j) mod N_φ, derived
   from ref's `Symmetry::sample`), so `pair` (g = g + w · f per sample, product and sum rounded
   apart, two contiguous runs per ring) needs no table per offset; `offset_samples`

@@ -143,13 +143,14 @@ impl AngleTable {
         let (sm, cm) = self.nodes[m];
         let sin_delta = sin * cm - cos * sm;
         let delta = sin_delta + Dd::from_f64(asin_correction(sin_delta.hi));
-        let g = (delta * self.per_radian).to_f64();
-        let (mut n, mut f) = if g < 0.0 {
-            (m as isize - 1, g + 1.0)
+        let x = delta * self.per_radian;
+        // Below the node, f = x + 1 from double-double, so f is rounded once on either side.
+        let (mut n, mut f) = if x.hi < 0.0 {
+            (m as isize - 1, (x + Dd::ONE).to_f64())
         } else {
-            (m as isize, g)
+            (m as isize, x.to_f64())
         };
-        // g just below 0 rounds to g + 1 = 1, and g may reach 1 if ψ₀'s node is off by one.
+        // x just below 0 rounds to x + 1 = 1, and x may reach 1 if ψ₀'s node is off by one.
         if f >= 1.0 {
             n += 1;
             f -= 1.0;
@@ -275,18 +276,29 @@ mod tests {
         assert_eq!((t.degree(), t.steps(), t.shift()), (p, steps, to));
     }
 
-    /// S6's `angle` (atan2 of the double-double sine and cosine, corrected once by a
-    /// double-double sine and cosine of ψ₀), the trusted path of `position`.
-    fn exact_position(table: &AngleTable, grid: &Grid<f64>, i: usize, j: usize) -> f64 {
+    /// S6's `angle` and `Interp::eval`'s position (atan2 of the double-double sine and cosine,
+    /// corrected once by a double-double sine and cosine of ψ₀; n the floor, f from double-double
+    /// rounded once), the trusted path of `position`.
+    fn exact_position(table: &AngleTable, grid: &Grid<f64>, i: usize, j: usize) -> (isize, f64) {
         let (sin, cos) = table.sin_cos(grid, i, j);
         let psi0 = sin.to_f64().atan2(cos.to_f64());
         let (s0, c0) = Dd::from_f64(psi0).sin_cos();
         let psi = Dd::from_f64(psi0) + (sin * c0 - cos * s0);
-        (psi * table.per_radian).to_f64()
+        let x = psi * table.per_radian;
+        let n = x.hi.floor();
+        let f = (x - Dd::from_f64(n)).to_f64();
+        if f < 0.0 {
+            (n as isize - 1, f + 1.0)
+        } else if f >= 1.0 {
+            (n as isize + 1, f - 1.0)
+        } else {
+            (n as isize, f)
+        }
     }
 
-    /// Every sample's position against S6's: n + f within 4 u of ψ M/π, from p = 1 (the
-    /// largest half step, π/14) to p = 40, real and off-axis shifts.
+    /// Every sample's position against S6's: the same n and f within 4 u absolute (or, at a
+    /// node, the neighbouring n with f across it), from p = 1 (the largest half step, π/14) to
+    /// p = 40, axial, diagonal and off-axis shifts.
     #[test]
     fn positions_are_s6s() {
         let mut worst: f64 = 0.0;
@@ -303,13 +315,17 @@ mod tests {
                 for i in 0..grid.rings() {
                     for j in 0..grid.azimuths() {
                         let (n, f) = table.position(&grid, i, j);
-                        let exact = exact_position(&table, &grid, i, j);
-                        let diff = (n as f64 + f - exact).abs() / exact.max(1.0);
+                        let (ne, fe) = exact_position(&table, &grid, i, j);
+                        assert!(
+                            (n - ne).abs() <= 1,
+                            "p = {p}, {to:?} ({i}, {j}): n {n} {ne}"
+                        );
+                        // The fractions on one node's scale: exact in f64 for |n − ne| ≤ 1.
+                        let diff = ((n - ne) as f64 + f - fe).abs();
                         worst = worst.max(diff);
                         assert!(
                             diff <= 2.0 * f64::EPSILON,
-                            "p = {p}, {to:?} ({i}, {j}): {} against {exact}",
-                            n as f64 + f
+                            "p = {p}, {to:?} ({i}, {j}): ({n}, {f}) against ({ne}, {fe})"
                         );
                     }
                 }

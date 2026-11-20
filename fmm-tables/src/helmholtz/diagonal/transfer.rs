@@ -264,6 +264,11 @@ impl<'a> Interpolator<'a> {
     fn new(table: &'a AngleTable) -> Self {
         let steps = table.steps();
         let band = (2 * table.degree()) as f64 * core::f64::consts::PI / steps as f64;
+        debug_assert!(
+            band < core::f64::consts::PI,
+            "the angle grid must oversample the bandwidth 2p: {steps} steps at p = {}",
+            table.degree()
+        );
         let r2 = (INTERPOLATION_TERMS as f64 - 2.0).max(1.0) / (core::f64::consts::PI - band);
         Self {
             values: table.values(),
