@@ -20,9 +20,9 @@
 //! depends on |t| alone, which is the class's, so it is folded in as the RCR tables fold it,
 //! and the pair is one complex multiply-add per sample. The series of T̂ is never summed in the
 //! working precision (proposal §3.6; the interpolated build sums S6's interpolation of
-//! double-double values in f64, the variant S6 measured and CH0.6 signed off). This storage is the crate's: CONVENTIONS §3.15 leaves how T̂ is
-//! computed and stored to CH4.2 ("Not fixed here"). Classes that run RCR store nothing
-//! (proposal §5.4).
+//! double-double values in f64, the variant S6 measured and CH0.6 signed off). This storage is
+//! the crate's: CONVENTIONS §3.15 leaves how T̂ is computed and stored to CH4.2 ("Not fixed
+//! here"). Classes that run RCR store nothing (proposal §5.4).
 //!
 //! The classes are `nd_fmm_ref::helmholtz::diagonal::classes()`'s 34, by their index there
 //! (ordered by |t|², then by the representative).
@@ -43,8 +43,10 @@
 //!   double-double; the series is summed in f64. Its rounding is S6's 0.3–6× that of the direct
 //!   build (median 1.2), and the bound E holds with C_T = 0.23 in place of 0.15
 //!   ([`TransferBuild::bound_constants`]; signed off at CH0.6, question 3). The table costs
-//!   O(M p) double-double operations per class, a sample O(1) (72 f64 terms with an `exp`
-//!   each), against O(p) double-double operations per sample directly.
+//!   O(M p) double-double operations per class, a sample O(1) (its position in double-double
+//!   from the nearest node, then 72 f64 terms with an `exp` each), against O(p) double-double
+//!   operations per sample directly: on one core of locust 2.3× faster at p = 41, 6.1× at 131
+//!   and 9.6× at 245 (`time_one_class`; S6: 11× at p = 256).
 //!
 //! Both fold the same factor in the same way. The interpolated tables call libm's `atan2`,
 //! `sin` and `exp`, so they are a function of the machine's libm as well as of p, k̂ and the
