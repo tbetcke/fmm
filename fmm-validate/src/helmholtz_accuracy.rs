@@ -86,10 +86,11 @@ use mpi::collective::SystemOperation;
 use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DiagonalCounts, DiagonalTimes,
-    HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l,
-    LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit,
-    PlaneWaveTimes, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear,
+    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DiagonalCosts, DiagonalCounts,
+    DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
+    HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
+    PlaneWaveSplit, PlaneWaveTimes, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear,
+    diagonal_rule_classes,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -99,6 +100,7 @@ use nd_fmm_tables::helmholtz::diagonal::{
     DEFAULT_SIGNATURE_NODE_BUDGET, Signatures, scratch_shape,
 };
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
+use nd_fmm_tables::helmholtz::plane_wave::merge::plane_wave_degree;
 use nd_octree::PhysicalBox;
 
 use crate::SplitMix64;
@@ -213,6 +215,9 @@ pub struct Case {
     /// Helmholtz CH4.2c2; [`TransferBuild::Direct`] in [`Case::new`], named always, so that
     /// CH4.2b2's runs repeat; the library's default is interpolated since CH4.2c2's sign-off).
     pub diagonal_build: TransferBuild,
+    /// The diagonal form's time rule's costs (`HelmholtzFmmBuilder::diagonal_costs`, Helmholtz
+    /// CH4.3b1; `None` in [`Case::new`], the machine class's).
+    pub diagonal_costs: Option<DiagonalCosts>,
 }
 
 impl Case {
@@ -256,6 +261,7 @@ impl Case {
             rcr_split: None,
             diagonal: HelmholtzDiagonal::Off,
             diagonal_build: TransferBuild::Direct,
+            diagonal_costs: None,
         }
     }
 }
@@ -797,6 +803,14 @@ pub struct Row {
     /// Per level, one conversion's real multiply-adds (`HelmholtzOperator::
     /// diagonal_multiply_adds`; 0 without the form).
     pub diagonal_multiply_adds: Vec<u64>,
+    /// Per level, the diagonal form's time rule as the operator sees it (Helmholtz CH4.3b1):
+    /// [k a = Re(k) √3 r_l, the bound's classes at the FMM's tolerance and the build (at the
+    /// level's base degree; 0 without a tolerance), and the model's seconds of the level call
+    /// (thread-ns of `HelmholtzOperator::diagonal_costs` over the ranks × threads) with those
+    /// classes diagonal, by RCR alone and by the exponential M2L at
+    /// `plane_wave_degree(p_l, ε)`], each on the level's agreed shape
+    /// (`HelmholtzOperator::diagonal_shapes`).
+    pub diagonal_model: Vec<[f64; 5]>,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -1056,7 +1070,8 @@ pub fn run_output<C: CommunicatorCollectives>(
     }
     builder = builder
         .diagonal(case.diagonal)
-        .diagonal_build(case.diagonal_build);
+        .diagonal_build(case.diagonal_build)
+        .diagonal_costs(case.diagonal_costs);
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
     }
@@ -1406,6 +1421,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         diagonal_seconds: diagonal.seconds,
         diagonal_build: diagonal.build,
         diagonal_multiply_adds: diagonal.multiply_adds,
+        diagonal_model: diagonal_model(case, &fmm, size * threads),
         errors,
         checksum,
     };
@@ -1414,6 +1430,47 @@ pub fn run_output<C: CommunicatorCollectives>(
         output,
         domain: *fmm.domain(),
     })
+}
+
+/// [`Row::diagonal_model`] (Helmholtz CH4.3b1): per level k a, the bound's classes and the
+/// time rule's modelled seconds of the level by the form, by RCR and by the waves, the
+/// thread-ns over `cores` (ranks × threads).
+fn diagonal_model<C: CommunicatorCollectives>(
+    case: &Case,
+    fmm: &HelmholtzFmm<f64, C>,
+    cores: usize,
+) -> Vec<[f64; 5]> {
+    let op = fmm.operator();
+    let costs = op.diagonal_costs();
+    let shapes = op.diagonal_shapes().unwrap_or(&[]);
+    let epsilon = match case.degrees {
+        Degrees::Tolerance(epsilon) => Some(epsilon),
+        Degrees::PerLevel(_) => None,
+    };
+    let seconds = |ns: f64| ns / 1e9 / cores.max(1) as f64;
+    (0..fmm.nlevels())
+        .map(|l| {
+            let r = radius(l, fmm.domain());
+            let k_hat = Complex::new(case.k.0 * r, case.k.1 * r);
+            let ka = k_hat.re * 3f64.sqrt();
+            let p = op.base_degree(l);
+            let shape = shapes.get(l).copied().unwrap_or_default();
+            let classes = match epsilon {
+                Some(epsilon) if l >= 2 => {
+                    diagonal_rule_classes::<f64>(p, k_hat, epsilon, op.diagonal_build())
+                }
+                _ => Vec::new(),
+            };
+            let p_w = epsilon.map_or(p, |epsilon| plane_wave_degree(p, epsilon));
+            [
+                ka,
+                classes.len() as f64,
+                seconds(costs.diagonal_level(p, &shape, &classes)),
+                seconds(costs.rcr_level(p, &shape)),
+                seconds(costs.plane_wave_level(p_w, &shape)),
+            ]
+        })
+        .collect()
 }
 
 /// The diagonal M2L's columns of a [`Row`] (Helmholtz CH4.2b2).

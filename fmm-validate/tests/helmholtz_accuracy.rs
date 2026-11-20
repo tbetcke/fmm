@@ -1257,4 +1257,43 @@ fn check_diagonal(world: &SimpleCommunicator) {
             row_i.diagonal_classes, row_i.errors
         );
     }
+    // The time rule (Helmholtz CH4.3b1): reported, its levels a subset of the rule's with the
+    // same classes, within 1.1× Rotation's errors; the model's columns on every level: k a
+    // from the level's circumradius, the bound's classes the rule's where it took a level,
+    // the modelled seconds positive where the level has V pairs.
+    assert_eq!(off.diagonal_costs, None, "Case::new's");
+    let auto = Case {
+        diagonal: HelmholtzDiagonal::Auto,
+        ..on.clone()
+    };
+    let row_a = run(&auto, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row_a.diagonal, HelmholtzDiagonal::Auto);
+    for l in 0..row_a.levels {
+        let taken = row_a.diagonal_classes[l];
+        assert!(
+            taken == 0 || taken == row_on.diagonal_classes[l],
+            "level {l}"
+        );
+        let [ka, bound, diagonal, rcr, waves] = row_a.diagonal_model[l];
+        let expected = 30.0 * row_a.circumradii[l];
+        assert!((ka - expected).abs() <= 1e-12 * expected, "level {l}");
+        if l >= 2 && row_on.diagonal_classes[l] > 0 {
+            assert_eq!(bound as usize, row_on.diagonal_classes[l], "level {l}");
+        }
+        if l >= 2 && row_a.v_pairs[l] > 0 {
+            assert!(diagonal > 0.0 && rcr > 0.0 && waves > 0.0, "level {l}");
+        }
+    }
+    for (got, want) in row_a.errors.iter().zip(&row_off.errors) {
+        assert!(
+            got[0] <= 1.1 * want[0] && got[1] <= 1.1 * want[1],
+            "time rule: {got:?} against {want:?}"
+        );
+    }
+    if world.rank() == 0 {
+        println!(
+            "time rule: classes {:?}, model {:?}, errors {:?}",
+            row_a.diagonal_classes, row_a.diagonal_model, row_a.errors
+        );
+    }
 }
