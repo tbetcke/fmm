@@ -112,7 +112,7 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::plan::{Plan, PlanRules};
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
-use nd_fmm_tables::helmholtz::diagonal::DEFAULT_SIGNATURE_NODE_BUDGET;
+use nd_fmm_tables::helmholtz::diagonal::{CLASS_COUNT, DEFAULT_SIGNATURE_NODE_BUDGET};
 use nd_fmm_tables::helmholtz::plane_wave::merge::plane_wave_degree;
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
@@ -122,11 +122,12 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use thiserror::Error;
 
 use super::{
-    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DIAGONAL_BUILD, DegreeError, Degrees,
-    Densities, DensityError, HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, LevelShape,
-    OperatorError, Output, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit,
-    TableTimings, TransferBuild, Wavenumber, WavenumberKind, auto_batched_max_degree,
-    auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
+    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DIAGONAL_BUILD, DIAGONAL_COST_CONSTANTS,
+    DegreeError, Degrees, Densities, DensityError, DiagonalCosts, DiagonalShape, HelmholtzDiagonal,
+    HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output, PlaneWavePrecision,
+    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TableTimings, TransferBuild, Wavenumber,
+    WavenumberKind, auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree,
+    diagonal_costs, min_leaf_level, offset_class,
 };
 use crate::fmm::{FmmError, PointSet, SettingsError};
 use crate::geometry::{Domain, radius};
@@ -990,6 +991,12 @@ impl HelmholtzFmmBuilder {
             self.k.re() * radius(0, &domain),
             self.k.im() * radius(0, &domain),
         );
+        // The diagonal form's time rule's costs (Helmholtz CH4.3b1), agreed alike (the
+        // largest of each constant), before the waves, which they may move.
+        let local = diagonal_costs(isa).to_array();
+        let mut agreed = [0.0f64; DIAGONAL_COST_CONSTANTS];
+        comm.all_reduce_into(&local[..], &mut agreed[..], SystemOperation::max());
+        let costs = DiagonalCosts::from_array(agreed);
         let waves: Vec<bool> = match wave_levels::<T>(
             &WaveSettings {
                 m2l: self.m2l,
@@ -997,6 +1004,8 @@ impl HelmholtzFmmBuilder {
                 auto_plane_wave: self.auto_plane_wave,
                 min_degree: usize::try_from(plane_wave_min_degree).unwrap_or(usize::MAX),
                 tolerance,
+                diagonal: (self.diagonal == HelmholtzDiagonal::Auto)
+                    .then_some((self.diagonal_build, costs)),
             },
             k_root,
             &degrees,
@@ -1185,6 +1194,33 @@ impl HelmholtzFmmBuilder {
             .iter()
             .map(|&c| usize::try_from(c).unwrap_or(usize::MAX))
             .collect();
+        // The time rule's V lists (Helmholtz CH4.3b1): per level the boxes with a V row and the
+        // pairs per offset class, each box counted by the rank that computes it, summed over
+        // the ranks. Counted on every rank, whatever the setting.
+        let width = 1 + CLASS_COUNT;
+        let mut local = vec![0u64; width * plan.nlevels()];
+        for (l, counts) in local.chunks_exact_mut(width).enumerate() {
+            let v = plan.level(l).v();
+            for t in (0..v.nrows()).filter(|&t| plan.computes(l, t)) {
+                let (sources, offsets) = v.row(t);
+                if sources.is_empty() {
+                    continue;
+                }
+                counts[0] += 1;
+                for &d in offsets {
+                    counts[1 + offset_class(d as usize)] += 1;
+                }
+            }
+        }
+        let mut summed = vec![0u64; local.len()];
+        comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+        let diagonal_shapes: Vec<DiagonalShape> = summed
+            .chunks_exact(width)
+            .map(|c| DiagonalShape {
+                targets: c[0],
+                class_pairs: core::array::from_fn(|k| c[1 + k]),
+            })
+            .collect();
         timings.shapes = lap(&mut clock);
         // The operator's settings first, its tables once after them, on the pool (Helmholtz
         // CH4.0h).
@@ -1229,6 +1265,8 @@ impl HelmholtzFmmBuilder {
             (self.diagonal_budget != usize::MAX).then(|| self.diagonal_budget / ranks_per_node),
         )
         .with_diagonal_sources(Some(diagonal_sources))
+        .with_diagonal_costs(Some(costs))
+        .with_diagonal_shapes(Some(diagonal_shapes))
         .with_diagonal_chunk(self.diagonal_chunk)
         .with_diagonal_build(self.diagonal_build)
         .with_diagonal(self.diagonal);

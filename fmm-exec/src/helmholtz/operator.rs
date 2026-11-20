@@ -379,8 +379,10 @@ mod plane_wave;
 mod rcr;
 
 pub use diagonal::{
-    DEFAULT_DIAGONAL_BUILD, DIAGONAL_F32_MIN_TOLERANCE, DiagonalCounts, DiagonalTimes,
-    HelmholtzDiagonal, diagonal_chunk_targets, diagonal_rule_classes,
+    DEFAULT_DIAGONAL_BUILD, DIAGONAL_COST_CONSTANTS, DIAGONAL_COSTS_NEON, DIAGONAL_COSTS_X86,
+    DIAGONAL_F32_MIN_TOLERANCE, DiagonalCosts, DiagonalCounts, DiagonalShape, DiagonalTimes,
+    HelmholtzDiagonal, diagonal_beats_plane_waves, diagonal_beats_rcr, diagonal_chunk_targets,
+    diagonal_costs, diagonal_rule_classes, offset_class,
 };
 use diagonal::{DiagonalBuffer, DiagonalLevel, DiagonalScratch, DiagonalSettings};
 pub use nd_fmm_tables::helmholtz::diagonal::TransferBuild;
@@ -576,6 +578,10 @@ pub(crate) struct WaveSettings<'a> {
     /// The FMM's tolerance, if it has one
     /// ([`HelmholtzOperator::with_plane_wave_tolerance`]).
     pub(crate) tolerance: Option<f64>,
+    /// Under [`HelmholtzDiagonal::Auto`] the diagonal form's build and the time rule's costs
+    /// (Helmholtz CH4.3b1): Auto's levels with waves that [`diagonal_beats_plane_waves`] at
+    /// the tolerance go to the diagonal form; `None` under the other diagonal settings.
+    pub(crate) diagonal: Option<(TransferBuild, DiagonalCosts)>,
 }
 
 /// The levels whose M2L is the exponential one, each with its quadrature's precision (`None`
@@ -585,9 +591,12 @@ pub(crate) struct WaveSettings<'a> {
 /// levels from 2 whose κ_l = 2 k̂_0 / 2^l lies in the tables (`domain_of`; the tables build
 /// none elsewhere); under [`HelmholtzM2l::Auto`] with waves, in f64 only, the rule's on the
 /// levels of degree at least the smallest with Im κ_l < [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`]
-/// (Helmholtz CH6.2h, D8). A function of the settings and the degrees alone: the operator
-/// builds these levels' tables, and `HelmholtzFmmBuilder` reads them before the plan for the
-/// V rule (Helmholtz CH4.0d2), so the two cannot differ.
+/// (Helmholtz CH6.2h, D8), less, under [`HelmholtzDiagonal::Auto`], the levels whose bound's
+/// classes at the base degree make the diagonal form faster by the time rule
+/// ([`diagonal_beats_plane_waves`] against the waves at `plane_wave_degree`; Helmholtz
+/// CH4.3b1). A function of the settings and the degrees alone: the operator builds these
+/// levels' tables, and `HelmholtzFmmBuilder` reads them before the plan for the V rule
+/// (Helmholtz CH4.0d2), so the two cannot differ.
 pub(crate) fn wave_levels<T>(
     settings: &WaveSettings<'_>,
     k_root: Complex<f64>,
@@ -614,13 +623,34 @@ pub(crate) fn wave_levels<T>(
                 .enumerate()
                 .map(|(l, precision)| {
                     precision.filter(|_| {
-                        base[l] >= settings.min_degree && kappa(l).im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
+                        base[l] >= settings.min_degree
+                            && kappa(l).im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
+                            && !diagonal_takes_waves(settings, k_root, base, l)
                     })
                 })
                 .collect(),
         ),
         _ => None,
     }
+}
+
+/// Whether, under [`HelmholtzDiagonal::Auto`], the time rule gives level `l` of an Auto level
+/// with waves to the diagonal form (Helmholtz CH4.3b1): the bound's classes at the base degree
+/// p_l, k̂_l = k̂_0 / 2^l (`HelmholtzTables`' wavenumber) and the tolerance, in f64 (the
+/// waves' precision), against the exponential M2L at its degree `plane_wave_degree(p_l, ε)`.
+fn diagonal_takes_waves(
+    settings: &WaveSettings<'_>,
+    k_root: Complex<f64>,
+    base: &[usize],
+    l: usize,
+) -> bool {
+    let (Some((build, costs)), Some(epsilon)) = (settings.diagonal, settings.tolerance) else {
+        return false;
+    };
+    let p = base[l];
+    let k_hat = k_root * (0.5f64).powi(l as i32);
+    let classes = diagonal_rule_classes::<f64>(p, k_hat, epsilon, build);
+    diagonal_beats_plane_waves(&costs, p, plane_wave_degree(p, epsilon), &classes)
 }
 
 /// Whether the setting is [`HelmholtzM2l::Auto`] with the exponential M2L, which runs in f64
@@ -1484,18 +1514,30 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let tolerance = kernel.plane_wave_tolerance;
         // The levels with waves, which the builder's V rule reads too (Helmholtz CHA.11). Under
         // Auto they are the rule's quadratures from the smallest degree on, below the bound on
-        // Im κ_l (since CH6.1h's sign-off, 2026-11-11, at every tolerance with a quadrature).
-        let precisions = wave_levels::<T>(
-            &WaveSettings {
-                m2l: choice,
-                precision: &kernel.plane_wave_precision,
-                auto_plane_wave: kernel.auto_plane_wave,
-                min_degree: kernel.auto_plane_wave_min_degree(),
-                tolerance,
-            },
-            k_root,
-            &base,
-        );
+        // Im κ_l (since CH6.1h's sign-off, 2026-11-11, at every tolerance with a quadrature),
+        // less those the diagonal form's time rule takes (Helmholtz CH4.3b1).
+        let costs = kernel.diagonal_costs();
+        let mut settings = WaveSettings {
+            m2l: choice,
+            precision: &kernel.plane_wave_precision,
+            auto_plane_wave: kernel.auto_plane_wave,
+            min_degree: kernel.auto_plane_wave_min_degree(),
+            tolerance,
+            diagonal: None,
+        };
+        let without = wave_levels::<T>(&settings, k_root, &base);
+        if kernel.diagonal_settings.choice == HelmholtzDiagonal::Auto {
+            settings.diagonal = Some((kernel.diagonal_settings.build, costs));
+        }
+        let precisions = wave_levels::<T>(&settings, k_root, &base);
+        // The levels whose waves the diagonal form took: it runs them whatever their shape.
+        let from_waves: Vec<bool> = (0..base.len())
+            .map(|l| {
+                let had = without.as_ref().is_some_and(|w| w[l].is_some());
+                let has = precisions.as_ref().is_some_and(|w| w[l].is_some());
+                had && !has
+            })
+            .collect();
         // The rule's resolving degree on the levels with waves (Helmholtz CH6.1g), under
         // PlaneWave's rule and under Auto: the level's stores, its M2L and its leaves at
         // p_w = max(p_l, d), and its translations to and from its parent too unless
@@ -1558,7 +1600,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 let mut chosen = vec![false; degrees.len()];
                 let mut left = dense_budget;
                 for (l, &p) in degrees.iter().enumerate().skip(2).rev() {
-                    let waves = precisions.as_ref().is_some_and(|w| w[l].is_some());
+                    // A level the diagonal form took from the waves stays the form's.
+                    let waves =
+                        precisions.as_ref().is_some_and(|w| w[l].is_some()) || from_waves[l];
                     let sparse = kernel.shapes.as_ref().is_some_and(|shapes| {
                         shapes[l].batched_columns() < kernel.auto_min_columns(p)
                     });
@@ -1614,6 +1658,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             &kernel.diagonal_settings,
             tolerance,
             &rcr,
+            &from_waves,
+            &costs,
             &degrees,
             |l| kernel.tables.k_hat(l),
             kernel.densities.vectors(),
@@ -1817,6 +1863,38 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.kernel.diagonal_settings.chunk = chunk;
         self.select_tables();
         self
+    }
+
+    /// Names the time rule's costs ([`HelmholtzDiagonal::Auto`]; `None`, the default: those
+    /// of the column kernel's ISA, [`diagonal_costs`]). `HelmholtzFmmBuilder` agrees them over
+    /// the ranks (all-reduce max), so that ranks of different ISAs choose the same levels
+    /// (constraints 2 and 9; Helmholtz CH4.3b1). The tables are chosen again.
+    pub fn with_diagonal_costs(mut self, costs: Option<DiagonalCosts>) -> Self {
+        self.kernel.diagonal_settings.costs = costs;
+        self.select_tables();
+        self
+    }
+
+    /// The time rule's costs as the operator reads them
+    /// ([`with_diagonal_costs`](Self::with_diagonal_costs)).
+    pub fn diagonal_costs(&self) -> DiagonalCosts {
+        self.kernel.diagonal_costs()
+    }
+
+    /// Gives the time rule each level's V lists ([`DiagonalShape`]: the boxes with a V row
+    /// and the pairs per class, summed over the ranks; `None`, the default: the uniform
+    /// level's, [`DiagonalShape::uniform`]). `HelmholtzFmmBuilder` counts them in its plan and
+    /// agrees them (all-reduce sum; Helmholtz CH4.3b1). The tables are chosen again.
+    pub fn with_diagonal_shapes(mut self, shapes: Option<Vec<DiagonalShape>>) -> Self {
+        self.kernel.diagonal_settings.shapes = shapes;
+        self.select_tables();
+        self
+    }
+
+    /// The levels' V lists the time rule reads
+    /// ([`with_diagonal_shapes`](Self::with_diagonal_shapes)), if given.
+    pub fn diagonal_shapes(&self) -> Option<&[DiagonalShape]> {
+        self.kernel.diagonal_settings.shapes.as_deref()
     }
 
     /// The offset classes (indices into `nd_fmm_ref::helmholtz::diagonal::classes()`) that
@@ -2119,6 +2197,15 @@ impl<T: SimdScalar> Kernel<T> {
 
     /// The smallest degree at which [`HelmholtzM2l::Auto`] takes the exponential M2L: the
     /// named one, else the rule's.
+    /// The diagonal form's time rule's costs: named ([`with_diagonal_costs`]
+    /// (HelmholtzOperator::with_diagonal_costs)), else those of the column kernel's ISA
+    /// (Helmholtz CH4.3b1).
+    fn diagonal_costs(&self) -> DiagonalCosts {
+        self.diagonal_settings
+            .costs
+            .unwrap_or_else(|| diagonal_costs(self.matrix.isa()))
+    }
+
     fn auto_plane_wave_min_degree(&self) -> usize {
         self.plane_wave_min_degree.unwrap_or_else(|| {
             auto_plane_wave_min_degree(self.matrix.isa(), self.densities.multipole_planes())
@@ -2903,8 +2990,8 @@ mod tests {
     use nd_octree::PhysicalBox;
 
     use super::{
-        DEFAULT_BLOCK_BUDGET, HelmholtzM2l, HelmholtzOperator, PlaneWavePrecision, WaveSettings,
-        wave_levels,
+        DEFAULT_BLOCK_BUDGET, DIAGONAL_COSTS_X86, DiagonalCosts, HelmholtzDiagonal, HelmholtzM2l,
+        HelmholtzOperator, PlaneWavePrecision, TransferBuild, WaveSettings, wave_levels,
     };
     use crate::geometry::{Domain, radius};
     use crate::helmholtz::{ChargeKind, Densities, Wavenumber};
@@ -2934,7 +3021,14 @@ mod tests {
         .with_m2l_plane_wave_min_degree(Some(settings.min_degree))
         .with_auto_plane_wave(settings.auto_plane_wave)
         .with_plane_wave_precision(settings.precision.clone())
-        .with_m2l(settings.m2l, 0)
+        .with_m2l(settings.m2l, 0);
+        let op = match settings.diagonal {
+            Some((build, costs)) => op
+                .with_diagonal(HelmholtzDiagonal::Auto)
+                .with_diagonal_build(build)
+                .with_diagonal_costs(Some(costs)),
+            None => op,
+        }
         .build_tables();
         let r0 = radius(0, &domain);
         let k_root = Complex::new(k.re() * r0, k.im() * r0);
@@ -2969,6 +3063,7 @@ mod tests {
             auto_plane_wave: false,
             min_degree: 0,
             tolerance,
+            diagonal: None,
         });
         let auto =
             [(true, 0), (true, 6), (false, 0)].map(|(auto_plane_wave, min_degree)| WaveSettings {
@@ -2977,20 +3072,38 @@ mod tests {
                 auto_plane_wave,
                 min_degree,
                 tolerance,
+                diagonal: None,
             });
+        // Auto with the diagonal form's time rule (Helmholtz CH4.3b1), at x86's costs and at
+        // costs under which the form takes every level where a class passes the bound.
+        let diagonal = [DIAGONAL_COSTS_X86, FREE_DIAGONAL].map(|costs| WaveSettings {
+            diagonal: Some((TransferBuild::Interpolated, costs)),
+            ..auto[0]
+        });
         let rotation = WaveSettings {
             m2l: HelmholtzM2l::Rotation,
             precision: precisions[1],
             auto_plane_wave: true,
             min_degree: 0,
             tolerance,
+            diagonal: Some((TransferBuild::Direct, FREE_DIAGONAL)),
         };
         plane_wave
             .into_iter()
             .chain(auto)
+            .chain(diagonal)
             .chain([rotation])
             .collect()
     }
+
+    /// Costs under which the diagonal form beats every other M2L wherever a class passes.
+    const FREE_DIAGONAL: DiagonalCosts = DiagonalCosts {
+        s2f: [0.0, 0.0],
+        f2r: [0.0, 0.0],
+        pair: [0.0, 0.0],
+        rotation: [1.0, 1.0],
+        plane_wave: [1.0, 1.0],
+    };
 
     /// The levels with waves under every setting that chooses them (Helmholtz CHA.11), at no
     /// tolerance and four, for real k and, under Auto, damped k (Im κ₂ = 25 ≥ 5π), f64 and

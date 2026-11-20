@@ -63,9 +63,16 @@ How it is read:
 
 ## Changes
 - `nd-fmm-exec` (Helmholtz modules only):
-  - `DiagonalCosts { s2f: [a, b], f2r: [a, b], pair: f64 }` (thread-ns: S → F and F → R per box
-    a + b (p + 1)³, the pair per sample), `DIAGONAL_COSTS_X86`, `DIAGONAL_COSTS_NEON`,
-    `diagonal_costs(isa)`, beside `VCosts`;
+  - `DiagonalCosts { s2f, f2r, pair, rotation, plane_wave }`, each [a, b] of
+    a (p + 1)² + b (p + 1)³ thread-ns (S → F and F → R per box, the diagonal pair, RCR's pair
+    and the exponential M2L's pair at p_w), `DIAGONAL_COSTS_X86`, `DIAGONAL_COSTS_NEON`,
+    `diagonal_costs(isa)`, beside `VCosts`. Its own RCR and waves constants, not `VCosts`':
+    the rule compares whole level calls, so every constant is the level call's wall time ×
+    threads per unit, idle threads included; `VCosts` fits thread time on the leaf levels for
+    the V rule, and its waves per pair is 4–7× below the level call's on W1 at kD = 500
+    (CH4.2b2's run: 367 µs per pair at p = 41 against 53). The form: the conversions per box on
+    CH4.2b2's run fit a (p + 1)² + b (p + 1)³ within 10 % from p = 16 to 131 (a ≈ 0.45 µs,
+    b ≈ 1.6 ns), where a pure (p + 1)³ misses p = 41 by half;
   - `HelmholtzDiagonal::Auto`: the bound's classes, then the level by the model;
     `LevelShape` gains the V pairs per class (34 counts per level); the builder counts them
     whatever the setting (every rank reaches the all-reduce) and agrees the costs (all-reduce
@@ -112,7 +119,8 @@ Helmholtz executable at opt-level 0 against their minute (the debug budget); `nd
 ## Machine runs
 - **Kathleen** (`singlenode`, 1 × 40, one job): (1) the fit: W1 at kD = 100, 200, 500, 1000 at
   10⁻⁶ and 10⁻⁸ (kD = 1000 at 10⁻⁶ only), `--m2l rotation,auto-pw --diagonal off,rule --levels`
-  (the diagonal levels' parts per level, RCR's and the waves' level times); (2) the check:
+  (the diagonal levels' parts per level, RCR's and the waves' level times); a first fit from
+  CH4.2b2's archived run (`~/projects/fmm-archive/kathleen/runs/ch4-2b2/`) starts the code; (2) the check:
   the same cases and W3 (N = 10⁶, kD = 200, 500) at 10⁻³, 10⁻⁶, 10⁻⁸ with `--diagonal
   off,rule,auto`: per level the model's choice against the faster measured one, the errors.
 - **locust** (1 × 72, idle checked): the same two stages at kD ≤ 500 and kD = 1000 at 10⁻⁶.
