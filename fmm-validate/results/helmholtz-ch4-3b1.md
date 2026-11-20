@@ -239,6 +239,8 @@ changes none of the runs above.
 
 ## 7. Questions for sign-off
 
+Signed off 2026-11-20 by the user on #243, all four as recommended: "1-4 as recommended".
+
 1. **The acceptance as read.** The per-class crossover is never reached (§2.2), so the rule is
    per level; `HelmholtzDiagonal::Auto` takes a level's bound classes where the model's diagonal
    level beats RCR, or Auto's waves, on the level's agreed counts; under Rotation within 1.001×

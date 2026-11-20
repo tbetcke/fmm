@@ -11,7 +11,8 @@ Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
 item 10 CH4.1, CH4.2, CH4.2c and CH4.3a; CH4.3b is split into CH4.3b1 and CH4.3b2. CH4.3b1 (the
 diagonal form's time rule, opt-in: a cost model per machine class, the order against the waves
-after the plan, within 1.033× Rotation's errors) waits for its sign-off (questions 1–4). Next
+after the plan, Rotation's errors kept) is signed off (questions 1–4 as recommended) and waits
+for its merge. Next
 CH4.3b2 (the form by default, at matched accuracy at 10⁻⁸), then CH4.3c–CH4.3e; CH4.2d off the
 list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done,
 and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's
@@ -760,7 +761,9 @@ task's full line is in its record or report and its progress entry
   on the agreed `DiagonalShape`), the cheaper of form and RCR then; none below k a 2.8. Under
   Rotation 1.000–1.001× its errors, evaluation 0.27–1.00×; choices within 1.05× of the fastest on
   123/127 levels (Kathleen) and 132/140 (locust).
-  *Sign-off:* pending (the PR's questions 1–4).
+  *Sign-off:* 2026-11-20 on #243, questions 1–4 as recommended: the acceptance as read; the
+  order against the waves after the plan; no level below k a 2.8; 10⁻⁸ at matched accuracy left
+  to CH4.3b2.
 - [ ] **CH4.3b2 The diagonal form by default.** *Done when:* W1 and W3 at 10⁻³–10⁻⁸ on Kathleen
   and locust, the defaults with `HelmholtzDiagonal::Auto` against the defaults: the errors within
   1.1× (at 10⁻⁸ against CH6.1g's raised waves: at matched accuracy), the evaluation and the build

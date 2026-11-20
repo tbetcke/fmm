@@ -185,4 +185,4 @@ the one-rank shapes (added), the harness's choice column ungated (fixed), and st
 and in the roadmap (fixed).
 
 ## Open questions
-The report's §7, questions 1–4.
+The report's §7, questions 1–4: signed off 2026-11-20 by the user on #243, "1-4 as recommended".

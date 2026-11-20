@@ -4049,7 +4049,9 @@ request, using this template:
   self-review's fixes; the Helmholtz executables at opt-level 0). Not run: `cargo deny` (no
   manifest), Laplace's benchmarks (no Laplace path), 8 ranks (no distributed code beyond two
   all-reduces of the builder, run at 2 and 4).
-- Decisions: pending, the PR's questions 1–4.
+- Decisions: signed off 2026-11-20 by the user on #243, "1-4 as recommended": 1, the acceptance
+  as read; 2, the order against the waves after the plan (the roadmap's CH4.3b1 line as amended);
+  3, no level below k a 2.8 under the time rule; 4, 10⁻⁸ at matched accuracy left to CH4.3b2.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
 - Follow-ups: CH4.3b2's Also (roadmap): matched accuracy at 10⁻⁸ against the raised waves (and
   their cost on sparse levels, up to 31× RCR's), the model's misses on W3's small dense levels, the
