@@ -112,6 +112,7 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::plan::{Plan, PlanRules};
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
+use nd_fmm_tables::helmholtz::diagonal::DEFAULT_SIGNATURE_NODE_BUDGET;
 use nd_fmm_tables::helmholtz::plane_wave::merge::plane_wave_degree;
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
@@ -122,9 +123,10 @@ use thiserror::Error;
 
 use super::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities, DensityError,
-    HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TableTimings, Wavenumber, WavenumberKind,
-    auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
+    HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TableTimings, Wavenumber,
+    WavenumberKind, auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree,
+    min_leaf_level,
 };
 use crate::fmm::{FmmError, PointSet, SettingsError};
 use crate::geometry::{Domain, radius};
@@ -341,6 +343,9 @@ pub struct HelmholtzFmmBuilder {
     plane_wave_raise: PlaneWaveRaise,
     rcr_split: RcrSplit,
     rcr_budget: usize,
+    diagonal: HelmholtzDiagonal,
+    diagonal_budget: usize,
+    diagonal_chunk: Option<usize>,
     c_leaf: f64,
     p2p: P2pChoice,
     empty_boxes: bool,
@@ -357,8 +362,9 @@ impl HelmholtzFmmBuilder {
     /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`] per rank and
     /// [`DEFAULT_DENSE_NODE_BUDGET`] per node, the exponential M2L's waves
     /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the Rotation M2L by pairs on levels
-    /// of high degree ([`RcrSplit::Auto`]) within [`DEFAULT_RCR_NODE_BUDGET`] per node, the leaf
-    /// width [`DEFAULT_C_LEAF`],
+    /// of high degree ([`RcrSplit::Auto`]) within [`DEFAULT_RCR_NODE_BUDGET`] per node, no
+    /// diagonal M2L ([`HelmholtzDiagonal::Off`]; its scratch within
+    /// [`DEFAULT_SIGNATURE_NODE_BUDGET`] per node when named), the leaf width [`DEFAULT_C_LEAF`],
     /// the P2P kernel of [`P2pChoice::Auto`], the empty-box rule and the V, W and X pairs
     /// near pairs by the cost model.
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
@@ -389,6 +395,9 @@ impl HelmholtzFmmBuilder {
             plane_wave_raise: PlaneWaveRaise::Rule,
             rcr_split: RcrSplit::Auto,
             rcr_budget: DEFAULT_RCR_NODE_BUDGET,
+            diagonal: HelmholtzDiagonal::Off,
+            diagonal_budget: DEFAULT_SIGNATURE_NODE_BUDGET,
+            diagonal_chunk: None,
             c_leaf: DEFAULT_C_LEAF,
             p2p: P2pChoice::Auto,
             empty_boxes: true,
@@ -684,6 +693,52 @@ impl HelmholtzFmmBuilder {
     /// output is the same at every budget.
     pub fn rcr_budget(mut self, bytes: usize) -> Self {
         self.rcr_budget = bytes;
+        self
+    }
+
+    /// The diagonal M2L of the high-frequency levels (default [`HelmholtzDiagonal::Off`];
+    /// Helmholtz CH4.2b1, opt-in until CH4.3; `HelmholtzOperator::with_diagonal`): on the
+    /// levels whose M2L is RCR's, each offset class with E(l, c) ≤ θ ε on the diagonal form,
+    /// RCR on the others. [`HelmholtzDiagonal::Rule`] reads the tolerance of
+    /// [`Degrees::Tolerance`] (no level with named degrees). The output is deterministic and on
+    /// P ranks the one-rank FMM's bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// If [`HelmholtzDiagonal::Tolerance`] names ε ≤ 0 or NaN.
+    pub fn diagonal(mut self, choice: HelmholtzDiagonal) -> Self {
+        if let HelmholtzDiagonal::Tolerance(epsilon) = choice {
+            assert!(
+                epsilon > 0.0,
+                "the diagonal form's tolerance {epsilon} is not positive"
+            );
+        }
+        self.diagonal = choice;
+        self
+    }
+
+    /// The bytes per node of a diagonal level call's scratch (default
+    /// [`DEFAULT_SIGNATURE_NODE_BUDGET`]; proposal §2, constraint 7; Helmholtz CH4.2b1): each
+    /// rank's share is the budget over the ranks per node, and a level takes the diagonal form
+    /// only where its scratch at the largest count of its V sources over the ranks fits that
+    /// share, else RCR, the same on every rank (`HelmholtzOperator::with_diagonal_budget`);
+    /// `usize::MAX` for no bound.
+    pub fn diagonal_budget(mut self, bytes: usize) -> Self {
+        self.diagonal_budget = bytes;
+        self
+    }
+
+    /// The width of the diagonal level call's chunks of targets (`None`, the default: by the
+    /// level's boxes and the threads; `HelmholtzOperator::with_diagonal_chunk`), for the
+    /// tests: no bit depends on it.
+    ///
+    /// # Panics
+    ///
+    /// If the width is 0.
+    #[doc(hidden)]
+    pub fn diagonal_chunk(mut self, chunk: Option<usize>) -> Self {
+        assert_ne!(chunk, Some(0), "a chunk holds at least one target");
+        self.diagonal_chunk = chunk;
         self
     }
 
@@ -1089,6 +1144,33 @@ impl HelmholtzFmmBuilder {
                 (v.len(), targets)
             })
             .collect();
+        // The diagonal M2L's fallback (Helmholtz CH4.2b1): each level's distinct V sources on
+        // this rank, own and ghost, the largest count over the ranks, so that every rank
+        // takes the same levels (constraints 2 and 9). Counted on every rank, whatever the
+        // setting, so that every rank reaches the all-reduce.
+        let local: Vec<u64> = (0..plan.nlevels())
+            .map(|l| {
+                let v = plan.level(l).v();
+                let mut seen = vec![false; plan.index().len(l)];
+                let mut count = 0u64;
+                for &s in v.sources() {
+                    let seen = &mut seen[s as usize];
+                    count += u64::from(!*seen);
+                    *seen = true;
+                }
+                count
+            })
+            .collect();
+        let mut diagonal_sources = vec![0u64; local.len()];
+        comm.all_reduce_into(
+            &local[..],
+            &mut diagonal_sources[..],
+            SystemOperation::max(),
+        );
+        let diagonal_sources: Vec<usize> = diagonal_sources
+            .iter()
+            .map(|&c| usize::try_from(c).unwrap_or(usize::MAX))
+            .collect();
         timings.shapes = lap(&mut clock);
         // The operator's settings first, its tables once after them, on the pool (Helmholtz
         // CH4.0h).
@@ -1128,7 +1210,13 @@ impl HelmholtzFmmBuilder {
         .with_plane_wave_boxes(&level_boxes)
         .with_rcr_split(self.rcr_split)
         .with_rcr_buffer((self.rcr_budget != usize::MAX).then(|| self.rcr_budget / ranks_per_node))
-        .with_rcr_levels(&rcr_levels);
+        .with_rcr_levels(&rcr_levels)
+        .with_diagonal_budget(
+            (self.diagonal_budget != usize::MAX).then(|| self.diagonal_budget / ranks_per_node),
+        )
+        .with_diagonal_sources(Some(diagonal_sources))
+        .with_diagonal_chunk(self.diagonal_chunk)
+        .with_diagonal(self.diagonal);
         if let Some(mul_add) = self.m2l_mul_add {
             operator = operator.with_m2l_mul_add(mul_add);
         }
