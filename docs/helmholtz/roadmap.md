@@ -9,12 +9,12 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged,
-and of item 10 CH4.1a, CH4.1b, CH4.2a, CH4.2b1 and CH4.2b2 (W1 measured: errors 1.000× RCR's,
-the diagonal levels 0.08–0.46× RCR's M2L; signed off on #239). Next CH4.2c (the transfer
-functions interpolated and built in parts), then CH4.3; CH4.2d (kernels) off the list; the FFT
-track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
-done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this
-file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+and of item 10 CH4.1a–b, CH4.2a, CH4.2b1–2 and CH4.2c1 (the interpolated transfer functions,
+within 2E at C_T = 0.23, 2.3–9.6× faster per class; both builds by ring). Next CH4.2c2 (the build
+in the operator, W1's tables timed on Kathleen), then CH4.3; CH4.2d (kernels) off the list; the
+FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of
+H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
+(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
@@ -699,11 +699,11 @@ task's full line is in its record or report and its progress entry
   at 1 × 40 and 40 × 1 against CH4.2b2's (2.3 s and 61 s at p = 131). Split on 2026-11-20 into
   CH4.2c1 (the build) and CH4.2c2 (the operator and W1), by the size rule of `/next-task` (four
   crates and measurements on Kathleen).
-- [ ] **CH4.2c1 The transfer functions interpolated, and built by ring.** *Done when:*
-  `nd-fmm-ref`'s double-double angle table and ring samples; `DiagonalM2l::build_by` with
-  `TransferBuild::{Direct, Interpolated}`, against the direct build and RCR within 2E at
-  C_T = 0.23 on every class CI runs (f32 within `F32`'s); both builds in parts of one ring of a
-  class, bit for bit the build by class on any map. *Needs:* CH4.2b2.
+- [x] **CH4.2c1 The transfer functions interpolated, and built by ring.** Record
+  `docs/helmholtz/tasks/CH4.2c1.md` (no report: one-core times on locust in the record).
+  `TransferBuild::Interpolated` (ref's `AngleTable`, S6's sinc series) within 2E at C_T = 0.23
+  against RCR and the direct build on every class CI runs (at most 1.35 E), 2.3–9.6× faster per
+  class at p = 41–245; both builds by ring, the direct build CH4.2a's bits.
 - [ ] **CH4.2c2 The interpolated build in the operator, and W1's tables timed.** *Done when:*
   the operator's build setting (the rule's constants by the build: C_T = 0.23 interpolated) and
   the harness's; the FMM within 1.1× Rotation's errors with it; W1 at kD = 500 and 1000's

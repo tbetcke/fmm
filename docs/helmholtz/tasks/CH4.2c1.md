@@ -108,8 +108,10 @@ changes (exec's `select` unchanged; its build now in parts by ring through `buil
 bit); `helmholtz_fmm`'s `check_diagonal` covers it.
 
 ## Machine runs
-None in CH4.2c1. The ignored timing test (6) runs on Kathleen or locust in CH4.2c2's job, not on
-the M6 without the user's yes (the M6 runs other jobs).
+The ignored timing test (6) on locust, one Grace core (`taskset -c 8`), release, idle (load
+0.0–0.2 before and after), 2026-11-20, through `tools/gh200/sync.sh` and `remote.sh`: no
+decision rests on it (CH4.2c2 times W1 on Kathleen); it checks S6's expected speed-up and found
+where the time goes. Not on the M6 (the user runs other jobs there).
 
 ## Constraints and risks
 - Constraint 2 and 9: each part a function of p, k̂, the class and the ring; libm's `atan2`,
@@ -123,8 +125,49 @@ the M6 without the user's yes (the M6 runs other jobs).
   S6 handled it by the double-double position; test 1 covers every sample of every class.
 - Risk: the debug executable's minute; heavy cases ignored.
 
+## Results
+
+**Accuracy** (the M6, debug unless said; the tests' printed figures):
+
+| check | case | measured |
+| --- | --- | --- |
+| interpolated W against direct W, per sample | p = 6, 16; k a 5, 8; real and η = 0.1 | 3.3–4.1 ε of the class's largest (bound 32 ε) |
+| interpolated M2L against RCR, measured/E at C_T = 0.23 | 34 classes, k a 2.83, p = 7 | 1.35 (S6's worst case; the direct build 0.55 at C_T = 0.15) |
+| | 34 classes, k a 8, p = 27; damped | 0.33; 0.03 |
+| | 316 offsets, k a 5, p = 16 | 0.31 |
+| | f32, k a 8, p = 16 (`F32`) | 0.21 |
+| interpolated M2L against the direct build's, measured/E | the same cases | 0.27, 0.08, 0.02, 0.75 |
+| release, ignored | k a 16 (p = 36) against RCR; against direct | 0.59; 0.04 |
+| | k a 32 (p = 61), 54 (p = 72, 82) against RCR | 1.10, 1.79, 2.07 (at E's floor (3, 3, 3) at p = 82: 6.8·10⁻¹⁴ from the projection, RCR 1.4·10⁻¹³) |
+| | k a 108 (p = 131), three classes | 3.04 against RCR (direct 3.72); nearer the projection than RCR |
+
+A mutation (4 interpolation terms in place of 36) fails all three interpolated tests.
+
+**Bits.** Both builds on the reversed three-thread map are the serial build bit for bit; the
+direct build by ring is CH4.2a's by class (ref's `Transfer::new` samples hashed on `main` and on
+the branch at p = 7, 16 and 24 over the 34 classes: `2407511671127d4a` both).
+
+**Positions.** S6's `angle` costs one double-double sine and cosine per sample: on locust it was
+53 % of the interpolated build at p = 131 (0.090 of 0.171 s) and 49 % at 245. `position` now
+takes δ from the nearest node (the table's node sines and cosines, an f64 arcsine correction of
+size ≤ (π/2M)²/6): the same (n, f) as S6's method on every sample tested (p = 1–40, four shifts;
+largest difference 0, the test's bound 4 u), at about a fifth of the cost.
+
+**Time** (`time_one_class`, locust, one core, class (0, 0, 2), one build each):
+
+| p | k a | direct s | interpolated s | ratio |
+| ---: | ---: | ---: | ---: | ---: |
+| 41 | 27 | 0.020 | 0.008 | 2.3 |
+| 72 | 54 | 0.096 | 0.026 | 3.7 |
+| 131 | 108 | 0.538 | 0.089 | 6.1 |
+| 245 | 216 | 3.427 | 0.358 | 9.6 |
+
+Before the positions' change: 0.017, 0.051, 0.171 and 0.644 s (1.2–5.3×). S6 measured 5.4× at
+p = 128 and 11× at 256 against its own direct build, which was about 1.6× slower than ref's. The
+rest of the interpolated build is the 72 `exp`s per sample (about 40 % at p = 131) and the sums.
+
 ## Pending runs
 None.
 
 ## Open questions
-None so far.
+1. The acceptance as read (the PR's question 1).
