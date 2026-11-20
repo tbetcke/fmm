@@ -693,6 +693,38 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   for bit, under Rotation and the library's Auto (some level by pairs), and on P ranks to the
   one-rank FMM; no scenario reaches p ≥ 30, so Auto's choice of pairs inside an FMM is
   `tests/helmholtz/rcr_split.rs`' rule alone.
+- The diagonal M2L (Helmholtz CH4.2b1; the `helmholtz::operator` module docs, "M2L"; the
+  private `src/helmholtz/operator_diagonal.rs`; docs/helmholtz/tasks/CH4.2b1.md):
+  `HelmholtzDiagonal` (`Off`, the default until CH4.3; `Rule` at the FMM's tolerance;
+  `Tolerance(ε)` named), `HelmholtzOperator::{with_diagonal, with_diagonal_budget,
+  with_diagonal_sources, with_diagonal_chunk, diagonal_classes, diagonal_counts,
+  diagonal_bytes}`, `HelmholtzFmmBuilder::{diagonal, diagonal_budget}` (per node, default
+  `nd_fmm_tables::helmholtz::diagonal::DEFAULT_SIGNATURE_NODE_BUDGET`, over the ranks per
+  node). On the levels whose M2L is RCR's under the setting, each class with E(l, c) ≤ θ ε
+  (`diagonal_rule_classes`: `class_bounds`, θ = 1/2, S6's f64 constants, f32's at ε ≥ 10⁻⁴
+  only, D3) takes CH4.2a's `DiagonalM2l`; a level whose scratch at the largest count of its V
+  sources over the ranks (the builder's one all-reduce max, on every rank whatever the
+  setting) does not fit the budget runs RCR whole, the same on every rank. The level call:
+  S → F of each distinct diagonal source per vector into one `Signatures` store
+  (`Signatures::relayout` for each level's degree; blocks over `Execution::chunks`, through
+  `Signatures::strides_mut` and `Conversions::s2f_strides`), then chunks of consecutive
+  targets over the pool, each target's accumulators (the thread's) zeroed, its diagonal pairs
+  in row order, F → R, then its RCR pairs in row order (`HelmholtzTables::m2l`): every local
+  the same bits at every thread count and chunk width, on P ranks the one-rank FMM's.
+  `m2l_on` reports such a level as Rotation; its RCR buffer by pairs is not sized for it. The
+  pair body (`PairOperator`) is S → F, the pair and F → R per pair, so `check`'s pair-by-pair
+  bit identity does not apply to it. `tests/helmholtz/diagonal.rs` checks the rule per level
+  (the bound's classes, none off, without a tolerance, in f32 below 10⁻⁴, on Classes' levels,
+  at a tight budget, without sources) and the pair body on every offset of levels 2 and 3 at
+  k = 40 (real and damped, one and two planes, two vectors) within 2E of Rotation's in
+  CH1.3d1's measure (at most 0.34 E on the M6), the RCR classes Rotation's bits;
+  `check_diagonal` in `tests/helmholtz_fmm.rs` (the cube at kD = 40 + 2i and the clusters at
+  kD = 20, ε = 10⁻⁴; the clusters' level 4 mixes the forms) under Rotation and the library's
+  Auto (where Auto leaves no RCR level, the setting's output unchanged): the errors within
+  `DIAGONAL_RATIO` (1.1) of the setting's without it, 2 threads (4 in release) and chunks of
+  1, 2, 3, 5 and 7 (1 and 3 in debug builds) bit for bit, the one-rank FMM, two vectors each
+  the one-vector FMM, and the budget's floor Rotation's bits. Its debug cost: about 110 s of the
+  one-rank run on a loaded M6 (less with the debug widths), 8 s at opt-level 1.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

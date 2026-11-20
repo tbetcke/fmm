@@ -239,6 +239,32 @@
 //! f64 only (§3.15, "Precision and range"): f32's range is untested (the factors reach
 //! about 10³⁴ at iprec 3).
 //!
+//! The diagonal form (Helmholtz CH4.2b1; proposal §3.6, §5.4; opt-in until CH4.3,
+//! [`with_diagonal`](HelmholtzOperator::with_diagonal), default [`HelmholtzDiagonal::Off`])
+//! runs on the levels whose M2L is RCR's under the setting above (no waves, no Dense, Classes
+//! or Batched tables), so it composes with every [`HelmholtzM2l`]: each offset class c of
+//! such a level with E(l, c) ≤ θ ε ([`diagonal_rule_classes`]: the bound of
+//! `nd_fmm_tables::helmholtz::diagonal::class_bounds`, θ = 1/2, S6's constants of f64, or of
+//! f32 at ε ≥ 10⁻⁴ only, decision D3) takes `DiagonalM2l`'s transfer function; the others stay
+//! on RCR. [`HelmholtzDiagonal::Rule`] reads the FMM's tolerance
+//! ([`with_plane_wave_tolerance`](HelmholtzOperator::with_plane_wave_tolerance)),
+//! [`HelmholtzDiagonal::Tolerance`] a named one. A level takes it only where its scratch fits
+//! the budget ([`with_diagonal_budget`](HelmholtzOperator::with_diagonal_budget)) at the largest
+//! count of its V sources over the ranks
+//! ([`with_diagonal_sources`](HelmholtzOperator::with_diagonal_sources)), else the whole level
+//! runs RCR, the same on every rank. Its level call forms the signature of every distinct
+//! source of a diagonal pair and vector once (S → F, blocks over the pool), then, in chunks of
+//! consecutive targets over the pool, zeroes each target's accumulator per vector, adds its
+//! diagonal pairs in row order, F → R into its local, then its RCR pairs in row order: each
+//! local's chain is its own row's, so the output is the same at every thread count and chunk
+//! width ([`with_diagonal_chunk`](HelmholtzOperator::with_diagonal_chunk)) and on P ranks the
+//! one-rank output (proposal §5.4, step 3). [`m2l_on`](HelmholtzOperator::m2l_on) reports such
+//! a level as [`HelmholtzM2l::Rotation`], [`diagonal_classes`](HelmholtzOperator::diagonal_classes)
+//! its classes, [`diagonal_counts`](HelmholtzOperator::diagonal_counts) its pairs. The pair body
+//! ([`PairOperator`]) takes a diagonal offset by S → F, the pair and F → R of the pair alone,
+//! the level call to rounding. Its tables are not cached; their build time is
+//! [`TableTimings::diagonal`].
+//!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
 //! clock reads per call, no value changed; so is every P2P level call
