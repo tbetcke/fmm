@@ -92,7 +92,10 @@
 //! 2 threads (4 in release) and chunk widths bit for bit, the one-rank FMM, two vectors each
 //! the one-vector FMM, and the budget's floor Rotation's bits; where Auto leaves no RCR level,
 //! the setting's output unchanged. Its debug cost: about 110 s of the one-rank run on a loaded
-//! M6 (load about 23), 8 s at CI's opt-level 1.
+//! M6 (load about 23), 8 s at CI's opt-level 1. Under Rotation also with interpolated transfer
+//! functions (Helmholtz CH4.2c2, `check_interpolated`): each level's classes within the direct
+//! build's, the errors within `DIAGONAL_RATIO` of Rotation's, 2 threads and the one-rank FMM bit
+//! for bit.
 //!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
 //! at several ranks under a timeout, e.g. on macOS
@@ -114,7 +117,7 @@ use nd_fmm_exec::helmholtz::{
     DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, DiagonalTimes, HelmholtzDiagonal,
     HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES,
     OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit,
-    PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, VNear, Wavenumber, WxNear,
+    PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear,
     auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
     auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
@@ -2168,6 +2171,9 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
         check_diagonal_times(&what, &fmm, 1, 1, comm);
         let op = fmm.operator();
         let nlevels = fmm.nlevels();
+        let direct_classes: Vec<Vec<usize>> = (0..nlevels)
+            .map(|l| op.diagonal_classes(l).unwrap_or_default())
+            .collect();
         let counts = op.diagonal_counts().clone();
         let (diagonal_pairs, rcr_pairs) = (
             sum(&counts.diagonal_pairs, nlevels),
@@ -2265,6 +2271,15 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
         }
         check_one_rank(&what, &diagonal, &inputs, kind, &want, comm);
         if setting == "Rotation" {
+            check_interpolated(
+                &what,
+                scenario,
+                &diagonal,
+                &inputs,
+                &direct_classes,
+                plain_errors,
+                comm,
+            );
             // The budget's floor: every level falls back to RCR, Rotation's bits.
             let (fmm, floor) = run(&diagonal.clone().diagonal_budget(0), &inputs, kind, comm);
             assert!(
@@ -2314,6 +2329,87 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
     let mut mixed_anywhere = 0;
     comm.all_reduce_into(&mixed, &mut mixed_anywhere, SystemOperation::max());
     mixed_anywhere
+}
+
+/// The diagonal M2L with interpolated transfer functions (Helmholtz CH4.2c2) on `diagonal`'s
+/// settings: the build reported, each level's classes within the direct build's
+/// (`direct_classes`; C_T = 0.23 against 0.15) and the same on every rank, the errors against
+/// the direct sum within [`DIAGONAL_RATIO`] of Rotation's (`plain`), 2 threads bit for bit one,
+/// on P ranks the one-rank FMM bit for bit.
+fn check_interpolated(
+    what: &str,
+    scenario: &Scenario,
+    diagonal: &HelmholtzFmmBuilder,
+    inputs: &Inputs,
+    direct_classes: &[Vec<usize>],
+    plain: (f64, f64),
+    comm: &SimpleCommunicator,
+) {
+    let kind = scenario.charges;
+    let what = format!("{what}, interpolated");
+    let interpolated = diagonal.clone().diagonal_build(TransferBuild::Interpolated);
+    let (fmm, want) = run(&interpolated, inputs, kind, comm);
+    let op = fmm.operator();
+    assert_eq!(op.diagonal_build(), TransferBuild::Interpolated, "{what}");
+    let classes: Vec<Vec<usize>> = (0..fmm.nlevels())
+        .map(|l| op.diagonal_classes(l).unwrap_or_default())
+        .collect();
+    drop(fmm);
+    let within = classes
+        .iter()
+        .zip(direct_classes)
+        .all(|(i, d)| i.iter().all(|c| d.contains(c)));
+    assert!(
+        everywhere(within, comm),
+        "{what}: classes {classes:?} not within the direct build's {direct_classes:?}"
+    );
+    let flat: Vec<u64> = classes
+        .iter()
+        .flat_map(|level| {
+            let mut row = [0u64; 34];
+            for &c in level {
+                row[c] = 1;
+            }
+            row
+        })
+        .collect();
+    let mut agreed = flat.clone();
+    comm.all_reduce_into(&flat[..], &mut agreed[..], SystemOperation::max());
+    assert!(
+        everywhere(agreed == flat, comm),
+        "{what}: the classes differ between ranks"
+    );
+    assert!(
+        classes.iter().any(|c| !c.is_empty()),
+        "{what}: no level diagonal"
+    );
+    let errors = errors(scenario, inputs, &want, 0, comm);
+    if comm.rank() == 0 {
+        let counts: Vec<(usize, usize, usize)> = classes
+            .iter()
+            .zip(direct_classes)
+            .enumerate()
+            .filter(|(_, (i, d))| !i.is_empty() || !d.is_empty())
+            .map(|(l, (i, d))| (l, i.len(), d.len()))
+            .collect();
+        println!(
+            "{what}: (level, classes, direct's) {counts:?}; φ {:.3e} against {:.3e} ({:.3}×), ∇φ \
+             {:.3e} against {:.3e}",
+            errors.0,
+            plain.0,
+            errors.0 / plain.0,
+            errors.1,
+            plain.1,
+        );
+    }
+    assert!(
+        errors.0 <= DIAGONAL_RATIO * plain.0 && errors.1 <= DIAGONAL_RATIO * plain.1,
+        "{what}: errors {errors:?} against {plain:?} without the diagonal form"
+    );
+    let (fmm, two) = run(&interpolated.clone().threads(2), inputs, kind, comm);
+    drop(fmm);
+    assert_same(&format!("{what} at 2 threads"), &two, &want, comm);
+    check_one_rank(&what, &interpolated, inputs, kind, &want, comm);
 }
 
 /// Checks the diagonal level call's times and counts (Helmholtz CH4.2b2) after the evaluations

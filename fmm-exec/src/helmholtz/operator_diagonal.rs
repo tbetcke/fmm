@@ -7,9 +7,12 @@
 //! is RCR's under the operator's M2L setting (no waves, no Dense, Classes or Batched tables)
 //! takes the offset classes c with E(l, c) ≤ θ ε (`nd_fmm_tables::helmholtz::diagonal::
 //! class_bounds` at the level's degree and wavenumber, θ = `nd_fmm_ref`'s `THETA` = 1/2) to the
-//! diagonal form, by [`diagonal_rule_classes`]: S6's constants of f64, or of f32 at ε ≥
-//! [`DIAGONAL_F32_MIN_TOLERANCE`] only (decision D3). Every other class stays on RCR. A level holds
-//! the transfer functions of its classes (`DiagonalM2l`, one part per (class, ring) on the pool)
+//! diagonal form, by [`diagonal_rule_classes`]: S6's constants of the setting's build of the
+//! transfer functions in f64 ([`TransferBuild::Direct`]'s C_T = 0.15, `Interpolated`'s 0.23;
+//! Helmholtz CH4.2c2), or of f32 at ε ≥ [`DIAGONAL_F32_MIN_TOLERANCE`] only (decision D3) by
+//! either build. Every other class stays on RCR. A level holds
+//! the transfer functions of its classes (`DiagonalM2l::build_by` of the setting's build, one
+//! part per (class, ring) on the pool)
 //! and its conversions (`Conversions`) only where some class passes and its scratch fits the
 //! budget: the conversions, one thread's scratch, the signatures of the level's distinct V sources
 //! for every charge vector and a chunk of accumulators (`scratch_shape`), the sources counted as
@@ -59,10 +62,10 @@ use std::time::{Duration, Instant};
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_plan::operator::M2l;
 use nd_fmm_ref::helmholtz::Level;
-use nd_fmm_ref::helmholtz::diagonal::{BoundConstants, THETA};
+use nd_fmm_ref::helmholtz::diagonal::THETA;
 use nd_fmm_tables::helmholtz::diagonal::{
-    BLOCK_BOXES, ConversionScratch, Conversions, DiagonalM2l, Signatures, class_bounds,
-    scratch_shape,
+    BLOCK_BOXES, ConversionScratch, Conversions, DiagonalM2l, Signatures, TransferBuild,
+    class_bounds, scratch_shape,
 };
 use nd_fmm_tables::parts::Parts;
 
@@ -103,25 +106,23 @@ impl HelmholtzDiagonal {
 pub const DIAGONAL_F32_MIN_TOLERANCE: f64 = 1e-4;
 
 /// The offset classes (indices into `nd_fmm_ref::helmholtz::diagonal::classes()`) that take the
-/// diagonal form on a level of degree p and wavenumber k̂ in its units at tolerance ε, in `T`:
-/// those with E(l, c) ≤ θ ε (`class_bounds` with `BoundConstants::F64`, or `F32` for a 4-byte
-/// `T`, where none below [`DIAGONAL_F32_MIN_TOLERANCE`]). A function of its arguments alone
-/// (proposal §2, constraint 9).
+/// diagonal form on a level of degree p and wavenumber k̂ in its units at tolerance ε, in `T`,
+/// with transfer functions of `build`: those with E(l, c) ≤ θ ε (`class_bounds` with
+/// [`TransferBuild::bound_constants`]: `BoundConstants::F64` direct, `F64_INTERPOLATED`
+/// interpolated (Helmholtz CH4.2c2), or `F32` for a 4-byte `T` by either build, where none below
+/// [`DIAGONAL_F32_MIN_TOLERANCE`]). A function of its arguments alone (proposal §2,
+/// constraint 9).
 pub fn diagonal_rule_classes<T: SimdScalar>(
     p: usize,
     k_hat: Complex<f64>,
     epsilon: f64,
+    build: TransferBuild,
 ) -> Vec<usize> {
     let single = size_of::<T>() == 4;
     if single && epsilon < DIAGONAL_F32_MIN_TOLERANCE {
         return Vec::new();
     }
-    let constants = if single {
-        BoundConstants::F32
-    } else {
-        BoundConstants::F64
-    };
-    class_bounds(p, k_hat, constants)
+    class_bounds(p, k_hat, build.bound_constants(single))
         .into_iter()
         .enumerate()
         .filter(|&(_, e)| e <= THETA * epsilon)
@@ -208,6 +209,8 @@ impl DiagonalTimes {
 #[derive(Clone, Debug, Default)]
 pub(super) struct DiagonalSettings {
     pub(super) choice: HelmholtzDiagonal,
+    /// The transfer functions' build (Helmholtz CH4.2c2), which the rule's constants follow.
+    pub(super) build: TransferBuild,
     /// The byte budget of a level's scratch on this rank, or `None` for no bound.
     pub(super) budget: Option<usize>,
     /// Each level's distinct V sources, the largest count over the ranks, if known.
@@ -241,8 +244,9 @@ impl<T: SimdScalar> DiagonalLevel<T> {
 /// The levels that take the diagonal form and their tables (module documentation, "The
 /// rule"): for each level l ≥ 2 with `rcr[l]` (its M2L RCR's), degree `degrees[l]` and
 /// wavenumber `k_hat(l)` in its units, the classes of [`diagonal_rule_classes`] at the
-/// setting's tolerance, where some class passes and the scratch fits the budget; `None`
-/// elsewhere. The transfer functions are built on `parts`, one part per (class, ring).
+/// setting's tolerance and build, where some class passes and the scratch fits the budget;
+/// `None` elsewhere. The transfer functions are built by the setting's build on `parts`, one
+/// part per (class, ring).
 pub(super) fn select<T: SimdScalar>(
     settings: &DiagonalSettings,
     fmm_tolerance: Option<f64>,
@@ -273,13 +277,13 @@ pub(super) fn select<T: SimdScalar>(
                 scratch_shape::<T>(p, sources * vectors, accumulators, 1, budget)?;
             }
             let k = k_hat(l);
-            let classes = diagonal_rule_classes::<T>(p, k, epsilon);
+            let classes = diagonal_rule_classes::<T>(p, k, epsilon, settings.build);
             if classes.is_empty() {
                 return None;
             }
             let level = Level::new(k, 1.0);
             let clock = Instant::now();
-            let m2l = DiagonalM2l::build_on(p, k, &classes, parts);
+            let m2l = DiagonalM2l::build_by(p, k, &classes, settings.build, parts);
             let transfer = clock.elapsed();
             let clock = Instant::now();
             let conversions = Conversions::new(p, level.scale());

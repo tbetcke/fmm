@@ -79,8 +79,8 @@ pub use operator::{
     HelmholtzOperator, LevelShape, M2L_MIN_BLOCK_TARGETS, MIN_BUFFER_BOXES, OperatorError,
     PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes,
     RCR_PAIR_FEW_DEGREE, RCR_PAIR_MIN_DEGREE, RCR_PAIR_SHARE, RcrCounts, RcrSplit, TIMED_KINDS,
-    TableTimings, auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
-    auto_plane_wave_min_degree, batched_block_targets, diagonal_chunk_targets,
+    TableTimings, TransferBuild, auto_batched_max_degree, auto_batched_min_columns,
+    auto_m2l_mul_add, auto_plane_wave_min_degree, batched_block_targets, diagonal_chunk_targets,
     diagonal_rule_classes, rcr_by_pairs,
 };
 

@@ -244,9 +244,13 @@
 //! runs on the levels whose M2L is RCR's under the setting above (no waves, no Dense, Classes
 //! or Batched tables), so it composes with every [`HelmholtzM2l`]: each offset class c of
 //! such a level with E(l, c) ≤ θ ε ([`diagonal_rule_classes`]: the bound of
-//! `nd_fmm_tables::helmholtz::diagonal::class_bounds`, θ = 1/2, S6's constants of f64, or of
-//! f32 at ε ≥ 10⁻⁴ only, decision D3) takes `DiagonalM2l`'s transfer function; the others stay
-//! on RCR. [`HelmholtzDiagonal::Rule`] reads the FMM's tolerance
+//! `nd_fmm_tables::helmholtz::diagonal::class_bounds`, θ = 1/2, S6's constants of f64 for the
+//! transfer functions' build, or of f32 at ε ≥ 10⁻⁴ only, decision D3) takes `DiagonalM2l`'s
+//! transfer function; the others stay on RCR. The transfer functions are built per sample in
+//! double-double ([`TransferBuild::Direct`], the default, C_T = 0.15) or interpolated in ŝ · t̂
+//! from a double-double table ([`TransferBuild::Interpolated`], C_T = 0.23, so a class may need
+//! a looser tolerance; Helmholtz CH4.2c2,
+//! [`with_diagonal_build`](HelmholtzOperator::with_diagonal_build)). [`HelmholtzDiagonal::Rule`] reads the FMM's tolerance
 //! ([`with_plane_wave_tolerance`](HelmholtzOperator::with_plane_wave_tolerance)),
 //! [`HelmholtzDiagonal::Tolerance`] a named one. A level takes it only where its scratch fits
 //! the budget ([`with_diagonal_budget`](HelmholtzOperator::with_diagonal_budget)) at the largest
@@ -377,6 +381,7 @@ pub use diagonal::{
     diagonal_chunk_targets, diagonal_rule_classes,
 };
 use diagonal::{DiagonalBuffer, DiagonalLevel, DiagonalScratch, DiagonalSettings};
+pub use nd_fmm_tables::helmholtz::diagonal::TransferBuild;
 pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveSplit, PlaneWaveTimes};
 use plane_wave::{PlaneBuffer, PlaneScratch};
 use rcr::RcrBuffer;
@@ -1750,6 +1755,22 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// The diagonal M2L's setting ([`with_diagonal`](Self::with_diagonal)).
     pub fn diagonal(&self) -> HelmholtzDiagonal {
         self.kernel.diagonal_settings.choice
+    }
+
+    /// Builds the diagonal form's transfer functions by `build` (Helmholtz CH4.2c2; default
+    /// [`TransferBuild::Direct`]): the rule then reads that build's constants
+    /// ([`diagonal_rule_classes`]; C_T = 0.15 direct, 0.23 interpolated, in f64), so the
+    /// interpolated build may take fewer classes at a tolerance. The tables are chosen again.
+    pub fn with_diagonal_build(mut self, build: TransferBuild) -> Self {
+        self.kernel.diagonal_settings.build = build;
+        self.select_tables();
+        self
+    }
+
+    /// The diagonal form's build of the transfer functions
+    /// ([`with_diagonal_build`](Self::with_diagonal_build)).
+    pub fn diagonal_build(&self) -> TransferBuild {
+        self.kernel.diagonal_settings.build
     }
 
     /// Bounds the scratch of a diagonal level call on this rank at `bytes` (`None`, the
