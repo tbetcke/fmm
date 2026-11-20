@@ -201,8 +201,9 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzDiagonal, HelmholtzM2l, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear, s7_degree,
+    ChargeKind, DEFAULT_DENSE_BUDGET, DIAGONAL_AUTO_MIN_KA, Degrees, HelmholtzDiagonal,
+    HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild,
+    VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -1240,18 +1241,21 @@ fn main() {
                     .map(|l| {
                         let [ka, bound, diagonal, rcr, waves] = row.diagonal_model[l];
                         let ran = level_m2l(row, l);
-                        let other = if row.plane_wave[l].is_some() {
-                            waves
-                        } else {
-                            rcr
-                        };
-                        let choice = if bound > 0.0 && diagonal < other.min(rcr) {
-                            "diagonal"
-                        } else if row.plane_wave[l].is_some() {
-                            "waves"
-                        } else {
-                            "other"
-                        };
+                        // The operator's choice from the model, without the scratch budget:
+                        // the form only from k a = 2.8 and only from Auto's waves; a level the
+                        // rule took from the waves has no precision in the row and compares
+                        // with RCR.
+                        let waves_level =
+                            row.m2l == HelmholtzM2l::Auto && row.plane_wave[l].is_some();
+                        let other = if waves_level { waves } else { rcr };
+                        let choice =
+                            if bound > 0.0 && ka >= DIAGONAL_AUTO_MIN_KA && diagonal < other {
+                                if diagonal < rcr { "diagonal" } else { "rcr" }
+                            } else if row.plane_wave[l].is_some() {
+                                "waves"
+                            } else {
+                                "other"
+                            };
                         format!(
                             "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {} | {l} | {} \
                              | {ka:.2} | {bound:.0} | {} | {ran} | {:.6} | {diagonal:.6} \
@@ -1818,14 +1822,15 @@ fn main() {
                  rule's model of the level (seconds: thread-ns over ranks × threads, on the \
                  agreed shape) with the bound's classes diagonal, by RCR and by the waves at \
                  their degree, the model's diagonal level over the measured M2L, and the model's \
-                 choice among the diagonal form and the level's own M2L (\"other\": not the \
-                 form)."
+                 choice without the scratch budget (the form from k a = 2.8 and from Auto's \
+                 waves only; \"other\": the level's own M2L, not the form; a level the rule took \
+                 from the waves compares with RCR)."
             );
             println!();
             println!(
                 "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | k a \
                  | bound classes | classes | ran | M2L s | model diagonal s | model RCR s \
-                 | model waves s | model diagonal ÷ M2L s | model's choice |"
+                 | model waves s | model diagonal ÷ M2L s | model's choice (no budget) |"
             );
             println!(
                 "| --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- \

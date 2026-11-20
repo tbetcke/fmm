@@ -507,6 +507,26 @@ impl DiagonalSettings {
             })
     }
 
+    /// Whether level l of degree `p` may hold the form's tables for `vectors` vectors: some
+    /// V source on some rank (a count of 0 has none), and the scratch at the agreed sources
+    /// within the budget (the whole-level fallback; without a budget or the counts, always).
+    pub(super) fn fits<T: SimdScalar>(&self, l: usize, p: usize, vectors: usize) -> bool {
+        let sources = self
+            .sources
+            .as_ref()
+            .map(|s| s.get(l).copied().unwrap_or(0));
+        if sources == Some(0) {
+            return false;
+        }
+        match (self.budget, sources) {
+            (Some(budget), Some(sources)) => {
+                let accumulators = self.max_chunk() * vectors;
+                scratch_shape::<T>(p, sources * vectors, accumulators, 1, budget).is_some()
+            }
+            _ => true,
+        }
+    }
+
     /// The widest chunk a level call may take.
     fn max_chunk(&self) -> usize {
         self.chunk.unwrap_or(BLOCK_BOXES).max(1)
@@ -556,16 +576,8 @@ pub(super) fn select<T: SimdScalar>(
             if l < 2 || !rcr[l] {
                 return None;
             }
-            let sources = settings
-                .sources
-                .as_ref()
-                .map(|s| s.get(l).copied().unwrap_or(0));
-            if sources == Some(0) {
+            if !settings.fits::<T>(l, p, vectors) {
                 return None;
-            }
-            if let (Some(budget), Some(sources)) = (settings.budget, sources) {
-                let accumulators = settings.max_chunk() * vectors;
-                scratch_shape::<T>(p, sources * vectors, accumulators, 1, budget)?;
             }
             let k = k_hat(l);
             let classes = diagonal_rule_classes::<T>(p, k, epsilon, settings.build);

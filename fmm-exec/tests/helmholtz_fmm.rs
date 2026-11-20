@@ -99,8 +99,8 @@
 //! for bit. Under both settings the time rule (Helmholtz CH4.3b1, `check_diagonal_auto`), at
 //! the machine's costs and at free ones (every level the bound reaches, Auto's levels with waves
 //! included): the agreed shapes, the classes the same on every rank, the errors within
-//! `DIAGONAL_RATIO` of the setting's without the form, and at free costs 2 threads and the
-//! one-rank FMM bit for bit.
+//! `DIAGONAL_RATIO` of the setting's without the form, the one-rank FMM bit for bit with its
+//! shapes, and at free costs 2 threads and chunk widths bit for bit.
 //!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
 //! at several ranks under a timeout, e.g. on macOS
@@ -2360,9 +2360,9 @@ const FREE_DIAGONAL: DiagonalCosts = DiagonalCosts {
 /// bound's classes reach, the levels with waves under Auto included): the builder's shapes on
 /// every rank the same, their pairs the plan's V pairs (`LevelShape`), the classes the same on
 /// every rank, the errors against the direct sum within [`DIAGONAL_RATIO`] of `plain` (the
-/// setting's without the form); at free costs also 2 threads bit for bit and on P ranks the
-/// one-rank FMM bit for bit (the decision a function of rank-invariant counts). Returns the
-/// levels taken at free costs.
+/// setting's without the form), on P ranks the one-rank FMM bit for bit and its shapes (the
+/// decision a function of rank-invariant counts); at free costs also 2 threads and chunk widths
+/// bit for bit. Returns the levels taken at free costs.
 fn check_diagonal_auto(
     what: &str,
     scenario: &Scenario,
@@ -2451,12 +2451,41 @@ fn check_diagonal_auto(
             errors.0 <= DIAGONAL_RATIO * plain.0 && errors.1 <= DIAGONAL_RATIO * plain.1,
             "{what}: errors {errors:?} against {plain:?} without the diagonal form"
         );
+        // On P ranks the one-rank FMM's bits (the choice a function of rank-invariant counts),
+        // and its shapes.
+        check_one_rank(&what, &auto, inputs, kind, &want, comm);
+        if comm.size() > 1 {
+            let one = SimpleCommunicator::self_comm();
+            let union_inputs = Inputs {
+                sources: union_points(&inputs.sources, comm).0,
+                targets: union_points(&inputs.targets, comm).0,
+                charges: inputs
+                    .charges
+                    .iter()
+                    .map(|(re, im)| (union(re, comm).0, union(im, comm).0))
+                    .collect(),
+            };
+            let (fmm, _) = run(&auto.clone().threads(1), &union_inputs, kind, &one);
+            let same = fmm.operator().diagonal_shapes() == Some(&shapes[..]);
+            drop(fmm);
+            assert!(
+                everywhere(same, comm),
+                "{what}: the shapes differ from the one-rank FMM's"
+            );
+        }
         if costs.is_some() {
             taken_free = levels.len();
-            let (fmm, two) = run(&auto.clone().threads(2), inputs, kind, comm);
-            drop(fmm);
-            assert_same(&format!("{what} at 2 threads"), &two, &want, comm);
-            check_one_rank(&what, &auto, inputs, kind, &want, comm);
+            for (threads, chunk) in [(2, None), (1, Some(3)), (2, Some(1))] {
+                let named = auto.clone().threads(threads).diagonal_chunk(chunk);
+                let (fmm, got) = run(&named, inputs, kind, comm);
+                drop(fmm);
+                assert_same(
+                    &format!("{what} at {threads} threads, chunks of {chunk:?}"),
+                    &got,
+                    &want,
+                    comm,
+                );
+            }
         }
     }
     taken_free

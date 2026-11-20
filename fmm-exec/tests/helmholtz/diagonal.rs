@@ -324,7 +324,8 @@ fn the_time_rule_on_the_rcr_levels() {
 /// The time rule against the exponential M2L (Helmholtz CH4.3b1): under Auto with waves from
 /// every degree, `HelmholtzDiagonal::Auto` gives a level with waves to the diagonal form where
 /// `diagonal_beats_plane_waves` says so, at the level's own degree (below 10⁻⁶ the waves'
-/// raised degree is not the form's), and keeps the waves elsewhere and below k a = 2.8
+/// raised degree is not the form's), and keeps the waves elsewhere, where the form's scratch
+/// does not fit the budget, and below k a = 2.8
 /// (`DIAGONAL_AUTO_MIN_KA`, where the rule on an RCR level takes it). The FMM's calibrated
 /// degrees: at S7's per-pair degrees no class passes at 10⁻⁷ (p = 40 at k a = 8.7).
 #[test]
@@ -353,6 +354,11 @@ fn the_time_rule_against_the_waves() {
         let rule = base(HelmholtzDiagonal::Rule, FREE);
         let free = base(HelmholtzDiagonal::Auto, FREE);
         let dear = base(HelmholtzDiagonal::Auto, DEAR);
+        // The scratch budget's fallback first: a level whose form would not fit keeps its
+        // waves (not RCR).
+        let tight = base(HelmholtzDiagonal::Auto, FREE)
+            .with_diagonal_sources(Some(vec![0, 0, 64, 512, 4096]))
+            .with_diagonal_budget(Some(64 << 10));
         let mut taken = 0;
         for (l, &p_l) in p.iter().enumerate().skip(2) {
             let waves = off.m2l_on(l) == HelmholtzM2l::PlaneWave;
@@ -365,8 +371,10 @@ fn the_time_rule_against_the_waves() {
             raised |= waves && off.degree(l) > p_l && !classes.is_empty();
             // Rule keeps the waves: the form only on RCR levels.
             assert_eq!(rule.m2l_on(l), off.m2l_on(l), "level {l}");
-            // Dear costs: Off's levels.
+            // Dear costs and a tight budget: Off's levels.
             assert_eq!(dear.m2l_on(l), off.m2l_on(l), "level {l}");
+            assert_eq!(tight.m2l_on(l), off.m2l_on(l), "level {l}");
+            assert!(tight.diagonal_classes(l).is_none(), "level {l}");
             assert!(dear.diagonal_classes(l).is_none() || !waves, "level {l}");
             let in_range = diagonal_auto_in_range(k_hat(&k, l));
             below |= !in_range && !classes.is_empty();

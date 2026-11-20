@@ -4,6 +4,7 @@ CH4.3b1 (docs/helmholtz/tasks/CH4.3b1.md), fitted from `helmholtz_accuracy --lev
 
     python3 tools/helmholtz/ch4-3b1-fit.py fit <machine>=<file-or-dir> …
     python3 tools/helmholtz/ch4-3b1-fit.py check <machine>=<file-or-dir> …
+    python3 tools/helmholtz/ch4-3b1-fit.py summary <machine>=<file-or-dir> …
 
 `fit` prints, per machine, the constants [a, b] of a (p + 1)² + b (p + 1)³ thread-ns for
 each unit, by least squares on the relative error over every level of every run given, each
@@ -25,7 +26,9 @@ level weighted by its measured time:
 
 With the table each unit's fitted values against the measured per level, the ratio, and the
 diagonal pair over RCR's at p = 8 … 245 (the per-class crossover). `check` prints, per run
-with the form and level, the model's diagonal level against the measured one. No timing is
+with the form and level, the options measured, the rule's choice in the run and the refit
+model's from the measured counts; `summary` per launch the errors and evaluation of each
+setting over the same setting's without the form. No timing is
 asserted; the numbers go into fmm-validate/results/helmholtz-ch4-3b1.md.
 """
 
@@ -281,14 +284,47 @@ def model_unit(ab, p):
     return model(ab, p)
 
 
+def run_summary(args):
+    """Per launch, Rotation and the defaults each without the form, with the rule and with
+    the time rule: the errors (φ, ∇φ) over the same setting's without the form and over
+    Rotation's without it (the acceptance's measure), the evaluation
+    seconds (the second evaluation's) and their ratio, and the levels the form took."""
+    print("| machine | launch | setting | φ | ∇φ | ÷ without | ÷ Rotation | evaluate s "
+          "| ÷ without | diagonal levels |")
+    print("| --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | --- |")
+    for arg in args:
+        machine, paths = files(arg)
+        for path in paths:
+            runs = tables(path).get("", [])
+            plain = {}
+            for r in runs:
+                base, diag = base_setting(r["M2L"])
+                if diag == "off":
+                    plain[base] = r
+            for r in runs:
+                base, diag = base_setting(r["M2L"])
+                ref = plain.get(base)
+                if not ref:
+                    continue
+                e = (float(r["φ"]), float(r["∇φ"]))
+                e0 = (float(ref["φ"]), float(ref["∇φ"]))
+                t, t0 = float(r["evaluate s"]), float(ref["evaluate s"])
+                levels = "–"
+                if "; diagonal " in r["M2L"]:
+                    levels = r["M2L"].split("; diagonal ")[1].split("/")[0]
+                rot = plain.get("rotation", ref)
+                er = (float(rot["φ"]), float(rot["∇φ"]))
+                print(f"| {machine} | {path.stem} | {base} {diag} | {e[0]:.2e} | {e[1]:.2e} "
+                      f"| {e[0] / e0[0]:.3f}/{e[1] / e0[1]:.3f} "
+                      f"| {e[0] / er[0]:.3f}/{e[1] / er[1]:.3f} | {t:.2f} | {t / t0:.2f} "
+                      f"| {levels} |")
+
+
 def main(argv):
-    if len(argv) < 3 or argv[1] not in ("fit", "check"):
+    if len(argv) < 3 or argv[1] not in ("fit", "check", "summary"):
         print(__doc__)
         return 2
-    if argv[1] == "fit":
-        run_fit(argv[2:])
-    else:
-        run_check(argv[2:])
+    {"fit": run_fit, "check": run_check, "summary": run_summary}[argv[1]](argv[2:])
     return 0
 
 

@@ -1540,7 +1540,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 }
                 let p = base[l];
                 let k_hat = kernel.tables.k_hat(l);
-                if !diagonal_auto_in_range(k_hat) {
+                // The scratch budget's whole-level fallback first (constraint 7): a level
+                // whose form would not fit keeps its waves.
+                if !diagonal_auto_in_range(k_hat)
+                    || !kernel
+                        .diagonal_settings
+                        .fits::<T>(l, p, kernel.densities.vectors())
+                {
                     continue;
                 }
                 let classes =
@@ -2214,17 +2220,17 @@ impl<T: SimdScalar> Kernel<T> {
         }
     }
 
-    /// The smallest degree at which [`HelmholtzM2l::Auto`] takes the exponential M2L: the
-    /// named one, else the rule's.
-    /// The diagonal form's time rule's costs: named ([`with_diagonal_costs`]
-    /// (HelmholtzOperator::with_diagonal_costs)), else those of the column kernel's ISA
-    /// (Helmholtz CH4.3b1).
+    /// The diagonal form's time rule's costs: named
+    /// ([`with_diagonal_costs`](HelmholtzOperator::with_diagonal_costs)), else those of the
+    /// column kernel's ISA (Helmholtz CH4.3b1).
     fn diagonal_costs(&self) -> DiagonalCosts {
         self.diagonal_settings
             .costs
             .unwrap_or_else(|| diagonal_costs(self.matrix.isa()))
     }
 
+    /// The smallest degree at which [`HelmholtzM2l::Auto`] takes the exponential M2L: the
+    /// named one, else the rule's.
     fn auto_plane_wave_min_degree(&self) -> usize {
         self.plane_wave_min_degree.unwrap_or_else(|| {
             auto_plane_wave_min_degree(self.matrix.isa(), self.densities.multipole_planes())
