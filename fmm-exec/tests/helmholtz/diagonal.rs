@@ -9,8 +9,9 @@
 use nd_fmm_exec::geometry::{self, Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DIAGONAL_BUILD, DIAGONAL_F32_MIN_TOLERANCE, Densities,
-    HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, TransferBuild, Wavenumber,
-    diagonal_chunk_targets, diagonal_rule_classes, s7_degree,
+    DiagonalCosts, DiagonalShape, HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator,
+    TransferBuild, Wavenumber, degree, diagonal_beats_rcr, diagonal_chunk_targets,
+    diagonal_rule_classes, s7_degree,
 };
 use nd_fmm_math::Complex;
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
@@ -211,6 +212,177 @@ fn no_level_where_the_rule_does_not_apply() {
             expected
         );
     }
+}
+
+/// Costs under which the diagonal form beats every other M2L wherever a class passes.
+const FREE: DiagonalCosts = DiagonalCosts {
+    s2f: [0.0, 0.0],
+    f2r: [0.0, 0.0],
+    pair: [0.0, 0.0],
+    rotation: [1.0, 1.0],
+    plane_wave: [1.0, 1.0],
+};
+
+/// Costs under which it never does.
+const DEAR: DiagonalCosts = DiagonalCosts {
+    pair: [1e9, 1e9],
+    ..FREE
+};
+
+/// The time rule (Helmholtz CH4.3b1) on the RCR levels: `HelmholtzDiagonal::Auto` at the FMM's
+/// tolerance takes a level of `Rule`'s with its classes where `diagonal_beats_rcr` of the
+/// costs and the level's shape (the uniform level's without shapes), and none elsewhere; the
+/// budget's fallback first; none in f32 below 10⁻⁴.
+#[test]
+fn the_time_rule_on_the_rcr_levels() {
+    let k = Wavenumber::new(40.0, 0.0).unwrap();
+    let p = degrees(&k, EPSILON);
+    let with = |costs: Option<DiagonalCosts>, shapes: Option<Vec<DiagonalShape>>| {
+        operator::<f64>(k, ChargeKind::Complex, 1, HelmholtzDiagonal::Auto)
+            .with_plane_wave_tolerance(Some(EPSILON))
+            .with_diagonal_costs(costs)
+            .with_diagonal_shapes(shapes)
+    };
+    let rule = operator::<f64>(k, ChargeKind::Complex, 1, HelmholtzDiagonal::Rule)
+        .with_plane_wave_tolerance(Some(EPSILON));
+    // Without a tolerance, none.
+    let untold = operator::<f64>(k, ChargeKind::Complex, 1, HelmholtzDiagonal::Auto);
+    assert!((0..LEVELS).all(|l| untold.diagonal_classes(l).is_none()));
+    // The ISA's costs on the uniform level, by the model.
+    let auto = with(None, None);
+    assert_eq!(auto.diagonal(), HelmholtzDiagonal::Auto);
+    assert!(auto.diagonal_shapes().is_none());
+    let costs = auto.diagonal_costs();
+    let mut some = false;
+    for (l, &p_l) in p.iter().enumerate().skip(2) {
+        let classes = rule.diagonal_classes(l).unwrap_or_default();
+        let takes = diagonal_beats_rcr(&costs, p_l, &DiagonalShape::uniform(), &classes);
+        println!("level {l}, p {p_l}: classes {classes:?}, by time {takes}");
+        assert_eq!(
+            auto.diagonal_classes(l),
+            takes.then(|| classes.clone()),
+            "level {l}"
+        );
+        some |= takes;
+    }
+    assert!(some, "the time rule takes some level of the cube at k = 40");
+    // Named costs: free, every level of the rule's; dear, none.
+    let free = with(Some(FREE), None);
+    let dear = with(Some(DEAR), None);
+    assert_eq!(free.diagonal_costs(), FREE);
+    for l in 0..LEVELS {
+        assert_eq!(
+            free.diagonal_classes(l),
+            rule.diagonal_classes(l),
+            "level {l}"
+        );
+        assert!(dear.diagonal_classes(l).is_none(), "level {l}");
+    }
+    // The shapes: a level without V pairs takes nothing even at free costs; the others follow
+    // their shapes.
+    let mut shapes = vec![DiagonalShape::uniform(); LEVELS];
+    shapes[3] = DiagonalShape::default();
+    let shaped = with(Some(FREE), Some(shapes.clone()));
+    assert_eq!(shaped.diagonal_shapes(), Some(&shapes[..]));
+    assert!(shaped.diagonal_classes(3).is_none());
+    assert_eq!(shaped.diagonal_classes(2), rule.diagonal_classes(2));
+    // A level whose pairs all lie in classes the bound leaves on RCR: the conversions buy
+    // nothing.
+    let level3 = rule.diagonal_classes(3).expect("level 3 is diagonal");
+    let failing = (0..34)
+        .find(|c| !level3.contains(c))
+        .expect("level 3 is mixed");
+    let mut only_rcr = DiagonalShape {
+        targets: 8,
+        ..DiagonalShape::default()
+    };
+    only_rcr.class_pairs[failing] = 100;
+    shapes[3] = only_rcr;
+    let cheap = DiagonalCosts {
+        s2f: [1.0, 0.0],
+        ..FREE
+    };
+    assert!(
+        with(Some(cheap), Some(shapes))
+            .diagonal_classes(3)
+            .is_none()
+    );
+    // The budget's fallback first.
+    let tight = with(Some(FREE), None)
+        .with_diagonal_sources(Some(vec![0, 0, 64, 512, 4096]))
+        .with_diagonal_budget(Some(64 << 10));
+    assert!(tight.diagonal_classes(2).is_none());
+    // f32 below D3's 10⁻⁴.
+    let below = operator::<f32>(k, ChargeKind::Complex, 1, HelmholtzDiagonal::Auto)
+        .with_plane_wave_tolerance(Some(DIAGONAL_F32_MIN_TOLERANCE / 2.0))
+        .with_diagonal_costs(Some(FREE));
+    assert!((0..LEVELS).all(|l| below.diagonal_classes(l).is_none()));
+}
+
+/// The time rule against the exponential M2L (Helmholtz CH4.3b1): under Auto with waves from
+/// every degree, `HelmholtzDiagonal::Auto` gives a level with waves to the diagonal form where
+/// `diagonal_beats_plane_waves` says so, at the level's own degree (below 10⁻⁶ the waves'
+/// raised degree is not the form's), and keeps the waves elsewhere. The FMM's calibrated
+/// degrees: at S7's per-pair degrees no class passes at 10⁻⁷ (p = 40 at k a = 8.7).
+#[test]
+fn the_time_rule_against_the_waves() {
+    let k = Wavenumber::new(40.0, 0.0).unwrap();
+    let mut raised = false;
+    for epsilon in [EPSILON, 1e-7] {
+        let p: Vec<usize> = (0..LEVELS)
+            .map(|l| match l {
+                0 | 1 => 0,
+                _ => degree(&k, 3f64.sqrt() * radius(l, &domain()), epsilon),
+            })
+            .collect();
+        let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+        let base = |diagonal: HelmholtzDiagonal, costs: DiagonalCosts| {
+            HelmholtzOperator::<f64>::new(k, densities, &domain(), &p, false, 64)
+                .unwrap()
+                .with_plane_wave_tolerance(Some(epsilon))
+                .with_m2l_plane_wave_min_degree(Some(0))
+                .with_m2l(HelmholtzM2l::Auto, 0)
+                .with_diagonal_costs(Some(costs))
+                .with_diagonal(diagonal)
+        };
+        let off = base(HelmholtzDiagonal::Off, FREE);
+        let rule = base(HelmholtzDiagonal::Rule, FREE);
+        let free = base(HelmholtzDiagonal::Auto, FREE);
+        let dear = base(HelmholtzDiagonal::Auto, DEAR);
+        let mut taken = 0;
+        for (l, &p_l) in p.iter().enumerate().skip(2) {
+            let waves = off.m2l_on(l) == HelmholtzM2l::PlaneWave;
+            let classes =
+                diagonal_rule_classes::<f64>(p_l, k_hat(&k, l), epsilon, DEFAULT_DIAGONAL_BUILD);
+            println!(
+                "ε {epsilon:e}, level {l}, p {p_l} (run {}): waves {waves}, classes {classes:?}",
+                off.degree(l)
+            );
+            raised |= waves && off.degree(l) > p_l && !classes.is_empty();
+            // Rule keeps the waves: the form only on RCR levels.
+            assert_eq!(rule.m2l_on(l), off.m2l_on(l), "level {l}");
+            // Dear costs: Off's levels.
+            assert_eq!(dear.m2l_on(l), off.m2l_on(l), "level {l}");
+            assert!(dear.diagonal_classes(l).is_none() || !waves, "level {l}");
+            if waves && !classes.is_empty() {
+                // Free costs: the form, at the level's own degree.
+                assert_eq!(free.m2l_on(l), HelmholtzM2l::Rotation, "level {l}");
+                assert_eq!(free.diagonal_classes(l), Some(classes), "level {l}");
+                assert_eq!(free.degree(l), p_l, "level {l}");
+                taken += 1;
+            } else {
+                assert_eq!(free.m2l_on(l), off.m2l_on(l), "level {l}");
+            }
+        }
+        assert!(
+            taken > 0,
+            "ε {epsilon:e}: some level with waves passes the bound"
+        );
+    }
+    assert!(
+        raised,
+        "some level taken from the waves ran them at a raised degree"
+    );
 }
 
 /// The whole-level fallback: a level whose scratch at the agreed sources does not fit the

@@ -96,7 +96,11 @@
 //! functions, the library's default build since CH4.2c2's sign-off (Helmholtz CH4.2c2,
 //! `check_interpolated`; the other checks name the direct build): each level's classes within
 //! the direct build's, the errors within `DIAGONAL_RATIO` of Rotation's, 2 threads and the one-rank FMM bit
-//! for bit.
+//! for bit. Under both settings the time rule (Helmholtz CH4.3b1, `check_diagonal_auto`), at
+//! the machine's costs and at free ones (every level the bound reaches, Auto's levels with waves
+//! included): the agreed shapes, the classes the same on every rank, the errors within
+//! `DIAGONAL_RATIO` of the setting's without the form, and at free costs 2 threads and the
+//! one-rank FMM bit for bit.
 //!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
 //! at several ranks under a timeout, e.g. on macOS
@@ -115,11 +119,11 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
-    DEFAULT_DIAGONAL_BUILD, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, DiagonalTimes,
-    HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l,
-    MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild, VNear,
-    Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
+    DEFAULT_DIAGONAL_BUILD, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, DiagonalCosts,
+    DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
+    HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision,
+    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild,
+    VNear, Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
     auto_plane_wave_min_degree, default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
@@ -2148,6 +2152,7 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
         summed
     };
     let mut mixed = 0;
+    let mut taken = 0;
     for (setting, base) in [
         ("Rotation", builder(scenario)),
         ("Auto", default_builder(scenario).near_v(VNear::Off)),
@@ -2204,6 +2209,8 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
             everywhere(same, comm),
             "{what}: the classes differ between ranks"
         );
+        // The time rule (Helmholtz CH4.3b1).
+        taken += check_diagonal_auto(&what, scenario, &base, &inputs, plain_errors, comm);
         // Under Auto a level with waves or batched tables takes no diagonal form; with no RCR
         // level the setting changes nothing.
         if levels.is_empty() {
@@ -2330,9 +2337,129 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
             }
         }
     }
+    assert!(
+        everywhere(taken > 0, comm),
+        "{name}: the time rule took no level at free costs"
+    );
     let mut mixed_anywhere = 0;
     comm.all_reduce_into(&mixed, &mut mixed_anywhere, SystemOperation::max());
     mixed_anywhere
+}
+
+/// Costs under which the diagonal form beats every other M2L wherever a class passes.
+const FREE_DIAGONAL: DiagonalCosts = DiagonalCosts {
+    s2f: [0.0, 0.0],
+    f2r: [0.0, 0.0],
+    pair: [0.0, 0.0],
+    rotation: [1.0, 1.0],
+    plane_wave: [1.0, 1.0],
+};
+
+/// The diagonal form's time rule (Helmholtz CH4.3b1, `HelmholtzDiagonal::Auto`) on `base`'s
+/// settings, at the machine's costs and at free ones (where the form takes every level the
+/// bound's classes reach, the levels with waves under Auto included): the builder's shapes on
+/// every rank the same, their pairs the plan's V pairs (`LevelShape`), the classes the same on
+/// every rank, the errors against the direct sum within [`DIAGONAL_RATIO`] of `plain` (the
+/// setting's without the form); at free costs also 2 threads bit for bit and on P ranks the
+/// one-rank FMM bit for bit (the decision a function of rank-invariant counts). Returns the
+/// levels taken at free costs.
+fn check_diagonal_auto(
+    what: &str,
+    scenario: &Scenario,
+    base: &HelmholtzFmmBuilder,
+    inputs: &Inputs,
+    plain: (f64, f64),
+    comm: &SimpleCommunicator,
+) -> usize {
+    let kind = scenario.charges;
+    let mut taken_free = 0;
+    for (costs_name, costs) in [
+        ("its machine's costs", None),
+        ("free costs", Some(FREE_DIAGONAL)),
+    ] {
+        let what = format!("{what}, the time rule at {costs_name}");
+        let auto = base
+            .clone()
+            .diagonal(HelmholtzDiagonal::Auto)
+            .diagonal_costs(costs);
+        let (fmm, want) = run(&auto, inputs, kind, comm);
+        let op = fmm.operator();
+        let nlevels = fmm.nlevels();
+        if let Some(costs) = costs {
+            assert_eq!(op.diagonal_costs(), costs, "{what}");
+        }
+        let shapes = op
+            .diagonal_shapes()
+            .unwrap_or_else(|| panic!("{what}: the builder gave no shapes"))
+            .to_vec();
+        let flat: Vec<u64> = shapes
+            .iter()
+            .flat_map(|s| std::iter::once(s.targets).chain(s.class_pairs))
+            .collect();
+        let mut agreed = flat.clone();
+        comm.all_reduce_into(&flat[..], &mut agreed[..], SystemOperation::max());
+        assert!(
+            everywhere(agreed == flat, comm),
+            "{what}: the shapes differ between ranks"
+        );
+        if let Some(levels) = fmm.level_shapes() {
+            for (l, (shape, level)) in shapes.iter().zip(levels).enumerate() {
+                assert_eq!(shape.pairs(), level.pairs, "{what}: level {l}'s V pairs");
+                assert!(
+                    shape.targets <= level.targets,
+                    "{what}: level {l}'s targets"
+                );
+            }
+        }
+        let classes: Vec<Vec<usize>> = (0..nlevels)
+            .map(|l| op.diagonal_classes(l).unwrap_or_default())
+            .collect();
+        let flat: Vec<u64> = classes
+            .iter()
+            .flat_map(|level| {
+                let mut row = [0u64; 34];
+                for &c in level {
+                    row[c] = 1;
+                }
+                row
+            })
+            .collect();
+        let mut agreed = flat.clone();
+        comm.all_reduce_into(&flat[..], &mut agreed[..], SystemOperation::max());
+        assert!(
+            everywhere(agreed == flat, comm),
+            "{what}: the classes differ between ranks"
+        );
+        let levels: Vec<(usize, usize, HelmholtzM2l)> = (0..nlevels)
+            .filter(|&l| !classes[l].is_empty())
+            .map(|l| (l, classes[l].len(), op.m2l_on(l)))
+            .collect();
+        drop(fmm);
+        let errors = errors(scenario, inputs, &want, 0, comm);
+        if comm.rank() == 0 {
+            println!(
+                "{what}: (level, classes, M2L) {levels:?}; φ {:.3e} against {:.3e} ({:.3}×), ∇φ \
+                 {:.3e} against {:.3e}",
+                errors.0,
+                plain.0,
+                errors.0 / plain.0,
+                errors.1,
+                plain.1,
+            );
+        }
+        assert!(
+            errors.0 <= DIAGONAL_RATIO * plain.0 && errors.1 <= DIAGONAL_RATIO * plain.1,
+            "{what}: errors {errors:?} against {plain:?} without the diagonal form"
+        );
+        if costs.is_some() {
+            taken_free = levels.len();
+            let (fmm, two) = run(&auto.clone().threads(2), inputs, kind, comm);
+            drop(fmm);
+            assert_same(&format!("{what} at 2 threads"), &two, &want, comm);
+            check_one_rank(&what, &auto, inputs, kind, &want, comm);
+        }
+    }
+    taken_free
 }
 
 /// The diagonal M2L with interpolated transfer functions (Helmholtz CH4.2c2) on `diagonal`'s

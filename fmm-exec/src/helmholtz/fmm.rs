@@ -346,6 +346,7 @@ pub struct HelmholtzFmmBuilder {
     rcr_budget: usize,
     diagonal: HelmholtzDiagonal,
     diagonal_build: TransferBuild,
+    diagonal_costs: Option<DiagonalCosts>,
     diagonal_budget: usize,
     diagonal_chunk: Option<usize>,
     c_leaf: f64,
@@ -400,6 +401,7 @@ impl HelmholtzFmmBuilder {
             rcr_budget: DEFAULT_RCR_NODE_BUDGET,
             diagonal: HelmholtzDiagonal::Off,
             diagonal_build: DEFAULT_DIAGONAL_BUILD,
+            diagonal_costs: None,
             diagonal_budget: DEFAULT_SIGNATURE_NODE_BUDGET,
             diagonal_chunk: None,
             c_leaf: DEFAULT_C_LEAF,
@@ -704,7 +706,10 @@ impl HelmholtzFmmBuilder {
     /// Helmholtz CH4.2b1, opt-in until CH4.3; `HelmholtzOperator::with_diagonal`): on the
     /// levels whose M2L is RCR's, each offset class with E(l, c) ≤ θ ε on the diagonal form,
     /// RCR on the others. [`HelmholtzDiagonal::Rule`] reads the tolerance of
-    /// [`Degrees::Tolerance`] (no level with named degrees). The output is deterministic and on
+    /// [`Degrees::Tolerance`] (no level with named degrees); [`HelmholtzDiagonal::Auto`] (Helmholtz
+    /// CH4.3b1) too, and takes a level only where the time rule's model puts it below the M2L
+    /// the level would run otherwise, RCR's or, under [`HelmholtzM2l::Auto`], the exponential
+    /// M2L's ([`diagonal_costs`](Self::diagonal_costs)). The output is deterministic and on
     /// P ranks the one-rank FMM's bit for bit.
     ///
     /// # Panics
@@ -729,6 +734,15 @@ impl HelmholtzFmmBuilder {
     /// the build's constants.
     pub fn diagonal_build(mut self, build: TransferBuild) -> Self {
         self.diagonal_build = build;
+        self
+    }
+
+    /// The costs of the diagonal form's time rule ([`HelmholtzDiagonal::Auto`]; Helmholtz
+    /// CH4.3b1; default `None`: [`diagonal_costs`](super::diagonal_costs) of the P2P kernel's
+    /// ISA), agreed over the ranks (the largest of each constant), for the measurements and
+    /// the tests.
+    pub fn diagonal_costs(mut self, costs: Option<DiagonalCosts>) -> Self {
+        self.diagonal_costs = costs;
         self
     }
 
@@ -993,7 +1007,10 @@ impl HelmholtzFmmBuilder {
         );
         // The diagonal form's time rule's costs (Helmholtz CH4.3b1), agreed alike (the
         // largest of each constant), before the waves, which they may move.
-        let local = diagonal_costs(isa).to_array();
+        let local = self
+            .diagonal_costs
+            .unwrap_or_else(|| diagonal_costs(isa))
+            .to_array();
         let mut agreed = [0.0f64; DIAGONAL_COST_CONSTANTS];
         comm.all_reduce_into(&local[..], &mut agreed[..], SystemOperation::max());
         let costs = DiagonalCosts::from_array(agreed);
