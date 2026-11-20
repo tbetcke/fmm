@@ -88,7 +88,8 @@ pub enum HelmholtzDiagonal {
     /// degrees too).
     Tolerance(f64),
     /// The rule at the FMM's tolerance, then by time (Helmholtz CH4.3b1; module documentation
-    /// of [`operator`](super), "M2L", the time rule): a level takes the bound's classes only
+    /// of [`operator`](super), "M2L", the time rule), on the levels of k a ≥
+    /// [`DIAGONAL_AUTO_MIN_KA`] only: a level takes the bound's classes only
     /// where the model ([`DiagonalCosts`]) puts its diagonal level below the M2L it would run
     /// otherwise by the level's agreed V lists ([`DiagonalShape`]): RCR's
     /// ([`diagonal_beats_rcr`]), or under [`HelmholtzM2l::Auto`](super::HelmholtzM2l::Auto) the
@@ -147,6 +148,20 @@ pub fn diagonal_chunk_targets(rows: usize, threads: usize) -> usize {
         return BLOCK_BOXES;
     }
     rows.div_ceil(threads).clamp(1, BLOCK_BOXES)
+}
+
+/// The smallest k a = Re(k̂_l) √3 at which the time rule ([`HelmholtzDiagonal::Auto`]) takes a
+/// level: S6's calibrated range (Helmholtz CH4.3b1, CH4.3a's question 3: below it one damped
+/// class measured 2.9 E per pair, direct build, η = 0.1, k a 1.69). The bound's rule under
+/// [`HelmholtzDiagonal::Rule`] and [`HelmholtzDiagonal::Tolerance`] reaches below it. On W1 and
+/// W3 the time rule took no level below it before the bound (fmm-validate/results/
+/// helmholtz-ch4-3b1.md): the levels there are small, and RCR is the cheaper.
+pub const DIAGONAL_AUTO_MIN_KA: f64 = 2.8;
+
+/// Whether the time rule may take a level of wavenumber `k_hat` in its units: k a ≥
+/// [`DIAGONAL_AUTO_MIN_KA`], a = √3 the circumradius of a box of half-width 1.
+pub fn diagonal_auto_in_range(k_hat: Complex<f64>) -> bool {
+    k_hat.re * 3f64.sqrt() >= DIAGONAL_AUTO_MIN_KA
 }
 
 /// The class of each V offset, by the offset's table index (`nd_fmm_tables::geometry::
@@ -556,6 +571,9 @@ pub(super) fn select<T: SimdScalar>(
             let k = k_hat(l);
             let classes = diagonal_rule_classes::<T>(p, k, epsilon, settings.build);
             if classes.is_empty() {
+                return None;
+            }
+            if settings.choice == HelmholtzDiagonal::Auto && !diagonal_auto_in_range(k) {
                 return None;
             }
             if settings.choice == HelmholtzDiagonal::Auto

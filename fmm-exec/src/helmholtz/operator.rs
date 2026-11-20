@@ -289,7 +289,8 @@
 //! superset of the operator's levels with waves; its grouping per (parent, source) converts
 //! exact pairs under every M2L. Each choice is a function of agreed counts, (p, k̂, ε, T) and
 //! agreed constants, so the same on every rank and at every rank count; the scratch budget's
-//! whole-level fallback comes first.
+//! whole-level fallback comes first. It takes no level below k a = [`DIAGONAL_AUTO_MIN_KA`]
+//! (2.8, S6's calibrated range).
 //!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
@@ -399,10 +400,11 @@ mod plane_wave;
 mod rcr;
 
 pub use diagonal::{
-    DEFAULT_DIAGONAL_BUILD, DIAGONAL_COST_CONSTANTS, DIAGONAL_COSTS_NEON, DIAGONAL_COSTS_X86,
-    DIAGONAL_F32_MIN_TOLERANCE, DiagonalCosts, DiagonalCounts, DiagonalShape, DiagonalTimes,
-    HelmholtzDiagonal, diagonal_beats_plane_waves, diagonal_beats_rcr, diagonal_chunk_targets,
-    diagonal_costs, diagonal_rule_classes, offset_class,
+    DEFAULT_DIAGONAL_BUILD, DIAGONAL_AUTO_MIN_KA, DIAGONAL_COST_CONSTANTS, DIAGONAL_COSTS_NEON,
+    DIAGONAL_COSTS_X86, DIAGONAL_F32_MIN_TOLERANCE, DiagonalCosts, DiagonalCounts, DiagonalShape,
+    DiagonalTimes, HelmholtzDiagonal, diagonal_auto_in_range, diagonal_beats_plane_waves,
+    diagonal_beats_rcr, diagonal_chunk_targets, diagonal_costs, diagonal_rule_classes,
+    offset_class,
 };
 use diagonal::{DiagonalBuffer, DiagonalLevel, DiagonalScratch, DiagonalSettings};
 pub use nd_fmm_tables::helmholtz::diagonal::TransferBuild;
@@ -1537,6 +1539,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 }
                 let p = base[l];
                 let k_hat = kernel.tables.k_hat(l);
+                if !diagonal_auto_in_range(k_hat) {
+                    continue;
+                }
                 let classes =
                     diagonal_rule_classes::<T>(p, k_hat, epsilon, kernel.diagonal_settings.build);
                 let shape = kernel.diagonal_settings.shape(l);
