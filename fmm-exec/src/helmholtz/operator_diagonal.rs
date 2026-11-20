@@ -152,7 +152,8 @@ pub struct DiagonalCounts {
     /// Source signatures formed (slots × vectors), summed over the calls.
     pub signatures: Vec<usize>,
     /// Accumulators converted back by F → R (targets with a diagonal pair × vectors), summed
-    /// over the calls (Helmholtz CH4.2b2).
+    /// over the calls (Helmholtz CH4.2b2; counted by one serial pass over the level's pairs on
+    /// the calling thread, outside both timed passes but inside the level's M2L time).
     pub back: Vec<usize>,
 }
 

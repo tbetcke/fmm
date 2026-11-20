@@ -728,6 +728,16 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   for the slots, the first call of the largest level grows it once). Where the budget binds,
   the levels depend on the ranks per node, as the dense tables' do. Its debug cost: about 110 s of the
   one-rank run on a loaded M6 (less with the debug widths), 8 s at opt-level 1.
+  Since Helmholtz CH4.2b2 (docs/helmholtz/tasks/CH4.2b2.md; fmm-validate/results/helmholtz-ch4-2b2.md)
+  the level call times its two passes (S → F, the targets) on the calling thread's clock and the
+  workers' thread-seconds of S → F, the pairs, F → R and the RCR pairs, each worker's clock in its
+  scratch, drained after the call (`DiagonalTimes`, `HelmholtzOperator::diagonal_times`, reset
+  with the counts; a few clock reads per block and chunk, no value changed); `DiagonalCounts::back`
+  counts the accumulators converted back; `diagonal_build_time(level)` gives each level's
+  transfer functions' and conversions' build, `diagonal_multiply_adds(level)` one conversion's
+  multiply-adds. `check_diagonal_times` (in `check_diagonal`, after every run) checks the parts
+  timed exactly where they ran, within the passes and the level's M2L time, `back` against the
+  plan's V rows, the build times on the diagonal levels alone.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

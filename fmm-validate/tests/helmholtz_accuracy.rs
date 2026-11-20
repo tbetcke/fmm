@@ -1186,7 +1186,11 @@ fn check_diagonal(world: &SimpleCommunicator) {
         assert!(forward <= diagonal, "level {l}");
         assert!(signatures > 0.0 && targets > 0.0 && s2f > 0.0 && pairs > 0.0 && f2r > 0.0);
         assert_eq!(rcr_s > 0.0, rcr > 0, "level {l}");
-        assert!(signatures + targets <= row_on.m2l_seconds[l], "level {l}");
+        // Each column is the slowest rank's, so on several ranks the passes' sum may exceed the
+        // M2L's maximum.
+        if world.size() == 1 {
+            assert!(signatures + targets <= row_on.m2l_seconds[l], "level {l}");
+        }
         assert!(row_on.diagonal_multiply_adds[l] > 0, "level {l}");
         assert!(
             row_on.diagonal_build[l].iter().all(|&t| t > 0.0),

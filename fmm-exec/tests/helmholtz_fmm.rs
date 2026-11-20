@@ -2280,7 +2280,9 @@ fn check_diagonal(scenario: &Scenario, comm: &SimpleCommunicator) -> usize {
             );
             // Two vectors, each the one-vector FMM.
             let two = Inputs::new(scenario, 2, comm);
-            let (_, both) = run(&diagonal.clone().vectors(2), &two, kind, comm);
+            let (fmm, both) = run(&diagonal.clone().vectors(2), &two, kind, comm);
+            check_diagonal_times(&format!("{what}, two vectors"), &fmm, 1, 2, comm);
+            drop(fmm);
             for v in 0..2 {
                 let one = Inputs {
                     sources: two.sources.clone(),

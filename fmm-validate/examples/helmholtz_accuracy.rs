@@ -155,7 +155,7 @@
 //!   targets' pass's seconds (the slowest rank's), the thread-seconds of S → F, the pairs,
 //!   F → R and the RCR pairs (`Row::diagonal_seconds`), the conversions of each kind, the
 //!   conversions' rate per thread (2 × the multiply-adds of every conversion over their
-//!   thread-seconds, GF/s), and the build of the level's transfer functions and conversions.
+//!   thread-seconds, GF/s; on one rank only, `–` on several), and the build of the level's transfer functions and conversions.
 //!   A Rotation row with the diagonal form has a "÷ Rotation" against the Rotation row
 //!   without it.
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
@@ -1156,10 +1156,13 @@ fn main() {
                         let [forward, back] = row.diagonal_conversions[l];
                         let [transfer, conversions] = row.diagonal_build[l];
                         let flops = 2.0 * row.diagonal_multiply_adds[l] as f64;
-                        let rate = |count: usize, seconds: f64| match seconds > 0.0 {
-                            true => format!("{:.2}", flops * count as f64 / seconds / 1e9),
-                            false => "–".into(),
-                        };
+                        // The counts are summed over the ranks and the seconds are the slowest
+                        // rank's, so the rate is printed on one rank only.
+                        let rate =
+                            |count: usize, seconds: f64| match seconds > 0.0 && row.ranks == 1 {
+                                true => format!("{:.2}", flops * count as f64 / seconds / 1e9),
+                                false => "–".into(),
+                            };
                         format!(
                             "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {} | {l} | {} \
                              | {} | {diagonal} | {rcr} | {:.6} | {:.0} | {signatures:.6} \
@@ -1711,7 +1714,7 @@ fn main() {
                  seconds and ns per pair, the S → F pass's and the targets' pass's wall seconds, \
                  the thread-seconds of S → F, the pairs, F → R and the RCR pairs (each the \
                  slowest rank's), the conversions S → F and F → R (summed), their rate per \
-                 thread in GF/s (2 × multiply-adds per conversion), and the build of the \
+                 thread in GF/s (2 × multiply-adds per conversion; one rank only), and the build of the \
                  level's transfer functions and conversions (seconds)."
             );
             println!();
