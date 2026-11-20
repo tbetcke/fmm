@@ -87,7 +87,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (added at CH4.2b2, its question 2), CH4.3, CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3, CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -691,13 +691,25 @@ task's full line is in its record or report and its progress entry
   build one class at the top level per node, every class serially at one rank per core (61 s).
   *Sign-off:* the PR's questions 1–4 as recommended (the user on #239, 2026-11-20: "All 4 questions as recommended."): the acceptance
   as read; CH4.2c before CH4.3; CH4.2d off the list; CH4.3's Also on the order against D8's waves.
-- [ ] **CH4.2c The transfer functions interpolated, and built in parts finer than a class.**
+- CH4.2c The transfer functions interpolated, and built in parts finer than a class.
   (Added at CH4.2b2, its question 2, signed off 2026-11-20.) *Done when:* T interpolated in
   ŝ · t̂ from an extended-precision table (proposal §5.4; S6: 11× faster at p = 256, C_T = 0.23)
   against the direct build within the bound at C_T = 0.23 on every class CI runs; the build in
   parts by ring, bit for bit the build by class; W1 at kD = 500 and 1000's diagonal tables timed
-  at 1 × 40 and 40 × 1 against CH4.2b2's (2.3 s and 61 s at p = 131). *Needs:* CH4.2b2.
-  *Machines:* Kathleen.
+  at 1 × 40 and 40 × 1 against CH4.2b2's (2.3 s and 61 s at p = 131). Split on 2026-11-20 into
+  CH4.2c1 (the build) and CH4.2c2 (the operator and W1), by the size rule of `/next-task` (four
+  crates and measurements on Kathleen).
+- [ ] **CH4.2c1 The transfer functions interpolated, and built by ring.** *Done when:*
+  `nd-fmm-ref`'s double-double angle table and ring samples; `DiagonalM2l::build_by` with
+  `TransferBuild::{Direct, Interpolated}`, against the direct build and RCR within 2E at
+  C_T = 0.23 on every class CI runs (f32 within `F32`'s); both builds in parts of one ring of a
+  class, bit for bit the build by class on any map. *Needs:* CH4.2b2.
+- [ ] **CH4.2c2 The interpolated build in the operator, and W1's tables timed.** *Done when:*
+  the operator's build setting (the rule's constants by the build: C_T = 0.23 interpolated) and
+  the harness's; the FMM within 1.1× Rotation's errors with it; W1 at kD = 500 and 1000's
+  diagonal tables timed at 1 × 40 and 40 × 1 against CH4.2b2's (2.3 s and 61 s at p = 131), with
+  the errors and the classes per level against the direct build's; which build is the default,
+  for sign-off. *Needs:* CH4.2c1. *Machines:* Kathleen.
 - [ ] **CH4.2d Dispatched kernels for the diagonal pair and the conversions.** (Added at
   CH4.2b2, its question 3, signed off 2026-11-20; off the list, reconsidered at CH4.5.) *Done when:*
   the pair and the conversions' column kernel on `nd-fmm-simd`'s ISAs, bit for bit or within
@@ -729,7 +741,7 @@ the projection rounding more than both). Also (CH4.1b's report §3, question 1, 
   4, signed off 2026-11-20): the order between the exponential M2L (D8) and the diagonal form per
   level, by time at matched accuracy: under Rotation the diagonal form ran W1's levels 4–8 at
   0.29–0.83× the defaults' waves, the evaluation 1.6–2.8× faster than the defaults'; D8 amended
-  here if it moves. *Needs:* CH4.2b2, CH4.2c.
+  here if it moves. *Needs:* CH4.2b2, CH4.2c2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at
