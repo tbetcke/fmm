@@ -87,7 +87,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e; split on 2026-11-20), CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e, CH4.3b as CH4.3b1 and CH4.3b2; split on 2026-11-20), CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -734,7 +734,7 @@ task's full line is in its record or report and its progress entry
   conservative in the FMM (1.006× at 1024θ) and in the input-relative measure, its removal unsafe.
   *Sign-off:* 2026-11-20 on #242, questions 1–4 as recommended: C_T and θ kept (C₀ CH4.3c's); the
   damping factor kept, a fitted one an Also on CH5.1; k a < 2.8 an Also on CH4.3b; the split.
-- [ ] **CH4.3b The time rule, and the diagonal form by default.** *Done when:* the time
+- CH4.3b The time rule, and the diagonal form by default. *Done when:* the time
   crossover per class and per level, the conversions included, against RCR and against the
   exponential M2L at matched accuracy, and the order between the two per level (CH4.2b2's report
   §3.2, its question 4, signed off 2026-11-20: under Rotation the diagonal form ran W1's levels
@@ -748,7 +748,29 @@ task's full line is in its record or report and its progress entry
   report §4, its question 3, signed off 2026-11-20): whether the time rule takes the diagonal form at k a < 2.8 at all,
   below S6's calibrated range, where one damped class measured 2.9 E per pair (direct build,
   η = 0.1, k a 1.69); if it does, the rule bounded to k a ≥ 2.8 or C_T raised there. *Needs:* CH4.3a.
-  *Machines:* Kathleen, locust. *Sign-off:* the default.
+  *Machines:* Kathleen, locust. *Sign-off:* the default. Split on 2026-11-20 into CH4.3b1 (the
+  rule, opt-in, and its cost model) and CH4.3b2 (the default), by the size rule of `/next-task` (a
+  cost model and a rule in the operator, plus measurements on two machines).
+- [ ] **CH4.3b1 The time rule per level, built and calibrated.** *Done when:* the diagonal
+  level's costs per machine class (S → F and F → R per box, the pair per sample; thread-ns, as
+  `VCosts`) fitted on Kathleen (1 × 40) and locust (1 × 72) from W1's diagonal levels, beside
+  `VCosts`' RCR and exponential M2L; the per-class crossover reported (the diagonal pair against
+  RCR's per pair at every degree); `HelmholtzDiagonal::Auto`, opt-in: on each level the bound's
+  classes, taken where the model's diagonal level beats the level's M2L under the setting (RCR
+  after the plan, by the agreed V pairs per class and boxes; the exponential M2L before it, in
+  `wave_levels`, by degree, k̂ and ε, so that the builder's V rule and the operator agree,
+  CHA.11), after the scratch budget's whole-level fallback; the model's choice against the
+  measured level times on W1 and W3; the FMM under it within 1.1× Rotation's errors, bit for bit
+  at every thread count, chunk and rank count. Also (CH4.3a's question 3): the levels below
+  k a = 2.8 that the bound takes on W1 and W3 at 10⁻³–10⁻⁸, and the rule bounded to k a ≥ 2.8,
+  or C_T raised there, if any is. *Needs:* CH4.3a. *Machines:* Kathleen, locust.
+- [ ] **CH4.3b2 The diagonal form by default.** *Done when:* W1 and W3 at 10⁻³–10⁻⁸ on Kathleen
+  and locust, the defaults with `HelmholtzDiagonal::Auto` against the defaults: the errors within
+  1.1× (at 10⁻⁸ against CH6.1g's raised waves: at matched accuracy), the evaluation and the build
+  per level; the order between the waves and the diagonal form per level (D8 amended here if it
+  moves); the whole-level fallback at 40 × 1 (W1 at kD = 1000, levels 2–3); `Auto` the default
+  (`HelmholtzDiagonal`, `Off` until here) for sign-off. *Needs:* CH4.3b1. *Machines:* Kathleen,
+  locust. *Sign-off:* the default.
 - [ ] **CH4.3c The high-frequency degrees refit, and C₀ at large degrees.** *Done when:* (review
   2026-11-19, A8, M12) the refit of the high-frequency degrees searches downward at x ≥ 54
   (levels 2–4 carry 0.6–1.0 % of the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted
@@ -766,7 +788,7 @@ task's full line is in its record or report and its progress entry
 - [ ] **CH4.3e c_leaf re-decided with the rule.** *Done when:* (since CH4.0d3's c_leaf 2, signed
   off on #219) c_leaf re-decided with CH4.3b's default (at c_leaf 2 the census's first pass put
   leaves on high-frequency levels on 9 trees at 10⁻⁶; proposal §3.7 keeps W and X lists off
-  them; CH4.0d3's report §4), on W1–W3's trees, for sign-off (D11). *Needs:* CH4.3b.
+  them; CH4.0d3's report §4), on W1–W3's trees, for sign-off (D11). *Needs:* CH4.3b2.
   *Machines:* Kathleen.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
