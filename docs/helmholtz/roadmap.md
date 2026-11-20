@@ -10,7 +10,7 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged,
 and of item 10 CH4.1a, CH4.1b and CH4.2a. CH4.2b is split into CH4.2b1 (the diagonal M2L in
-the operator, opt-in; in review) and CH4.2b2 (W1 measured on Kathleen and locust), next; then
+the operator, opt-in; signed off on #238) and CH4.2b2 (W1 measured on Kathleen and locust), next; then
 CH4.3; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
 done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this
 file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
@@ -679,7 +679,8 @@ task's full line is in its record or report and its progress entry
   order, F → R, the RCR pairs after), the whole-level fallback from the agreed source counts
   within `DEFAULT_SIGNATURE_NODE_BUDGET` over the ranks per node; the FMM 1.000× Rotation's
   errors on the cube (kD = 40 + 2i) and the clusters (kD = 20, a mixed level 4) at 10⁻⁴,
-  threads, chunk widths and ranks bit for bit. *Sign-off:* pending (the PR's question 1).
+  threads, chunk widths and ranks bit for bit. *Sign-off:* the PR's question 1 (the user on
+  #238, 2026-11-20: "Yes to Q1"): the whole-level fallback built here, from CH4.3's Also.
 - [ ] **CH4.2b2 The diagonal M2L on W1, measured.** *Done when:* the FMM against the direct
   sum on W1 (kD = 500 at 10⁻⁶ and 10⁻⁸; kD = 1000 at 10⁻⁶) within 1.1× RCR's error, the
   diagonal levels' M2L time against RCR's per level, at 1 × 40 (Kathleen) and 1 × 72 (locust).

@@ -3796,7 +3796,8 @@ request, using this template:
   beyond one all-reduce in the builder). A first opt-level 0 run of the new checks went past 30
   minutes and was stopped by its limit, cause unknown (its output was buffered); the runs since
   took 110 s (opt-level 0) and 8 s (opt-level 1). Nothing pending.
-- Decisions: pending, the PR's question 1 (the whole-level fallback built here).
+- Decisions: signed off 2026-11-20 by the user on #238, "Yes to Q1": 1, the whole-level
+  fallback to RCR built here (from CH4.3's Also).
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec` and `nd-fmm-tables`; `driver.rs`,
   `pipeline.rs`, `nd-fmm-plan`, `nd-octree` and `nd-fmm-simd` unchanged).
 - Follow-ups: CH4.2b2 (roadmap: W1's errors and times, the conversions' rate, the transfer

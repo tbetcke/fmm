@@ -150,3 +150,5 @@ None.
 ## Open questions
 1. The whole-level fallback built here (from CH4.3's Also), since the opt-in on several ranks
    needs it for constraint 2. Recommended: accept.
+
+Signed off 2026-11-20 by the user on #238, question 1 as recommended: "Yes to Q1".
