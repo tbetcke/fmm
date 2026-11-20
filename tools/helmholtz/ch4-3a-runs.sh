@@ -11,8 +11,9 @@
 # §9.1's complex charges and samples, one case (kD, ε) under `--m2l rotation` and
 # `--diagonal off,rule,<s ε>…`: Rotation without the diagonal form (the reference of
 # "÷ Rotation"), the rule at the FMM's tolerance (s = 1), then the rule at s ε, that is at
-# θ′ = s θ (the margin). The build of the transfer functions is the library's default
-# (interpolated) unless a stage names both. Stages:
+# θ′ = s θ (the margin). The transfer functions are built as the library's default builds
+# them, interpolated (`--diagonal-build interpolated`: the example's own default is the direct
+# build), unless a stage names both. Stages:
 #   w1        W1 at kD = 100, 200, 500 (500 with both builds), ε 10⁻³, 10⁻⁴, 10⁻⁶, 10⁻⁸
 #   w1-large  W1 at kD = 1000, ε 10⁻⁶ and 10⁻⁸, s = 1, 16, 256
 #   w3        W3 at N = 10⁶, kD = 200 and 500, the four ε
@@ -43,6 +44,7 @@ export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 TIMEOUT=${TIMEOUT:-3600}
 SCALES=${SCALES:-4 16 64 256 1024}
 COMMON=(--near-v cost --near-wx cost --levels --m2l rotation --threads "$cores")
+INTERP=(--diagonal-build interpolated)
 
 # `diagonal <ε> <scale…>`: off, the rule, and the rule at s ε for each scale s.
 diagonal() {
@@ -79,50 +81,50 @@ EPS="1e-3 1e-4 1e-6 1e-8"
 for stage in "$@"; do
     case $stage in
     smoke)
-        launch smoke --workload w1 --kd 30 --eps 1e-4 --diagonal "$(diagonal 1e-4 16)"
+        launch smoke --workload w1 --kd 30 --eps 1e-4 "${INTERP[@]}" --diagonal "$(diagonal 1e-4 16)"
         ;;
     w1)
         for kd in 100 200 500; do
-            build=()
+            build=("${INTERP[@]}")
             [ "$kd" = 500 ] && build=(--diagonal-build direct,interpolated)
             for eps in $EPS; do
                 launch "w1-$kd-$eps" --workload w1 --kd "$kd" --eps "$eps" \
-                    --diagonal "$(diagonal "$eps" $SCALES)" ${build[@]+"${build[@]}"}
+                    --diagonal "$(diagonal "$eps" $SCALES)" "${build[@]}"
             done
         done
         ;;
     w1-large)
         for eps in 1e-6 1e-8; do
             launch "w1-1000-$eps" --workload w1 --kd 1000 --eps "$eps" \
-                --diagonal "$(diagonal "$eps" 16 256)"
+                "${INTERP[@]}" --diagonal "$(diagonal "$eps" 16 256)"
         done
         ;;
     w3)
         for kd in 200 500; do
             for eps in $EPS; do
                 launch "w3-$kd-$eps" --workload w3:1000000 --kd "$kd" --eps "$eps" \
-                    --diagonal "$(diagonal "$eps" $SCALES)"
+                    "${INTERP[@]}" --diagonal "$(diagonal "$eps" $SCALES)"
             done
         done
         ;;
     densities)
         for eps in $EPS; do
             launch "constant-100-$eps" --workload w1 --kd 100 --eps "$eps" \
-                --density constant --diagonal "$(diagonal "$eps" 16 256)"
+                --density constant "${INTERP[@]}" --diagonal "$(diagonal "$eps" 16 256)"
             launch "planewave-500-$eps" --workload w1 --kd 500 --eps "$eps" \
-                --density planewave --diagonal "$(diagonal "$eps" 16 256)"
+                --density planewave "${INTERP[@]}" --diagonal "$(diagonal "$eps" 16 256)"
         done
         ;;
     damped)
         for c in 100:10 500:50; do
             for eps in $EPS; do
                 launch "damped-${c%:*}+${c#*:}i-$eps" --workload w1 --kd "${c%:*}" \
-                    --kim "${c#*:}" --eps "$eps" --diagonal "$(diagonal "$eps" $SCALES)"
+                    --kim "${c#*:}" --eps "$eps" "${INTERP[@]}" --diagonal "$(diagonal "$eps" $SCALES)"
             done
         done
         for eps in 1e-3 1e-6; do
             launch "damped-100+100i-$eps" --workload w1 --kd 100 --kim 100 --eps "$eps" \
-                --diagonal "$(diagonal "$eps" $SCALES)"
+                "${INTERP[@]}" --diagonal "$(diagonal "$eps" $SCALES)"
         done
         ;;
     *)
