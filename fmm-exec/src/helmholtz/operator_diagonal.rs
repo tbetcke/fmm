@@ -53,6 +53,9 @@
 //!
 //! [`with_diagonal_sources`]: super::HelmholtzOperator::with_diagonal_sources
 
+use std::sync::PoisonError;
+use std::time::{Duration, Instant};
+
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_plan::operator::M2l;
 use nd_fmm_ref::helmholtz::Level;
@@ -148,6 +151,10 @@ pub struct DiagonalCounts {
     pub rcr_pairs: Vec<usize>,
     /// Source signatures formed (slots × vectors), summed over the calls.
     pub signatures: Vec<usize>,
+    /// Accumulators converted back by F → R (targets with a diagonal pair × vectors), summed
+    /// over the calls (Helmholtz CH4.2b2; counted by one serial pass over the level's pairs on
+    /// the calling thread, outside both timed passes but inside the level's M2L time).
+    pub back: Vec<usize>,
 }
 
 impl DiagonalCounts {
@@ -157,10 +164,43 @@ impl DiagonalCounts {
             &mut self.diagonal_pairs,
             &mut self.rcr_pairs,
             &mut self.signatures,
+            &mut self.back,
         ] {
             counts.clear();
             counts.resize(nlevels, 0);
         }
+    }
+}
+
+/// The diagonal level calls' times on one level since the operator's M2L was last chosen
+/// ([`HelmholtzOperator::diagonal_times`]; Helmholtz CH4.2b2): the two passes' wall time on the
+/// calling thread's clock, and the workers' thread-seconds by part, each worker's own clock
+/// (a few clock reads per block of signatures and per chunk of targets; no value changes).
+/// This rank's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DiagonalTimes {
+    /// The S → F pass (module documentation, "The level call", step 1), wall.
+    pub signatures: Duration,
+    /// The targets' pass (step 2: the diagonal pairs, F → R and the RCR pairs), wall.
+    pub targets: Duration,
+    /// S → F's thread-seconds, the multipoles' gather included (part of `signatures` × the
+    /// threads).
+    pub s2f: Duration,
+    /// The diagonal pairs' thread-seconds, the accumulators' zeroing included (part of
+    /// `targets` × the threads).
+    pub pairs: Duration,
+    /// F → R's thread-seconds.
+    pub f2r: Duration,
+    /// The RCR pairs' thread-seconds.
+    pub rcr: Duration,
+}
+
+impl DiagonalTimes {
+    fn add_parts(&mut self, parts: &Self) {
+        self.s2f += parts.s2f;
+        self.pairs += parts.pairs;
+        self.f2r += parts.f2r;
+        self.rcr += parts.rcr;
     }
 }
 
@@ -187,6 +227,9 @@ impl DiagonalSettings {
 pub(super) struct DiagonalLevel<T> {
     pub(super) m2l: DiagonalM2l<T>,
     pub(super) conversions: Conversions<T>,
+    /// The wall time of building the transfer functions and the conversions (Helmholtz
+    /// CH4.2b2).
+    pub(super) build: (Duration, Duration),
 }
 
 impl<T: SimdScalar> DiagonalLevel<T> {
@@ -235,9 +278,15 @@ pub(super) fn select<T: SimdScalar>(
                 return None;
             }
             let level = Level::new(k, 1.0);
+            let clock = Instant::now();
+            let m2l = DiagonalM2l::build_on(p, k, &classes, parts);
+            let transfer = clock.elapsed();
+            let clock = Instant::now();
+            let conversions = Conversions::new(p, level.scale());
             Some(DiagonalLevel {
-                m2l: DiagonalM2l::build_on(p, k, &classes, parts),
-                conversions: Conversions::new(p, level.scale()),
+                m2l,
+                conversions,
+                build: (transfer, clock.elapsed()),
             })
         })
         .collect()
@@ -259,6 +308,9 @@ pub(super) struct DiagonalScratch<T> {
     conversions: Vec<Option<ConversionScratch<T>>>,
     accumulators: Signatures<T>,
     gather: Vec<T>,
+    /// This thread's time by part since the level call last drained it (the thread-seconds of
+    /// [`DiagonalTimes`]).
+    parts: DiagonalTimes,
 }
 
 impl<T: SimdScalar> DiagonalScratch<T> {
@@ -278,6 +330,7 @@ impl<T: SimdScalar> DiagonalScratch<T> {
                 .collect(),
             accumulators: store_for(levels.iter().flatten().map(|d| (d.samples(), boxes))),
             gather: vec![T::zero(); BLOCK_BOXES * 2 * Layout::new(p_max).len()],
+            parts: DiagonalTimes::default(),
         })
     }
 
@@ -302,6 +355,8 @@ pub(super) struct DiagonalBuffer<T> {
     /// Per slot, its box.
     slot_source: Vec<u32>,
     pub(super) counts: DiagonalCounts,
+    /// The level calls' times per level (Helmholtz CH4.2b2), reset with the counts.
+    pub(super) times: Vec<DiagonalTimes>,
     /// The most bytes the buffer held.
     pub(super) peak: usize,
 }
@@ -313,6 +368,7 @@ impl<T> Default for DiagonalBuffer<T> {
             slot_of: Vec::new(),
             slot_source: Vec::new(),
             counts: DiagonalCounts::default(),
+            times: Vec::new(),
             peak: 0,
         }
     }
@@ -328,6 +384,8 @@ impl<T: SimdScalar> DiagonalBuffer<T> {
         vectors: usize,
     ) {
         self.counts.reset(levels.len());
+        self.times.clear();
+        self.times.resize(levels.len(), DiagonalTimes::default());
         self.signatures = None;
         if let Some(sources) = &settings.sources {
             let layouts = levels.iter().enumerate().filter_map(|(l, d)| {
@@ -388,6 +446,7 @@ impl<T: SimdScalar> Kernel<T> {
             conversions: scratches,
             accumulators,
             gather,
+            ..
         } = scratch;
         let conversion = scratches[level]
             .as_mut()
@@ -491,6 +550,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let stride = signatures.stride();
         let slot_source = &buffer.slot_source[..slots];
         if slots > 0 {
+            let clock = Instant::now();
             self.execution.chunks(
                 signatures.strides_mut(),
                 stride * BLOCK_BOXES,
@@ -498,11 +558,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     let DiagonalScratch {
                         conversions: scratches,
                         gather,
+                        parts,
                         ..
                     } = scratch
                         .diagonal
                         .as_mut()
                         .expect("the scratch has the diagonal form's buffers");
+                    let busy = Instant::now();
                     let first = j * BLOCK_BOXES;
                     let nb = strides.len() / stride;
                     for i in 0..nb {
@@ -518,8 +580,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                         .as_mut()
                         .expect("the scratch has the level's conversions");
                     conversions.s2f_strides(&gather[..nb * len], strides, stride, conversion);
+                    parts.s2f += busy.elapsed();
                 },
             );
+            buffer.times[level].signatures += clock.elapsed();
         }
 
         // 3. The targets by chunks of rows: the diagonal pairs, F → R, the RCR pairs.
@@ -532,6 +596,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let signatures = &*signatures;
         let slot_of = &buffer.slot_of[..nboxes];
         let row = |t: usize| row_offsets[t] as usize..row_offsets[t + 1] as usize;
+        let has_diagonal = |t: usize| row(t).any(|g| m2l.has_offset(offsets[g] as usize));
+        buffer.counts.back[level] += (0..rows).filter(|&t| has_diagonal(t)).count() * m;
+        let clock = Instant::now();
         self.execution
             .chunks(locals.as_mut_slice(), size * chunk, |j, block, scratch| {
                 let super::Scratch {
@@ -540,6 +607,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 let DiagonalScratch {
                     conversions: scratches,
                     accumulators,
+                    parts,
                     ..
                 } = diagonal
                     .as_mut()
@@ -548,15 +616,17 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     .as_mut()
                     .expect("the scratch has the level's conversions");
                 let (t0, n) = (j * chunk, block.len() / size);
+                let busy = Instant::now();
                 accumulators.relayout(samples, n * m);
                 accumulators.zero();
-                let has_diagonal = |t: usize| row(t).any(|g| m2l.has_offset(offsets[g] as usize));
+                let mut diagonal_pairs = false;
                 for i in 0..n {
                     for g in row(t0 + i) {
                         let d = offsets[g] as usize;
                         if !m2l.has_offset(d) {
                             continue;
                         }
+                        diagonal_pairs = true;
                         let slot = slot_of[sources[g] as usize] as usize - 1;
                         for v in 0..m {
                             m2l.pair(
@@ -568,6 +638,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     }
                 }
                 // F → R by runs of consecutive targets with a diagonal pair.
+                let converted = Instant::now();
+                if diagonal_pairs {
+                    parts.pairs += converted - busy;
+                }
                 let mut i = 0;
                 while i < n {
                     if !has_diagonal(t0 + i) {
@@ -586,13 +660,19 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     );
                     i = end;
                 }
+                if diagonal_pairs {
+                    parts.f2r += converted.elapsed();
+                }
                 // The RCR pairs, each target's in row order.
+                let rcr = Instant::now();
+                let mut rcr_pairs = false;
                 for (i, local) in block.chunks_exact_mut(size).enumerate() {
                     for g in row(t0 + i) {
                         let d = offsets[g] as usize;
                         if m2l.has_offset(d) {
                             continue;
                         }
+                        rcr_pairs = true;
                         kernel.tables.m2l(
                             level,
                             d,
@@ -604,6 +684,18 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                         );
                     }
                 }
+                if rcr_pairs {
+                    parts.rcr += rcr.elapsed();
+                }
             });
+        let times = &mut buffer.times[level];
+        times.targets += clock.elapsed();
+        // Every thread's parts, into the level's times.
+        for set in &mut self.execution.scratch {
+            let set = set.get_mut().unwrap_or_else(PoisonError::into_inner);
+            if let Some(diagonal) = set.diagonal.as_mut() {
+                times.add_parts(&core::mem::take(&mut diagonal.parts));
+            }
+        }
     }
 }

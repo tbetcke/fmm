@@ -3805,3 +3805,55 @@ request, using this template:
   self-review's notes, not fixed: the partial fallback in the FMM (some levels kept, some not)
   tested by the rule's unit test only; no f32 FMM test; a setter on a built operator rebuilds
   every table.
+
+## 2026-11-20: CH4.2b2 The diagonal M2L on W1, measured
+- Done: the second half of CH4.2b.
+  - `nd_fmm_exec::helmholtz`: the diagonal level call timed by pass (S → F, the targets) and its
+    workers' thread-seconds by part (S → F, pairs, F → R, RCR pairs), `DiagonalTimes` and
+    `HelmholtzOperator::diagonal_times`; `DiagonalCounts::back`; `diagonal_build_time(level)`
+    and `diagonal_multiply_adds(level)`. Clock reads only.
+  - `nd-fmm-validate`: `Case::diagonal`, the row's diagonal columns, `BUILD_PARTS`' "diagonal
+    tables", the example's `--diagonal off|rule|<ε>,…` and the table "Diagonal M2L".
+  - `tools/helmholtz/ch4-2b2-runs.sh` and `ch4-2b2-tables.py`. Report
+    `fmm-validate/results/helmholtz-ch4-2b2.md`; record `docs/helmholtz/tasks/CH4.2b2.md`.
+- Tests: `check_diagonal_times` in `fmm-exec/tests/helmholtz_fmm.rs` (after every run of
+  `check_diagonal`, two vectors included): the parts timed exactly where they ran, within the
+  passes and the level's M2L time, `back` against the plan's V rows, the build times on the
+  diagonal levels alone. `check_diagonal` in `fmm-validate/tests/helmholtz_accuracy.rs` (W1 at
+  kD = 30, 10⁻⁴): the columns, 1.1× Rotation's errors, 1 and 2 threads the same checksum.
+- Measurements (Kathleen job 653533, node-c11a-025, `singlenode`; locust 1 × 72, idle):
+  - W1 at kD = 500 (10⁻⁶, 10⁻⁸) and 1000 (10⁻⁶), Rotation with the diagonal form: errors 1.000×
+    Rotation's on every case at 1 × 40 and 1 × 72 (the acceptance).
+  - The diagonal levels' M2L 0.08–0.46× RCR's (every class or 32 of 34), 0.95–1.02× on levels of
+    12 or 21 classes; the M2L summed 4.50 → 1.10 s (kD = 500, 10⁻⁶) and 32.3 → 5.2 s (kD = 1000)
+    at 1 × 40; the evaluation 6.37 → 2.91 s and 41.4 → 14.2 s, on locust 2.02 → 1.14 s and
+    13.3 → 5.5 s.
+  - Rotation with the form beats the defaults by 1.6–2.8× on the evaluation; per level it is
+    0.29–0.83× the defaults' exponential M2L.
+  - The conversions 24–49 % of the call's thread time (1.7–5.1 GF/s per thread at p ≥ 41 on
+    Kathleen, 3.3–11 on locust), the pairs 50–80 %.
+  - The transfer tables: one class's build per level at one rank per node (2.3 s at p = 131,
+    11.9 s at p = 245 on Kathleen); every class serially at 40 × 1 (61 s at p = 131, against an
+    evaluation of 3.9 s).
+  - The checksum the same at 1 × 40, 2 × 20 and 40 × 1 (kD = 500, 10⁻⁶).
+  - Raw outputs in `~/projects/fmm-archive/{kathleen,locust}/runs/ch4-2b2/`.
+- Checks: `/verify` on the M6 (load 26–49 from other jobs): fmt; Clippy (default, examples,
+  workspace all-targets); rustdoc with `-D warnings`; the default and workspace tests at opt-level
+  1 (1,349 and 1,393 passed); the MPI list at 2 and 4 ranks at opt-level 1 (every executable
+  passed; `helmholtz_fmm` 208 and 260 s at load about 38), and `helmholtz_fmm` again after the
+  self-review's fixes (109 and 290 s). At opt-level 0 (load 39–49): `helmholtz_fmm`'s one-rank
+  run 1,807 s (CH4.2b1: 987 s at load 22–42), `nd-fmm-exec`'s Helmholtz executable 116 s
+  (unchanged by this task; 71 s before), `nd-fmm-validate`'s `helmholtz_accuracy` 849 s (CH4.0e:
+  246 s at load 2–3). All three are above their earlier figures, at about twice the load; the
+  new checks add no FMM run to `helmholtz_fmm` and three small ones to `helmholtz_accuracy`
+  (about 1–2 s at opt-level 1). Not measured on a quiet M6. Not run: `cargo deny` (no
+  manifest), Laplace's benchmarks (no Laplace path changed), 8 ranks (no distributed code).
+  Nothing pending.
+- Decisions: signed off 2026-11-20 by the user on #239, "All 4 questions as recommended.": 1,
+  the acceptance as read; 2, CH4.2c (the interpolated transfer build, in parts finer than a
+  class) before CH4.3; 3, CH4.2d (kernels for the pair and the conversions) off the list,
+  reconsidered at CH4.5; 4, an Also on CH4.3, the order between the exponential M2L (D8) and the
+  diagonal form.
+- Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness).
+- Follow-ups: CH4.2c (roadmap, item 10, before CH4.3) and CH4.2d (roadmap, off the list);
+  CH4.3's Also on the order against the exponential M2L.

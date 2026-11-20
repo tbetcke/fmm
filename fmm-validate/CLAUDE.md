@@ -594,6 +594,20 @@ of them at the level's degree and the run's threads under `DEFAULT_SIGNATURE_NOD
 with the example's `--levels`, a table "Diagonal-form scratch". `tools/helmholtz/ch4-1b-runs.sh`
 runs the task's memory baseline and census. Its report is `results/helmholtz-ch4-1b.md`.
 
+Helmholtz CH4.2b2 (the diagonal M2L on W1, measured; docs/helmholtz/tasks/CH4.2b2.md) added
+`helmholtz_accuracy::Case::diagonal` (`HelmholtzFmmBuilder::diagonal`, `HelmholtzDiagonal::Off` in
+`Case::new`, named always) and `Row::{diagonal, diagonal_classes, diagonal_pairs,
+diagonal_conversions, diagonal_seconds, diagonal_build, diagonal_multiply_adds}` (per level the
+classes, the pairs on each form and the conversions of the last evaluation summed over the ranks,
+the passes' and parts' seconds and the tables' build the slowest rank's), the part "diagonal
+tables" of `BUILD_PARTS`, and to the example `--diagonal off|rule|<ε>,…` (outside `--rcr-split`'s
+loop; the column "M2L" listing `; diagonal l:c,…` and ending `/diag`, `--levels`' "ran"
+`diagonal c/34`; "÷ Rotation" on a Rotation row with the form) and, with `--levels`, a table
+"Diagonal M2L" (the parts and the conversions' GF/s per thread). `tests/helmholtz_accuracy.rs`
+(`check_diagonal`) checks the columns on W1 at kD = 30, 10⁻⁴. `tools/helmholtz/ch4-2b2-runs.sh`
+runs the task's stages, `ch4-2b2-tables.py` makes the report's tables. Its report is
+`results/helmholtz-ch4-2b2.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
