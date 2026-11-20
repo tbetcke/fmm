@@ -93,8 +93,8 @@ pub enum HelmholtzDiagonal {
     /// where the model ([`DiagonalCosts`]) puts its diagonal level below the M2L it would run
     /// otherwise by the level's agreed V lists ([`DiagonalShape`]): RCR's
     /// ([`diagonal_beats_rcr`]), or under [`HelmholtzM2l::Auto`](super::HelmholtzM2l::Auto) the
-    /// exponential M2L's ([`diagonal_beats_plane_waves`]), which then runs the level at its own
-    /// degree.
+    /// exponential M2L's ([`diagonal_beats_plane_waves`]), the level then at its own degree by
+    /// the cheaper of the form and RCR.
     Auto,
 }
 
@@ -335,11 +335,11 @@ impl DiagonalCosts {
 /// [`DiagonalCosts`] of x86 (AVX-512 and AVX2; measured on Kathleen, Xeon Gold 6248, one rank
 /// × 40 threads).
 pub const DIAGONAL_COSTS_X86: DiagonalCosts = DiagonalCosts {
-    s2f: [420.0, 2.01],
-    f2r: [246.0, 6.01],
-    pair: [23.9, 0.525],
-    rotation: [0.0, 8.62],
-    plane_wave: [65.2, 2.44],
+    s2f: [383.0, 2.3],
+    f2r: [313.0, 5.85],
+    pair: [28.1, 0.548],
+    rotation: [0.0, 8.4],
+    plane_wave: [3700.0, 129.0],
 };
 
 /// [`DiagonalCosts`] of NEON (measured on locust, Neoverse-V2, one rank × 72 threads; the M6
@@ -532,16 +532,15 @@ impl<T: SimdScalar> DiagonalLevel<T> {
 /// rule"): for each level l ≥ 2 with `rcr[l]` (its M2L RCR's), degree `degrees[l]` and
 /// wavenumber `k_hat(l)` in its units, the classes of [`diagonal_rule_classes`] at the
 /// setting's tolerance and build, where some class passes and the scratch fits the budget,
-/// and under [`HelmholtzDiagonal::Auto`] where the level is `from_waves[l]` (its exponential
-/// M2L given up for the form by [`diagonal_beats_plane_waves`]) or [`diagonal_beats_rcr`] by
-/// `costs` and the level's shape; `None` elsewhere. The transfer
+/// and under [`HelmholtzDiagonal::Auto`] where [`diagonal_beats_rcr`] by `costs` and the
+/// level's shape (on a level whose exponential M2L [`diagonal_beats_plane_waves`] gave up as on
+/// the others, so that it runs the cheaper of the form and RCR); `None` elsewhere. The transfer
 /// functions are built by the setting's build on `parts`, one part per (class, ring).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn select<T: SimdScalar>(
     settings: &DiagonalSettings,
     fmm_tolerance: Option<f64>,
     rcr: &[bool],
-    from_waves: &[bool],
     costs: &DiagonalCosts,
     degrees: &[usize],
     k_hat: impl Fn(usize) -> Complex<f64>,
@@ -576,9 +575,8 @@ pub(super) fn select<T: SimdScalar>(
             if settings.choice == HelmholtzDiagonal::Auto && !diagonal_auto_in_range(k) {
                 return None;
             }
-            if settings.choice == HelmholtzDiagonal::Auto
-                && !from_waves.get(l).copied().unwrap_or(false)
-            {
+            if settings.choice == HelmholtzDiagonal::Auto {
+                // A level taken from the waves too: the cheaper of the form and RCR.
                 let shape = settings.shape(l);
                 if !diagonal_beats_rcr(costs, p, &shape, &classes) {
                     return None;

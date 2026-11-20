@@ -284,8 +284,9 @@
 //! against RCR ([`diagonal_beats_rcr`]); under [`HelmholtzM2l::Auto`] on a level with waves
 //! against the waves at their degree ([`diagonal_beats_plane_waves`]: the waves cost per box,
 //! the form per pair, so the order turns on the pairs per box). A level taken from the waves
-//! runs at its own degree, not the waves' raised one, takes no batched tables, and keeps the
-//! form whatever RCR would cost. The builder's V rule reads `wave_levels` before the plan, a
+//! runs at its own degree, not the waves' raised one, takes no batched tables, and runs the
+//! cheaper of the form and RCR by the same model (where RCR is the cheaper, it also beats the
+//! waves: at 10⁻⁸ the waves' raised degree made a sparse level 31× RCR's on Kathleen). The builder's V rule reads `wave_levels` before the plan, a
 //! superset of the operator's levels with waves; its grouping per (parent, source) converts
 //! exact pairs under every M2L. Each choice is a function of agreed counts, (p, k̂, ε, T) and
 //! agreed constants, so the same on every rank and at every rank count; the scratch budget's
@@ -1677,7 +1678,6 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             &kernel.diagonal_settings,
             tolerance,
             &rcr,
-            &from_waves,
             &costs,
             &degrees,
             |l| kernel.tables.k_hat(l),

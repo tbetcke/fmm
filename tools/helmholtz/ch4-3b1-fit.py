@@ -250,11 +250,14 @@ def run_check(args):
                         d, r_ = dpairs[l]
                         t_diag = (n * (model_unit(c["s2f"], p) + model_unit(c["f2r"], p))
                                   + d * model_unit(c["pair"], p) + r_ * model_unit(c["rotation"], p))
+                        t_rcr = (d + r_) * model_unit(c["rotation"], p)
                         if own["ran"].startswith("planewave"):
-                            t_own = n * model_unit(c["plane_wave"], int(own["p"]))
-                        else:
-                            t_own = (d + r_) * model_unit(c["rotation"], p)
-                        if t_diag < t_own:
+                            # Taken from the waves where the form beats them, then the cheaper
+                            # of the form and RCR.
+                            t_waves = n * model_unit(c["plane_wave"], int(own["p"]))
+                            if t_diag < t_waves:
+                                choice = "diagonal" if t_diag < t_rcr else "rcr"
+                        elif t_diag < t_rcr:
                             choice = "diagonal"
                     chosen = options[choice]
                     total["levels"] += 1
