@@ -88,7 +88,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3, CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e; split on 2026-11-20), CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -721,40 +721,60 @@ task's full line is in its record or report and its progress entry
   rounding of the scalar path as the crate's rules say (constraint 1); the diagonal levels'
   call timed against CH4.2b2's (pairs 50–80 %, conversions 24–49 % of its thread time).
   *Needs:* CH4.2b2. *Machines:* Kathleen, locust.
-- [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
-  confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
-  back to RCR when the scratch budget binds. Since CH4.0d3's c_leaf 2 (signed off on #219): c_leaf re-decided with this
-  rule (at c_leaf 2 the census's first pass put leaves on high-frequency levels on 9 trees at
-  10⁻⁶; proposal §3.7 keeps W and X lists off them; CH4.0d3's report §4). Also from S6: the damped classes measured in
-  the FMM-weighted norm of CH1.3c, against the per-pair bound's factor
-  e^{Im(k)(|t| + 2a)} (its question 7), and whether a shorter transfer function
-  (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation
-  analysis. Also (review 2026-11-12, M8): the excess-bandwidth length
-  L ≈ 2ka + c (2ka)^{1/3} of the high-frequency FMM literature, between S6's last two, in
-  the same sweep. Also (CH4.0b's sign-off 2): the calibration verified on the constant
-  density (kD ≤ 100) and the plane wave's trace (kD = 500) as well as on §9.1's charges
-  (`helmholtz_accuracy::Density`). Also (review 2026-11-19, A8, M12): the refit of the
-  high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of the
-  error on W1 at kD = 1000, 10⁻⁸); C₀ checked at p ≥ 72 against a double-double reference, or
-  raised, with the glibc margin; at p = 131–245 no f64 reference resolves the floor (CH4.2a's
-record: the diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245,
-the projection rounding more than both). Also (CH4.1b's report §3, question 1, signed off 2026-11-19 on #236): the whole-level
-  fallback to RCR decided from the largest need over the ranks (`scratch_shape` on every rank,
-  one all-reduce), so every rank runs the same M2L on a level (constraints 2 and 9), built in
-  CH4.2b1 (the opt-in needs it); here its place in the time rule; at 40 ranks per node W1 at
-  kD = 1000's levels 2–3 do not fit a rank's 205 MiB. Also (CH4.2b2's report §3.2, its question
-  4, signed off 2026-11-20): the order between the exponential M2L (D8) and the diagonal form per
-  level, by time at matched accuracy: under Rotation the diagonal form ran W1's levels 4–8 at
-  0.29–0.83× the defaults' waves, the evaluation 1.6–2.8× faster than the defaults'; D8 amended
-  here if it moves. Also (CH4.2c2's question 1, signed off 2026-11-20): C_T and θ confirmed for
-  the default build of the transfer functions, the interpolated one (C_T = 0.23; it took the
-  direct build's classes on every W1 case). *Needs:* CH4.2b2, CH4.2c2.
+- CH4.3 The per-(level, class) rule, calibrated. *Done when:* S6's C_T and θ confirmed in the
+  full FMM on W1 and W3; the time crossover per class; a whole level falls back to RCR when the
+  scratch budget binds (proposal §10). Split on 2026-11-20 into CH4.3a–CH4.3e by the size rule
+  of `/next-task` (the Alsos below are each one study with its own machine runs); every Also of
+  the task as it stood is on one of them.
+- [ ] **CH4.3a The bound's constants in the full FMM.** *Done when:* S6's C_T (0.15 direct,
+  0.23 interpolated, the default build: CH4.2c2's question 1, signed off 2026-11-20) and θ = 1/2
+  confirmed in the full FMM on W1 (kD = 100 to 1000) and W3 (N = 10⁶, kD = 200 and 500) at
+  10⁻³ to 10⁻⁸, under Rotation so that the rule reaches every level: each case within 1.1×
+  Rotation's errors, and the margin measured (the rule at s θ ε for growing s, until a case
+  leaves 1.1×); with the pair evidence on the same (k a, p): each class's error against RCR
+  over E, both builds. Also (CH4.0b's sign-off 2): verified on the constant density (kD ≤ 100)
+  and the plane wave's trace (kD = 500) as well as on §9.1's charges
+  (`helmholtz_accuracy::Density`). Also from S6 (its question 7): the damped classes measured in
+  the FMM-weighted norm of CH1.3c (relative to the input's size), per pair and in the FMM on
+  damped W1, against the per-pair bound's factor e^{Im(k)(|t| + 2a)}. *Needs:* CH4.2b2,
+  CH4.2c2. *Machines:* Kathleen.
+- [ ] **CH4.3b The time rule, and the diagonal form by default.** *Done when:* the time
+  crossover per class and per level, the conversions included, against RCR and against the
+  exponential M2L at matched accuracy, and the order between the two per level (CH4.2b2's report
+  §3.2, its question 4, signed off 2026-11-20: under Rotation the diagonal form ran W1's levels
+  4–8 at 0.29–0.83× the defaults' waves, the evaluation 1.6–2.8× faster than the defaults'; D8
+  amended here if it moves); the whole-level fallback to RCR in that rule (CH4.1b's report §3,
+  question 1, signed off 2026-11-19 on #236: decided from the largest need over the ranks,
+  `scratch_shape` on every rank, one all-reduce, so every rank runs the same M2L on a level,
+  constraints 2 and 9; built in CH4.2b1; at 40 ranks per node W1 at kD = 1000's levels 2–3 do
+  not fit a rank's 205 MiB); the diagonal form on by default (`HelmholtzDiagonal`, `Off` until
+  here) for sign-off, the FMM within 1.1× the defaults' errors on W1 and W3. *Needs:* CH4.3a.
+  *Machines:* Kathleen, locust. *Sign-off:* the default.
+- [ ] **CH4.3c The high-frequency degrees refit, and C₀ at large degrees.** *Done when:* (review
+  2026-11-19, A8, M12) the refit of the high-frequency degrees searches downward at x ≥ 54
+  (levels 2–4 carry 0.6–1.0 % of the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted
+  in L (proposal §3.5); C₀ checked at p ≥ 72 against a double-double reference, or raised, with
+  the glibc margin (at p = 131–245 no f64 reference resolves the floor: CH4.2a's record, the
+  diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245, the
+  projection rounding more than both); pair evidence and FMM evidence, both. *Needs:* CH4.3a.
+  *Machines:* Kathleen.
+- [ ] **CH4.3d The transfer function's length.** *Done when:* (S6 §6) whether a shorter
+  transfer function (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, S6's
+  report §6) earns a truncation analysis; (review 2026-11-12, M8) the excess-bandwidth length
+  L ≈ 2ka + c (2ka)^{1/3} of the high-frequency FMM literature, between S6's last two, in the
+  same sweep: truncation and rounding per class against RCR, and the FMM where one earns it; any
+  adoption for sign-off. *Needs:* CH4.3a.
+- [ ] **CH4.3e c_leaf re-decided with the rule.** *Done when:* (since CH4.0d3's c_leaf 2, signed
+  off on #219) c_leaf re-decided with CH4.3b's default (at c_leaf 2 the census's first pass put
+  leaves on high-frequency levels on 9 trees at 10⁻⁶; proposal §3.7 keeps W and X lists off
+  them; CH4.0d3's report §4), on W1–W3's trees, for sign-off (D11). *Needs:* CH4.3b.
+  *Machines:* Kathleen.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary and the worst box at
   most 100 ε (proposal §9.1, amended at CH4.0b); time, memory and build cost per k. Also
   (CH4.0b's sign-off 2): the plane wave's trace at kD = 500 and 1000 beside §9.1's charges.
-  *Needs:* CH4.3, CH1.4. *Machines:* Kathleen.
+  *Needs:* CH4.3a–CH4.3e, CH1.4. *Machines:* Kathleen.
 - [ ] **CH4.5 Host performance against FMM3D at matched accuracy.** As C6.8, setup apart,
   one node, on CH4.4's sweep. Also (review 2026-11-19, A6, B6, B8): ours at 1 × N (one rank,
   N threads, as a threaded caller runs it) beside the best split; FMM3D's OpenMP binding
