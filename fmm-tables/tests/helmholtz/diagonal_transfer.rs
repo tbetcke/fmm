@@ -1157,8 +1157,8 @@ fn direct_field(k: C, sources: &[[f64; 3]], q: &[C], x: &[[f64; 3]]) -> Field {
             let e = (i * k * r).exp() * qj;
             field.potential[t] += e / r;
             let radial = e * (i * k * r - 1.0) / (r * r * r);
-            for c in 0..3 {
-                field.gradient[t][c] += radial * d[c];
+            for (g, &dc) in field.gradient[t].iter_mut().zip(&d) {
+                *g += radial * dc;
             }
         }
     }
