@@ -1,10 +1,10 @@
 //! The operator's diagonal M2L (Helmholtz CH4.2b1): the rule per level (the classes with
-//! E(l, c) ≤ θ ε by the constants of the transfer functions' build (Helmholtz CH4.2c2), none when
-//! off, without a tolerance, in f32 below 10⁻⁴, on levels whose M2L is
-//! not RCR's, or where the scratch budget binds), and the pair body against Rotation's within
-//! 2E in the measure of CH1.3d1 (P2M of charges in the source box, L2P at points of the target
-//! box, relative ℓ2 of the potential), with the classes on RCR Rotation's bits, by both builds. The level call
-//! in the FMM is tested in `tests/helmholtz_fmm.rs` (`check_diagonal`).
+//! E(l, c) ≤ θ ε by the constants of the transfer functions' build (Helmholtz CH4.2c2), none
+//! when off, without a tolerance, in f32 below 10⁻⁴, on levels whose M2L is not RCR's, or where
+//! the scratch budget binds), and the pair body against Rotation's within 2E in the measure of
+//! CH1.3d1 (P2M of charges in the source box, L2P at points of the target box, relative ℓ2 of
+//! the potential), with the classes on RCR Rotation's bits, by both builds. The level call in
+//! the FMM is tested in `tests/helmholtz_fmm.rs` (`check_diagonal`).
 
 use nd_fmm_exec::geometry::{self, Domain, radius};
 use nd_fmm_exec::helmholtz::{

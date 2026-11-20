@@ -77,9 +77,9 @@ row's, for φ and ∇φ.
     on RCR under the interpolated build (`tests/helmholtz/diagonal.rs`).
 - **The large degrees in the FMM.** CH4.2c1 left p ≥ 72 to its ignored pair tests. At E's floor
   those tests read 1.79–3.04 E against RCR, which CH4.2c1 put down to RCR's own floor. W1 at
-  kD = 1000 runs p = 245, 131 and 72 on levels 2–4 with the interpolated tables, and its error
-  is Rotation's to three digits. This is the FMM evidence the `/next-task` rule asks for beside
-  CH4.2c1's pair evidence.
+  kD = 1000 at 1 × 40 runs p = 245, 131 and 72 on levels 2–4 with the interpolated tables, and
+  its error is Rotation's to three digits. This is the FMM evidence the `/next-task` rule asks
+  for beside CH4.2c1's pair evidence.
 - **Not a build effect.** At kD = 1000 and 40 × 1, levels 2 and 3 run RCR under both builds.
   Their scratch at 40 ranks per node exceeds a rank's 205 MiB share of the budget (40 ranks
   over budget at level 2, 15 at level 3), as CH4.1b's census predicted.
@@ -118,7 +118,7 @@ The transfer functions' build per level, in seconds, the slowest rank's:
 - **Interpolated against direct.** The interpolated build is 5.4× faster at p = 131 and 1 × 40,
   and 7.9× at 40 × 1. At p = 245 and 1 × 40 it is 8.7× faster. CH4.2c1 measured one class on a
   Grace core at 6.1× (p = 131) and 9.6× (p = 245).
-- **Small degrees.** At p ≤ 25 the two builds cost the same, about 0.006–0.017 s at 1 × 40. The
+- **Small degrees.** At p ≤ 25 the two builds cost the same, about 0.005–0.017 s at 1 × 40. The
   interpolated build's angle table, one part per class, is then about as long as the direct
   samples.
 
@@ -141,12 +141,13 @@ Per run: the diagonal tables (the build part) and one evaluation (the second), i
 - **One rank per core.** The interpolated tables still cost 2.7× an evaluation at kD = 500
   (10.2 s against 3.8 s), down from 17×. Every rank builds every class. CH8.0 (the tables per
   node) is what removes the factor of the ranks per node.
-- **The evaluation is the same under both builds.** At 40 × 1 the rows agree to 0.01 s, since
+- **The evaluation is the same under both builds.** At 40 × 1 the rows agree to 0.02 s, since
   the tables have the same layout and the pairs the same work. At 1 × 40 the interpolated rows
-  are 0.4–3 % slower on the evaluation. Some 1 × 40 levels differ by up to 0.05 s in either
-  direction, for example kD = 500, 10⁻⁸, level 3: 0.185 against 0.240 s. Each launch ran the
-  two builds one after the other on one node and was not repeated, so this is run-to-run
-  spread. No level's M2L work depends on the build.
+  are 0.4–3 % slower on the evaluation, and single levels' M2L differ by up to 0.12 s in
+  either direction (kD = 1000, level 3: 1.099 against 1.222 s; kD = 500, 10⁻⁸, level 3: 0.185
+  against 0.240 s). Each launch ran the builds one after the other on one node and was not
+  repeated, so this is run-to-run spread at 40 threads: no level's M2L work depends on the
+  build, and at 40 × 1 the same levels agree within 0.01 s.
 
 ## 4. Bits and ranks
 

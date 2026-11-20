@@ -250,7 +250,8 @@
 //! double-double ([`TransferBuild::Direct`], the default, C_T = 0.15) or interpolated in ŝ · t̂
 //! from a double-double table ([`TransferBuild::Interpolated`], C_T = 0.23, so a class may need
 //! a looser tolerance; Helmholtz CH4.2c2,
-//! [`with_diagonal_build`](HelmholtzOperator::with_diagonal_build)). [`HelmholtzDiagonal::Rule`] reads the FMM's tolerance
+//! [`with_diagonal_build`](HelmholtzOperator::with_diagonal_build)).
+//! [`HelmholtzDiagonal::Rule`] reads the FMM's tolerance
 //! ([`with_plane_wave_tolerance`](HelmholtzOperator::with_plane_wave_tolerance)),
 //! [`HelmholtzDiagonal::Tolerance`] a named one. A level takes it only where its scratch fits
 //! the budget ([`with_diagonal_budget`](HelmholtzOperator::with_diagonal_budget)) at the largest
