@@ -21,7 +21,8 @@ products over a batch of boxes); Helmholtz CH4.1b (`helmholtz::diagonal::level`,
 signature buffers, scratch and driver, and `signed_permutation`); Helmholtz CH4.2a
 (`helmholtz::diagonal::transfer`, the transfer functions per (level, class) and the pair);
 Helmholtz CH4.2b1 (`Signatures::{strides_mut, relayout, fits}` and `Conversions::s2f_strides`, for
-nd-fmm-exec's threaded level call).
+nd-fmm-exec's threaded level call); Helmholtz CH4.2c1 (`TransferBuild`, the interpolated build
+and the build by ring).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -240,6 +241,25 @@ nd-fmm-exec's threaded level call).
   diagonal form lies no farther than max(2E, RCR's error) from ref's projection); and
   a level with each target's RCR pairs added after F → R in row order, bit for bit at every
   chunk size and within 2E of the level with every pair RCR.
+  Since Helmholtz CH4.2c1 (docs/helmholtz/tasks/CH4.2c1.md; the module docs, "Two builds" and
+  "The build in parts"): `TransferBuild::{Direct, Interpolated}` and
+  `DiagonalM2l::build_by(p, k̂, classes, build, parts)` (`build` and `build_on` are `Direct`).
+  `Interpolated` is S6's `Interp`: ref's `AngleTable` (T̂ at M = `interpolation_steps(p)` =
+  6p + 1 steps of [0, π] in ψ, double-double rounded once, and each sample's position in
+  double-double) read by the Gaussian-regularised sinc series, `INTERPOLATION_TERMS` = 36 terms
+  each side, summed in f64; its bound has C_T = 0.23 (`TransferBuild::bound_constants`: F64,
+  F64_INTERPOLATED, F32 for f32 tables either way). Both builds run one part per (class, ring)
+  (`Transfer::ring_samples`, bit for bit `Transfer::new`'s ring), the interpolated build first
+  one part per class for its angle tables, put together in (class, ring) order: the direct
+  build is CH4.2a's tables bit for bit (checked by hash against `main` at the change). The
+  interpolated tables call libm (`atan2`, `sin`, `exp`): the same on every thread and rank of a
+  run, not bit for bit between libms. `tests/helmholtz/diagonal_transfer.rs` checks every
+  interpolated sample against the direct build within 32 ε of the class's largest (3.3–4.1 ε on
+  the M6), the interpolated tables' M2L against RCR and against the direct build within 2E at
+  C_T = 0.23 on the 34 classes (k a 2.83, 8, damped 8), the 316 offsets (k a 5) and f32 (`F32`'s
+  bound), both builds on the reversed three-thread map bit for bit serial, f32 the f64 tables
+  rounded; the ignored `interpolated_at_large_degrees` (k a 16–108, release) and
+  `time_one_class` (one class's build, direct against interpolated, at p = 41–245; prints).
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are deterministic: the same inputs give bit-identical tables and cache files.
@@ -253,7 +273,8 @@ nd-fmm-exec's threaded level call).
   translations or none, the levels with M2L tables and with stored blocks; and
   `set_m2l_blocks`), `DenseM2l`, `BatchedM2l` and `ClassM2l::build_on` (their f64 tables
   now hold the M2L of their own levels alone, no translations),
-  `DiagonalM2l::build_on` (Helmholtz CH4.2a, one part per class) and
+  `DiagonalM2l::build_on` (Helmholtz CH4.2a, one part per class; since CH4.2c1 `build_by`, one
+  part per (class, ring), and per class for the interpolated build's angle tables) and
   `PlaneWaveM2l::build_with_reach_on` (since Helmholtz CH4.0j within a level too, every
   level's parts in three maps: each node's quadrature counts (`QuadratureNodes`), each
   node's values and each frame's rotation blocks (`LevelLayout`), each shift table, the

@@ -48,6 +48,8 @@ pub struct AngleTable {
     t_hat: [Dd; 3],
     /// M/π in double-double.
     per_radian: Dd,
+    /// (sin ψₖ, cos ψₖ) in double-double, k = 0..=M.
+    nodes: Vec<(Dd, Dd)>,
     values: Vec<Complex<f64>>,
 }
 
@@ -57,7 +59,9 @@ impl AngleTable {
     ///
     /// # Panics
     ///
-    /// If a frame's radius is not the level's half-width, the shift is zero, or `steps` is 0.
+    /// If a frame's radius is not the level's half-width, the shift is zero, or `steps` is
+    /// below 7 (the half step π/(2M) must stay below 1/2 for [`position`](Self::position)'s
+    /// arcsine series; 6p + 1 ≥ 7 from p = 1).
     pub fn new<T: RealScalar>(
         p: usize,
         level: &Level<T>,
@@ -65,14 +69,20 @@ impl AngleTable {
         to: &Frame<T>,
         steps: usize,
     ) -> Self {
-        assert!(steps > 0, "the angle grid needs a step");
+        assert!(
+            steps >= 7,
+            "the angle grid needs at least 7 steps, not {steps}"
+        );
         let shift = Transfer::shift_of(level, from, to);
         let k = level.k();
         let series = Series::new(Cdd::from_f64(k.re.to_f64(), k.im.to_f64()), shift, 2 * p);
         let step = Dd::PI / Dd::from_usize(steps);
-        let values = (0..=steps)
-            .map(|i| {
-                let (_, mu) = (step * Dd::from_usize(i)).sin_cos();
+        let nodes: Vec<(Dd, Dd)> = (0..=steps)
+            .map(|i| (step * Dd::from_usize(i)).sin_cos())
+            .collect();
+        let values = nodes
+            .iter()
+            .map(|&(_, mu)| {
                 let v = series.at(mu);
                 Complex::new(v.re.to_f64(), v.im.to_f64())
             })
@@ -83,6 +93,7 @@ impl AngleTable {
             shift,
             t_hat: series.t_hat,
             per_radian: Dd::from_usize(steps) / Dd::PI,
+            nodes,
             values,
         }
     }
@@ -108,16 +119,46 @@ impl AngleTable {
     }
 
     /// The position of sample (i, j) of `grid` on the angle grid: (n, f) with
-    /// ψ M/π = n + f and 0 ≤ f < 1, ψ the angle between ŝᵢⱼ and t̂. ψ is S6's: atan2 in f64 of
-    /// the double-double |ŝ × t̂| and ŝ · t̂, corrected once in double-double by
-    /// sin(ψ − ψ₀) = sin ψ cos ψ₀ − cos ψ sin ψ₀; the position is formed in double-double and f
-    /// rounded once. (ψ in f64 alone would cost T about 2p u |T̂|, |dT̂/dψ| ≈ 2p |T̂|, and arccos of
-    /// a rounded ŝ · t̂ far more near ψ = 0 and π.)
+    /// ψ M/π = n + f and 0 ≤ f < 1, ψ the angle between ŝᵢⱼ and t̂, to double-double accuracy
+    /// before f is rounded once. sin ψ = |ŝ × t̂| and cos ψ = ŝ · t̂ are formed in double-double,
+    /// the nearest node ψₘ from atan2 of them in f64, then δ = ψ − ψₘ (|δ| ≤ π/(2M) to rounding)
+    /// from sin δ = sin ψ cos ψₘ − cos ψ sin ψₘ in double-double (the nodes' sines and cosines
+    /// are the table's), as sin δ plus the arcsine series' correction δ − sin δ, summed in f64
+    /// (it is below (π/2M)²/6 of δ, so f64 suffices), and f = δ M/π in double-double. S6's
+    /// `angle` corrected an f64 ψ₀ by one double-double sine and cosine of ψ₀ per sample, twice
+    /// the cost of the interpolation; the two agree to a few u (tested). (ψ in f64 alone would
+    /// cost T about 2p u |T̂|, |dT̂/dψ| ≈ 2p |T̂|, and arccos of a rounded ŝ · t̂ far more near
+    /// ψ = 0 and π.)
     ///
     /// # Panics
     ///
     /// If `grid` is not of this table's degree, or (i, j) is not a sample.
     pub fn position<T: RealScalar>(&self, grid: &Grid<T>, i: usize, j: usize) -> (isize, f64) {
+        let (sin, cos) = self.sin_cos(grid, i, j);
+        let psi0 = sin.to_f64().atan2(cos.to_f64());
+        let nearest = (psi0 * (self.steps as f64 / core::f64::consts::PI))
+            .round()
+            .clamp(0.0, self.steps as f64);
+        let m = nearest as usize;
+        let (sm, cm) = self.nodes[m];
+        let sin_delta = sin * cm - cos * sm;
+        let delta = sin_delta + Dd::from_f64(asin_correction(sin_delta.hi));
+        let g = (delta * self.per_radian).to_f64();
+        let (mut n, mut f) = if g < 0.0 {
+            (m as isize - 1, g + 1.0)
+        } else {
+            (m as isize, g)
+        };
+        // g just below 0 rounds to g + 1 = 1, and g may reach 1 if ψ₀'s node is off by one.
+        if f >= 1.0 {
+            n += 1;
+            f -= 1.0;
+        }
+        (n, f)
+    }
+
+    /// sin ψ = |ŝ × t̂| and cos ψ = ŝ · t̂ of sample (i, j) in double-double.
+    fn sin_cos<T: RealScalar>(&self, grid: &Grid<T>, i: usize, j: usize) -> (Dd, Dd) {
         assert_eq!(grid.degree(), self.p, "the grid has another degree");
         assert!(
             i < grid.rings() && j < grid.azimuths(),
@@ -132,23 +173,31 @@ impl AngleTable {
         ];
         let sin = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
         let cos = s[0] * t[0] + s[1] * t[1] + s[2] * t[2];
-        let psi0 = sin.to_f64().atan2(cos.to_f64());
-        let (s0, c0) = Dd::from_f64(psi0).sin_cos();
-        let psi = Dd::from_f64(psi0) + (sin * c0 - cos * s0);
-        let x = psi * self.per_radian;
-        let mut n = x.hi.floor();
-        let mut f = (x - Dd::from_f64(n)).to_f64();
-        if f < 0.0 {
-            n -= 1.0;
-            f += 1.0;
-        }
-        // A tiny negative f rounds to f + 1 = 1 (ψ at a node from below).
-        if f >= 1.0 {
-            n += 1.0;
-            f -= 1.0;
-        }
-        (n as isize, f)
+        (sin, cos)
     }
+}
+
+/// asin(x) − x = Σ_{k ≥ 1} (2k)! / (4ᵏ (k!)² (2k + 1)) x^{2k+1} in f64, the terms summed until
+/// they no longer change the sum; for |x| < 1/2 (the angle grid's half step, π/(2M) with
+/// M ≥ 7, is below 0.23, plus rounding).
+fn asin_correction(x: f64) -> f64 {
+    debug_assert!(
+        x.abs() < 0.5,
+        "the correction's series needs |x| < 1/2: {x}"
+    );
+    let x2 = x * x;
+    let mut term = x;
+    let mut sum = 0.0;
+    for k in 1..64 {
+        let k = k as f64;
+        term *= x2 * (2.0 * k - 1.0) * (2.0 * k - 1.0) / ((2.0 * k) * (2.0 * k + 1.0));
+        let next = sum + term;
+        if next == sum {
+            break;
+        }
+        sum = next;
+    }
+    sum
 }
 
 #[cfg(test)]
@@ -224,6 +273,64 @@ mod tests {
             );
         }
         assert_eq!((t.degree(), t.steps(), t.shift()), (p, steps, to));
+    }
+
+    /// S6's `angle` (atan2 of the double-double sine and cosine, corrected once by a
+    /// double-double sine and cosine of ψ₀), the trusted path of `position`.
+    fn exact_position(table: &AngleTable, grid: &Grid<f64>, i: usize, j: usize) -> f64 {
+        let (sin, cos) = table.sin_cos(grid, i, j);
+        let psi0 = sin.to_f64().atan2(cos.to_f64());
+        let (s0, c0) = Dd::from_f64(psi0).sin_cos();
+        let psi = Dd::from_f64(psi0) + (sin * c0 - cos * s0);
+        (psi * table.per_radian).to_f64()
+    }
+
+    /// Every sample's position against S6's: n + f within 4 u of ψ M/π, from p = 1 (the
+    /// largest half step, π/14) to p = 40, real and off-axis shifts.
+    #[test]
+    fn positions_are_s6s() {
+        let mut worst: f64 = 0.0;
+        for p in [1, 2, 3, 7, 16, 40] {
+            let grid = Grid::<f64>::new(p);
+            let steps = 6 * p + 1;
+            for to in [
+                [6.0, 0.0, 0.0],
+                [6.0, 6.0, 6.0],
+                [4.0, -2.0, 6.0],
+                [2.0, 4.0, -6.0],
+            ] {
+                let table = table(Complex::new(3.0, 0.0), to, p, steps);
+                for i in 0..grid.rings() {
+                    for j in 0..grid.azimuths() {
+                        let (n, f) = table.position(&grid, i, j);
+                        let exact = exact_position(&table, &grid, i, j);
+                        let diff = (n as f64 + f - exact).abs() / exact.max(1.0);
+                        worst = worst.max(diff);
+                        assert!(
+                            diff <= 2.0 * f64::EPSILON,
+                            "p = {p}, {to:?} ({i}, {j}): {} against {exact}",
+                            n as f64 + f
+                        );
+                    }
+                }
+            }
+        }
+        println!(
+            "positions against S6's: {:.2} u",
+            worst / (f64::EPSILON / 2.0)
+        );
+    }
+
+    #[test]
+    fn the_arcsine_correction() {
+        for x in [0.0, 1e-9, 1e-3, -0.01, 0.1, 0.224, -0.3] {
+            let exact = f64::asin(x) - x;
+            let got = asin_correction(x);
+            assert!(
+                (got - exact).abs() <= 4.0 * f64::EPSILON * x.abs(),
+                "{x}: {got} against {exact}"
+            );
+        }
     }
 
     #[test]
