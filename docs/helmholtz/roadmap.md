@@ -11,7 +11,7 @@ Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
 item 10 CH4.1, CH4.2 and CH4.2c; CH4.3 is split into CH4.3a–CH4.3e. CH4.3a (the bound's constants
 in the full FMM: every W1 and W3 case 1.000–1.007× Rotation's errors at θ = 1/2, margin 16 at
-10⁻⁸) waits for its sign-off and merge. Next CH4.3b (the time rule and the diagonal form by
+10⁻⁸) is signed off (questions 1–4 as recommended) and waits for its merge. Next CH4.3b (the time rule and the diagonal form by
 default); CH4.2d off the list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0,
 CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in
 `progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until
@@ -732,7 +732,8 @@ task's full line is in its record or report and its progress entry
   W1; margin 16 at 10⁻⁸, none needed at ε ≥ 10⁻⁶; per pair within 2E on the FMM's levels but at
   k a = 108 (E's floor, C₀ CH4.3c's) and one damped class below S6's k a 2.8; the damping factor
   conservative in the FMM (1.006× at 1024θ) and in the input-relative measure, its removal unsafe.
-  *Sign-off:* pending (the PR's questions 1–4).
+  *Sign-off:* 2026-11-20 on #242, questions 1–4 as recommended: C_T and θ kept (C₀ CH4.3c's); the
+  damping factor kept, a fitted one an Also on CH5.1; k a < 2.8 an Also on CH4.3b; the split.
 - [ ] **CH4.3b The time rule, and the diagonal form by default.** *Done when:* the time
   crossover per class and per level, the conversions included, against RCR and against the
   exponential M2L at matched accuracy, and the order between the two per level (CH4.2b2's report
@@ -744,7 +745,7 @@ task's full line is in its record or report and its progress entry
   constraints 2 and 9; built in CH4.2b1; at 40 ranks per node W1 at kD = 1000's levels 2–3 do
   not fit a rank's 205 MiB); the diagonal form on by default (`HelmholtzDiagonal`, `Off` until
   here) for sign-off, the FMM within 1.1× the defaults' errors on W1 and W3. Also (CH4.3a's
-  report §4, its question 3, recommended, pending sign-off): whether the time rule takes the diagonal form at k a < 2.8 at all,
+  report §4, its question 3, signed off 2026-11-20): whether the time rule takes the diagonal form at k a < 2.8 at all,
   below S6's calibrated range, where one damped class measured 2.9 E per pair (direct build,
   η = 0.1, k a 1.69); if it does, the rule bounded to k a ≥ 2.8 or C_T raised there. *Needs:* CH4.3a.
   *Machines:* Kathleen, locust. *Sign-off:* the default.
@@ -791,7 +792,7 @@ task's full line is in its record or report and its progress entry
 
 - [ ] **CH5.1 Classifier and pruning for Im k > 0.** *Done when:* regimes as §3.6 with S6's
   damped results; the error within target over a grid of (Re kD, Im kD) on W1. Also (CH4.3a's
-  report §5, its question 2, recommended, pending sign-off): a damping factor of the bound fitted
+  report §5, its question 2, signed off 2026-11-20): a damping factor of the bound fitted
   in the input-relative measure (CH1.3c's weighting; with e^{Im(k)(|t| + 2a)} E over-predicts by
   up to 10¹⁴ at η = 0.1 and 10²⁵ at η = 1, without it E under-predicts by up to 3.4·10⁶),
   confirmed in the FMM on damped W1. *Needs:*

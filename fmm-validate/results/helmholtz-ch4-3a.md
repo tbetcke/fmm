@@ -217,6 +217,8 @@ input-relative error is within ε.
 
 ## 6. Questions for sign-off
 
+Signed off 2026-11-20 on #242: every question as recommended.
+
 1. **The acceptance as read, and the constants unchanged.** *Recommended*: C_T = 0.15 (direct)
    and 0.23 (interpolated) and θ = 1/2 confirmed in the full FMM on W1 and W3 at 10⁻³ to 10⁻⁸
    (every case 1.000–1.007× Rotation's; W1 at kD = 1000 at 10⁻⁶ and 10⁻⁸ only), with a margin of

@@ -163,6 +163,6 @@ The FMM runs are done: Kathleen job 653621 (node-c11a-013, `singlenode`, 2026-11
   evaluation), question 1's alternative, question 4's added scope, the Alsos marked pending.
 
 ## Open questions
-For sign-off on the PR (report §6): 1, the acceptance as read and the constants kept; 2, the
+None. Signed off 2026-11-20 on #242, every question as recommended (report §6): 1, the acceptance as read and the constants kept; 2, the
 damping factor kept, a fitted one an Also on CH5.1; 3, below S6's range, an Also on CH4.3b; 4,
 the split of CH4.3.

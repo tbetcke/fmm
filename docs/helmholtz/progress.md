@@ -3993,8 +3993,8 @@ request, using this template:
   passed on the M6). Not run:
   the MPI list (no exec, plan or octree change), `cargo deny` (no manifest), Laplace's benchmarks
   (no Laplace path changed), the debug-time budgets (no non-ignored test added).
-- Decisions: questions for sign-off on the PR: 1, the acceptance as read, C_T and θ kept (C₀ is
-  CH4.3c's);
+- Decisions: signed off 2026-11-20 on #242, questions 1–4 as recommended: 1, the acceptance as
+  read, C_T and θ kept (C₀ is CH4.3c's);
   2, the damping factor kept, a fitted one an Also on CH5.1; 3, below S6's range (k a < 2.8), an
   Also on CH4.3b; 4, the split of CH4.3.
 - Laplace: not touched (a test of `nd-fmm-tables`, a flag of the validation harness, scripts).
