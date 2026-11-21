@@ -155,4 +155,4 @@ load 7–10; the first version of the check, 803 s at load 3–35, was trimmed),
 (CH4.3b1: 33 s).
 
 ## Open questions
-The report's §7, questions 1–4, for sign-off.
+The report's §7, questions 1–4: the user on #244, 2026-11-21: "Merge 244 when green" (the questions not answered one by one; merged as built).

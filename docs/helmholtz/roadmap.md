@@ -11,7 +11,7 @@ Status (2026-11-20): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
 item 10 CH4.1, CH4.2, CH4.2c, CH4.3a and CH4.3b1; CH4.3b2 is split into CH4.3b2a–c. CH4.3b2a (the
 time rule at matched accuracy: a level with waves keeps its resolving degree, the waves unless the
-form beats them, the errors 0.99–1.04× the defaults') waits for its sign-off (questions 1–4). Next
+form beats them, the errors 0.99–1.04× the defaults') is merged on the user's word. Next
 CH4.3b2b (the V rule on the form's levels), CH4.3b2c (the form by default), then CH4.3c–CH4.3e;
 CH4.2d off the list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and
 CH0.6 are done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in
@@ -780,7 +780,7 @@ task's full line is in its record or report and its progress entry
   RCR never against the waves alone: a rule of three lost 0.47 s, gained 0.11 s). W1 and W3 at
   10⁻³–10⁻⁸ on Kathleen and locust: errors 0.990–1.037× the defaults' (CH4.3b1: 1.07–2.2× at 10⁻⁸);
   choices within 1.05× on 81/83 and 82/92 levels; evaluation 0.38–1.12× and 0.43–0.99×.
-  *Sign-off:* the report's questions 1–4 (pending).
+  *Sign-off:* the report's questions 1–4: the user on #244, 2026-11-21: "Merge 244 when green" (the questions not answered one by one; merged as built).
 - [ ] **CH4.3b2b The V rule on the form's levels, and the defaults' errors at 10⁻⁶.** *Done
   when:* (CH4.3b1's report §5) the defaults' errors at 10⁻⁶ (up to 1.35× Rotation's; 0.77–0.95×
   of them when the plan saw no waves on the levels the form took, CH4.3b1's first runs)

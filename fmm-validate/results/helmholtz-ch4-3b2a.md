@@ -221,6 +221,8 @@ crossover on a level the form takes from the waves); its roadmap line now names 
 
 ## 7. Questions for sign-off
 
+Answered by the user on #244, 2026-11-21: "Merge 244 when green" (the questions not answered one by one; merged as built).
+
 1. **The acceptance as read.** Under the time rule a level with waves keeps its resolving degree
    (the degrees and translation degrees the defaults', tested); the defaults with the time rule err
    0.990–1.037× the defaults' on every case of W1 and W3 at 10⁻³–10⁻⁸ on both machines (§3.1); the
