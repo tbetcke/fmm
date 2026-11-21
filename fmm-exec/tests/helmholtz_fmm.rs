@@ -132,8 +132,9 @@ use nd_fmm_exec::helmholtz::{
     DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
     HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision,
     PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild,
-    VAfterPlan, VNear, Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns,
-    auto_m2l_mul_add, auto_plane_wave_min_degree, default_max_points_per_leaf,
+    V_COSTS_NEON, VAfterPlan, VNear, Wavenumber, WxNear, auto_batched_max_degree,
+    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree,
+    default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -1897,11 +1898,16 @@ const DEARER_FORM: DiagonalCosts = DiagonalCosts {
 /// pairs and the near interactions at least the setting off's; the errors against the direct sum
 /// within [`NEAR_ERROR_BOUND`] of the setting off's; 2 threads and on P ranks the one-rank FMM
 /// bit for bit. Under Rotation nothing rises: no second plan, the setting off's output bit for
-/// bit.
+/// bit. The V costs are named (NEON's), so the plans do not depend on the machine class.
 fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
     let inputs = &Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
-    let base = default_builder(scenario).near_v(VNear::CostModel);
+    // NEON's V costs named, so that the plans (and the levels left with leaf pairs to raise)
+    // are the same on every machine class: x86's waves' crossover is about 11 times NEON's,
+    // and its first plan converts every leaf pair of the sphere's level 3.
+    let base = default_builder(scenario)
+        .near_v(VNear::CostModel)
+        .v_costs(Some(V_COSTS_NEON));
     let auto = base
         .clone()
         .m2l_plane_wave_min_degree(0)

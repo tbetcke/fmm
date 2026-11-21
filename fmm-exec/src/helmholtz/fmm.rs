@@ -396,6 +396,7 @@ pub struct HelmholtzFmmBuilder {
     diagonal: HelmholtzDiagonal,
     diagonal_build: TransferBuild,
     diagonal_costs: Option<DiagonalCosts>,
+    v_costs: Option<VCosts>,
     diagonal_budget: usize,
     diagonal_chunk: Option<usize>,
     c_leaf: f64,
@@ -452,6 +453,7 @@ impl HelmholtzFmmBuilder {
             diagonal: HelmholtzDiagonal::Off,
             diagonal_build: DEFAULT_DIAGONAL_BUILD,
             diagonal_costs: None,
+            v_costs: None,
             diagonal_budget: DEFAULT_SIGNATURE_NODE_BUDGET,
             diagonal_chunk: None,
             c_leaf: DEFAULT_C_LEAF,
@@ -635,6 +637,16 @@ impl HelmholtzFmmBuilder {
     /// FMM's of the same setting bit for bit. Nothing changes under another [`VNear`].
     pub fn v_after_plan(mut self, choice: VAfterPlan) -> Self {
         self.v_after_plan = choice;
+        self
+    }
+
+    /// The cost model of the near rules' crossovers ([`VNear::CostModel`], the planned and the
+    /// after-plan crossovers, and [`WxNear::CostModel`]'s P2P per interaction; Helmholtz
+    /// CH4.3b2b; default `None`: [`v_costs`] of the P2P kernel's ISA), for the tests, whose
+    /// plans then do not depend on the machine class. The crossovers it gives are agreed over
+    /// the ranks as the default's.
+    pub fn v_costs(mut self, costs: Option<VCosts>) -> Self {
+        self.v_costs = costs;
         self
     }
 
@@ -1112,6 +1124,8 @@ impl HelmholtzFmmBuilder {
         };
         // The W and X crossovers of each level (Helmholtz CH4.0d3), by the finer leaf's
         // level: named, or the cost model's at the level's degree; agreed over the ranks.
+        // The near rules' cost model: named, or the machine class's.
+        let v_cost_model = self.v_costs.unwrap_or_else(|| v_costs(isa));
         // The degrees are those given, before the exponential M2L's raise: where a raised
         // level runs M2P and P2L at p_w (`PlaneWaveRaise::Level`, `Leaves`), the crossovers
         // are low, which converts fewer pairs, never a wrong one.
@@ -1119,7 +1133,7 @@ impl HelmholtzFmmBuilder {
             .flat_map(|l| match self.near_wx {
                 WxNear::Off => [0.0, 0.0],
                 WxNear::Crossovers { w, x } => [w, x],
-                WxNear::CostModel => wx_crossovers(&wx_costs(isa), &v_costs(isa), degrees[l]),
+                WxNear::CostModel => wx_crossovers(&wx_costs(isa), &v_cost_model, degrees[l]),
             })
             .collect();
         let mut wx = vec![0.0f64; local.len()];
@@ -1155,7 +1169,7 @@ impl HelmholtzFmmBuilder {
                         };
                         (cheapest, p)
                     };
-                    v_crossover(&v_costs(isa), m2l, p, self.gradients)
+                    v_crossover(&v_cost_model, m2l, p, self.gradients)
                 }
             })
             .collect();
@@ -1415,7 +1429,7 @@ impl HelmholtzFmmBuilder {
                     let shape = shapes.and_then(|s| s.get(l)).copied();
                     match (run, shape) {
                         (Some(run), Some(shape)) => crossovers[l].max(v_after_plan_crossover(
-                            &v_costs(isa),
+                            &v_cost_model,
                             &costs,
                             run,
                             operator.degree(l),

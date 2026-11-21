@@ -130,6 +130,11 @@ with CH4.3b2c's default.
   run at 2 ranks failed with the clone, 3ecfa8a), and a level is raised only where its first plan
   still holds a V pair between leaves (summed over the ranks; c315554), after job 653717 built a
   second, identical plan on W3 at kD = 500 (14 s) and where only levels without leaf pairs rose.
+- After the sign-off, CI's x86 runners failed `check_v_after_plan`: the builder takes `VCosts` by
+  ISA, x86's waves' crossover per (p + 1)² is about 11× NEON's, so x86's first plan already
+  converted every leaf pair of the sphere's level 3 and nothing rose (reproduced on the M6 with
+  `V_COSTS_X86` named). `HelmholtzFmmBuilder::v_costs` (default `None`, the ISA's) names the near
+  rules' costs; the test names NEON's, so its plans are the same on every machine class.
 - The runs got a `reverse` stage (the same runs in the reverse order, job 653724): same-plan pairs
   in one launch differed by up to 30 % in the evaluation, so §5 of the report reads the levels' own
   seconds in both orders.
