@@ -4103,7 +4103,7 @@ request, using this template:
   After the change of the order (a4bc1c2) again: see the PR. Debug time (opt-level 0, one rank):
   `helmholtz_fmm` 646 s at load 2–7 (CH4.2c2 611 s), the `helmholtz` executable 51.5 s. Not run:
   `cargo deny` (no manifest), Laplace's benchmarks (no Laplace path), 8 ranks (no distributed code).
-- Decisions: the report's questions 1–4: the user on #244, 2026-11-21: "Merge 244 when green" (the questions not answered one by one; merged as built).
+- Decisions: the report's questions 1–4: signed off 2026-11-21 by the user on #244, "Accept 1-4 as recommended": 1, the acceptance as read; 2, the order as built (the waves unless the form beats them, then the cheaper of the form and RCR); 3, the sparse level closed here and carried to CH4.3b2b; 4, W3 at kD = 200 on Kathleen an Also on CH4.3b2c.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
 - Follow-ups: CH4.3b2b's Also (the 58,551-pair level), CH4.3b2c's Also (W3 at kD = 200's evaluation
   on Kathleen; W3's dense levels), in the roadmap.

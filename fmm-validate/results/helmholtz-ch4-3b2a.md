@@ -221,7 +221,7 @@ crossover on a level the form takes from the waves); its roadmap line now names 
 
 ## 7. Questions for sign-off
 
-Answered by the user on #244, 2026-11-21: "Merge 244 when green" (the questions not answered one by one; merged as built).
+Signed off 2026-11-21 by the user on #244, "Accept 1-4 as recommended": 1, the acceptance as read; 2, the order as built (the waves unless the form beats them, then the cheaper of the form and RCR); 3, the sparse level closed here and carried to CH4.3b2b; 4, W3 at kD = 200 on Kathleen an Also on CH4.3b2c.
 
 1. **The acceptance as read.** Under the time rule a level with waves keeps its resolving degree
    (the degrees and translation degrees the defaults', tested); the defaults with the time rule err
