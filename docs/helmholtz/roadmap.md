@@ -88,7 +88,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e, CH4.3b as CH4.3b1 and CH4.3b2a–d; split on 2026-11-20; CH4.3b2d added at CH4.3b2b, its question 3), CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e, CH4.3b as CH4.3b1 and CH4.3b2a–d; split on 2026-11-20; CH4.3b2d added at CH4.3b2b, its question 3; CH4.3c as CH4.3c1 and CH4.3c2, split on 2026-11-21), CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -810,14 +810,19 @@ task's full line is in its record or report and its progress entry
   saw it too: same-plan runs of one launch up to 30 % apart, later runs slower; its report §1).
   *Needs:* CH4.3b2a, CH4.3b2b, CH4.3b2d (added at CH4.3b2b, its question 3). *Machines:*
   Kathleen, locust. *Sign-off:* the default.
-- [ ] **CH4.3c The high-frequency degrees refit, and C₀ at large degrees.** *Done when:* (review
-  2026-11-19, A8, M12) the refit of the high-frequency degrees searches downward at x ≥ 54
-  (levels 2–4 carry 0.6–1.0 % of the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted
-  in L (proposal §3.5); C₀ checked at p ≥ 72 against a double-double reference, or raised, with
-  the glibc margin (at p = 131–245 no f64 reference resolves the floor: CH4.2a's record, the
+- CH4.3c The high-frequency degrees refit, and C₀ at large degrees. Split on 2026-11-21 (by the
+  size rule of `/next-task`: two independent studies, pairs on the M6 and a calibration on
+  Kathleen) into CH4.3c1 and CH4.3c2.
+- [ ] **CH4.3c1 C₀ at large degrees, against a double-double reference.** *Done when:* (review
+  2026-11-19, M12) C₀ checked at p ≥ 72 against a double-double reference, or raised, with the
+  glibc margin (at p = 131–245 no f64 reference resolves the floor: CH4.2a's record, the
   diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245, the
   projection rounding more than both); pair evidence and FMM evidence, both. *Needs:* CH4.3a.
-  *Machines:* Kathleen.
+- [ ] **CH4.3c2 The high-frequency degrees refit.** *Done when:* (review 2026-11-19, A8) the
+  refit of the high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of
+  the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted in L (proposal §3.5; CH3.3's
+  report §6 names the branch x + (a L + b) x^{1/3}); pair evidence and FMM evidence, both; the
+  rule for sign-off. *Needs:* CH4.3a. *Machines:* Kathleen. *Sign-off:* the rule.
 - [ ] **CH4.3d The transfer function's length.** *Done when:* (S6 §6) whether a shorter
   transfer function (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, S6's
   report §6) earns a truncation analysis; (review 2026-11-12, M8) the excess-bandwidth length
