@@ -666,7 +666,8 @@ leaves and V entries counted before the plan), and to the example `--v-raised pa
 box), `--v-after-plan raised` (`/vafterraised`) and a last column of "Near pairs" (the counts per
 level). `tests/helmholtz_accuracy.rs` (`check_diagonal`) checks `PerBox` under the defaults at 10⁻⁷
 on W1 at kD = 30 (one plan, counts only on raised levels, a crossover risen, the errors within
-1.1×). `tools/helmholtz/ch4-3b2d-runs.sh` runs the task's stages (`smoke`, `w1`, `w3`, `reverse`),
+1.1×, the library's default `PerBox`'s output); CH4.3b2b's `AllLevels` check there names
+`PerPair`. `tools/helmholtz/ch4-3b2d-runs.sh` runs the task's stages (`smoke`, `w1`, `w3`, `reverse`),
 `ch4-3b2d-tables.py` makes the report's tables (`runs`, `levels`, `summary`). Its report is
 `results/helmholtz-ch4-3b2d.md`.
 

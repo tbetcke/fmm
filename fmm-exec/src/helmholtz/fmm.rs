@@ -315,8 +315,8 @@ impl std::fmt::Display for VAfterPlan {
 /// CH4.0d2's crossover.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VRaisedPrice {
-    /// The waves' per-pair constant at p_w, [`VCosts::plane_wave`] b (p_w + 1)² (CH4.0d2's).
-    #[default]
+    /// The waves' per-pair constant at p_w, [`VCosts::plane_wave`] b (p_w + 1)² (CH4.0d2's;
+    /// the default until CH4.3b2d).
     PerPair,
     /// The higher of that and the waves' cost per box with a V row at p_w
     /// ([`DiagonalCosts::plane_wave`]) over the V entries per leaf that the per-pair price
@@ -324,7 +324,9 @@ pub enum VRaisedPrice {
     /// and the point counts before the plan ([`HelmholtzFmm::raised_v_shapes`]): on a sparse
     /// raised level the waves cost per box, so a pair saves more than the constant says
     /// (CH4.3b2b's report §6). Where the level's boxes with a V row are leaves this is the
-    /// crossover that [`VAfterPlan::RaisedLevels`] finds after a first plan, in one plan.
+    /// crossover that [`VAfterPlan::RaisedLevels`] finds after a first plan, in one plan. The
+    /// default since CH4.3b2d (fmm-validate/results/helmholtz-ch4-3b2d.md).
+    #[default]
     PerBox,
 }
 
@@ -470,7 +472,8 @@ impl HelmholtzFmmBuilder {
     /// [`DEFAULT_SIGNATURE_NODE_BUDGET`] per node and its transfer functions by
     /// [`DEFAULT_DIAGONAL_BUILD`] when named), the leaf width [`DEFAULT_C_LEAF`],
     /// the P2P kernel of [`P2pChoice::Auto`], the empty-box rule and the V, W and X pairs
-    /// near pairs by the cost model.
+    /// near pairs by the cost model (a V pair on a level of raised waves priced per box,
+    /// [`VRaisedPrice::PerBox`]).
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
         Self {
             k,
@@ -511,7 +514,7 @@ impl HelmholtzFmmBuilder {
             near_v: VNear::CostModel,
             near_wx: WxNear::CostModel,
             v_after_plan: VAfterPlan::Off,
-            v_raised_price: VRaisedPrice::PerPair,
+            v_raised_price: VRaisedPrice::PerBox,
             pair_calls: false,
         }
     }
@@ -692,7 +695,7 @@ impl HelmholtzFmmBuilder {
 
     /// How [`VNear::CostModel`] prices a V pair before the plan on a level whose waves run at
     /// a raised degree (Helmholtz CH4.3b2d, [`VRaisedPrice`]; default
-    /// [`VRaisedPrice::PerPair`]). `PerBox` counts the raised levels' leaves and V entries
+    /// [`VRaisedPrice::PerBox`]). `PerBox` counts the raised levels' leaves and V entries
     /// from the octree's keys before the plan (one pass over the local leaves of those
     /// levels and one all-reduce; in [`HelmholtzBuildTimings::counts`]), so every rank
     /// decides alike and the output on P ranks is the one-rank FMM's of the same setting bit

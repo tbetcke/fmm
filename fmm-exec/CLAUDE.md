@@ -822,7 +822,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   34.3 s at opt-level 1.
   Since Helmholtz CH4.3b2d (docs/helmholtz/tasks/CH4.3b2d.md; fmm-validate/results/helmholtz-ch4-3b2d.md)
   `HelmholtzFmmBuilder::v_raised_price` (`VRaisedPrice`: `PerPair`, CH4.0d2's per-pair constant;
-  `PerBox`) prices a V pair before the plan, under `VNear::CostModel`, on a level whose waves are
+  `PerBox`, the default since CH4.3b2d, for its sign-off) prices a V pair before the plan, under `VNear::CostModel`, on a level whose waves are
   raised (p_w above the degree given, ε < 10⁻⁶): `PerBox` takes the higher of the per-pair
   crossover and `raised_crossover`, the waves' cost per box with a V row at p_w
   (`DiagonalCosts::plane_wave`) times the level's leaves over their V entries, over the P2P's per
@@ -842,7 +842,8 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   one plan, the errors within `NEAR_ERROR_BOUND`, 2 threads and the one-rank FMM bit for bit,
   Rotation counting nothing, and `RaisedLevels`' crossover after the plan equal to the per-box one;
   `check_v_after_plan` `RaisedLevels` and `PerBox` on the unraised sphere (nothing raised or
-  counted, the per-pair output bit for bit). Its debug cost: the one-rank run at opt-level 0 703 s
+  counted, the per-pair output bit for bit; both checks name `PerPair` as their reference);
+  `check_defaults` the default `PerBox`. Its debug cost: the one-rank run at opt-level 0 703 s
   at load 2.5–4 on the M6 (before the self-review's two runs on the unraised sphere), 39 s at
   opt-level 1.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by

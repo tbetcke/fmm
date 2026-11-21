@@ -1363,6 +1363,8 @@ fn check_diagonal(world: &SimpleCommunicator) {
     let near = Case {
         near_v: VNear::CostModel,
         v_costs: Some(V_COSTS_NEON),
+        // CH4.3b2d's per-pair price, under which the first plan leaves pairs to raise.
+        v_raised_price: Some(VRaisedPrice::PerPair),
         ..defaults.clone()
     };
     assert_eq!(near.v_after_plan, VAfterPlan::Off, "Case::new's");
@@ -1438,7 +1440,7 @@ fn check_diagonal(world: &SimpleCommunicator) {
     )
     .expect("the FMM runs")
     .degrees;
-    assert_eq!(row_n.v_raised_price, VRaisedPrice::PerPair, "the library's");
+    assert_eq!(row_n.v_raised_price, VRaisedPrice::PerPair, "named");
     assert!(row_n.raised_v_shapes.is_empty());
     assert_eq!(row_b.v_raised_price, VRaisedPrice::PerBox);
     assert!(!row_b.replanned);
@@ -1462,6 +1464,17 @@ fn check_diagonal(world: &SimpleCommunicator) {
         }
     }
     assert!(rose, "no crossover rose: {:?}", row_b.v_crossovers);
+    // The library's default (Case::new names none) is the price per box.
+    let library = Case {
+        v_raised_price: None,
+        ..near.clone()
+    };
+    let row_l = run(&library, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row_l.v_raised_price, VRaisedPrice::PerBox, "the library's");
+    assert_eq!(
+        row_l.checksum, row_b.checksum,
+        "the library's: PerBox's output"
+    );
     assert!(row_b.v_near[1] >= row_n.v_near[1]);
     for (got, want) in row_b.errors.iter().zip(&row_n.errors) {
         assert!(

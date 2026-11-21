@@ -1911,6 +1911,7 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
     // and its first plan converts every leaf pair of the sphere's level 3.
     let base = default_builder(scenario)
         .near_v(VNear::CostModel)
+        .v_raised_price(VRaisedPrice::PerPair)
         .v_costs(Some(V_COSTS_NEON));
     let auto = base
         .clone()
@@ -2159,6 +2160,7 @@ fn check_v_raised(scenario: &Scenario, comm: &SimpleCommunicator) {
     let base = default_builder(scenario)
         .max_points_per_leaf(128)
         .near_v(VNear::CostModel)
+        .v_raised_price(VRaisedPrice::PerPair)
         .v_costs(Some(V_COSTS_NEON))
         .diagonal_costs(Some(DIAGONAL_COSTS_NEON))
         .m2l_plane_wave_min_degree(0);
@@ -3801,6 +3803,7 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_eq!(fmm.c_leaf(), DEFAULT_C_LEAF, "{name}");
     assert_eq!(fmm.near_v(), VNear::CostModel, "{name}");
     assert_eq!(fmm.near_wx(), WxNear::CostModel, "{name}");
+    assert_eq!(fmm.v_raised_price(), VRaisedPrice::PerBox, "{name}");
     check_build_timings(name, &defaults, &inputs, comm);
     let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
     if comm.rank() == 0 {
@@ -3821,6 +3824,7 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
         .max_points_per_leaf(points)
         .c_leaf(DEFAULT_C_LEAF)
         .near_v(VNear::CostModel)
+        .v_raised_price(VRaisedPrice::PerBox)
         .near_wx(WxNear::CostModel);
     let (_, output_named) = run(&named, &inputs, kind, comm);
     assert_same(&format!("{name}: named"), &output_named, &output, comm);
