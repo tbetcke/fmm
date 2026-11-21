@@ -16,6 +16,9 @@
 #   w1        W1 at kD = 100, 200, 500 at ε 10⁻³, 10⁻⁶, 10⁻⁷, 10⁻⁸, and kD = 1000 at 10⁻⁶: Rotation,
 #             then the defaults with `--diagonal off,auto` × `--v-after-plan off,taken,all`
 #   w3        W3 at N = 10⁶, kD = 200 and 500, the same ε and runs
+#   reverse   the defaults' runs of w1 and of W3 at kD = 200, 10⁻⁶ and 10⁻⁷, in the reverse order
+#             (`--diagonal auto,off --v-after-plan all,taken,off`), to separate a run's place in
+#             the launch from the setting's effect
 #   smoke     W1 at kD = 30, 10⁻⁷, the runs of w1 (a check of the script)
 # TIMEOUT per launch (default 3600 s), ONLY (a regular expression on the launch names),
 # DRY_RUN (print the launches only).
@@ -44,6 +47,7 @@ COMMON=(--near-wx cost --levels --threads "$cores" --evaluations 2
 # V rule after the plan.
 ROTATION=(--m2l rotation --near-v cost)
 DEFAULTS=(--m2l auto-pw --near-v cost --diagonal off,auto --v-after-plan off,taken,all)
+REVERSE=(--m2l auto-pw --near-v cost --diagonal auto,off --v-after-plan all,taken,off)
 
 # `launch <name> <arguments…>`: one launch of the example under the timeout.
 launch() {
@@ -105,12 +109,26 @@ w3() {
     done
 }
 
+reverse() {
+    local kd eps
+    for kd in 100 200 500; do
+        for eps in $EPS; do
+            launch "reverse-w1-$kd-$eps" --workload w1 --kd "$kd" --eps "$eps" "${REVERSE[@]}"
+        done
+    done
+    launch "reverse-w1-1000-1e-6" --workload w1 --kd 1000 --eps 1e-6 "${REVERSE[@]}"
+    for eps in 1e-6 1e-7; do
+        launch "reverse-w3-200-$eps" --workload w3:1000000 --kd 200 --eps "$eps" "${REVERSE[@]}"
+    done
+}
+
 for stage in "$@"; do
     case $stage in
     smoke) pair smoke --workload w1 --kd 30 --eps 1e-7 ;;
     errors) errors ;;
     w1) w1 ;;
     w3) w3 ;;
+    reverse) reverse ;;
     *)
         echo "ch4-3b2b-runs.sh: unknown stage $stage" >&2
         exit 2
