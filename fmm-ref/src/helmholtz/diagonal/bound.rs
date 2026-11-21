@@ -16,7 +16,9 @@ pub struct BoundConstants {
 }
 
 impl BoundConstants {
-    /// f64, T computed in extended precision and rounded once: C_T = 0.15, C₀ = 200.
+    /// f64, T computed in extended precision and rounded once: C_T = 0.15, C₀ = 200. C₀ is
+    /// confirmed at large degrees against the chain in double-double (Helmholtz CH4.3c1): at
+    /// E's floor the diagonal form errs at most 149 u up to p = 251.
     pub const F64: Self = Self {
         c_t: 0.15,
         c_0: 200.0,

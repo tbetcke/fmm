@@ -45,6 +45,8 @@ pub struct Grid<T> {
     /// cos φⱼ and sin φⱼ in double-double.
     cos_dd: Vec<Dd>,
     sin_dd: Vec<Dd>,
+    /// wᵢ 2π/N_φ in double-double.
+    weights_dd: Vec<Dd>,
     /// cos θᵢ rounded.
     nodes: Vec<T>,
     /// wᵢ 2π/N_φ rounded.
@@ -96,6 +98,7 @@ impl<T: RealScalar> Grid<T> {
             azimuths,
             nodes: u.iter().map(|&x| round(x)).collect(),
             weights: w.iter().map(|&x| round(x * dphi)).collect(),
+            weights_dd: w.iter().map(|&x| x * dphi).collect(),
             cos: cos_dd.iter().map(|&x| round(x)).collect(),
             sin: sin_dd.iter().map(|&x| round(x)).collect(),
             u,
@@ -139,6 +142,21 @@ impl<T: RealScalar> Grid<T> {
     /// The direction ŝ of sample (i, j), rounded to `T`.
     pub fn direction(&self, i: usize, j: usize) -> [T; 3] {
         self.direction_dd(i, j).map(|x| T::from_f64(x.to_f64()))
+    }
+
+    /// cos θᵢ and sin θᵢ of ring i in double-double.
+    pub(super) fn ring_dd(&self, i: usize) -> (Dd, Dd) {
+        (self.u[i], self.s[i])
+    }
+
+    /// The quadrature weight wᵢ 2π/N_φ of ring i in double-double.
+    pub(super) fn weight_dd(&self, i: usize) -> Dd {
+        self.weights_dd[i]
+    }
+
+    /// cos φⱼ and sin φⱼ for j < N_φ in double-double.
+    pub(super) fn azimuth_tables_dd(&self) -> (&[Dd], &[Dd]) {
+        (&self.cos_dd, &self.sin_dd)
     }
 
     /// The direction of sample (i, j) in double-double.

@@ -197,13 +197,29 @@ impl Series {
     }
 }
 
-/// T̂ at the samples of `grid`'s rings `rings` for wavenumber k and shift t, ring after ring.
+/// T̂ at the samples of `grid`'s rings `rings` for wavenumber k and shift t, ring after ring,
+/// each rounded once to `T` from [`sample_dd`]'s value.
 fn sample<T: RealScalar>(
     grid: &Grid<T>,
     k: Cdd,
     t: [f64; 3],
     rings: core::ops::Range<usize>,
 ) -> Vec<Complex<T>> {
+    sample_dd(grid, k, t, rings)
+        .into_iter()
+        .map(|acc| Complex::new(T::from_f64(acc.re.to_f64()), T::from_f64(acc.im.to_f64())))
+        .collect()
+}
+
+/// T̂ at the samples of `grid`'s rings `rings` for wavenumber k and shift t, ring after ring,
+/// in double-double (the values [`Transfer`] rounds, and the extended chain's,
+/// [`ExtendedM2l`](super::ExtendedM2l)).
+pub(super) fn sample_dd<T: RealScalar>(
+    grid: &Grid<T>,
+    k: Cdd,
+    t: [f64; 3],
+    rings: core::ops::Range<usize>,
+) -> Vec<Cdd> {
     let series = Series::new(k, t, 2 * grid.degree());
     let that = series.t_hat;
     let mut out = Vec::with_capacity(rings.len() * grid.azimuths());
@@ -211,11 +227,7 @@ fn sample<T: RealScalar>(
         for j in 0..grid.azimuths() {
             let s = grid.direction_dd(i, j);
             let mu = s[0] * that[0] + s[1] * that[1] + s[2] * that[2];
-            let acc = series.at(mu);
-            out.push(Complex::new(
-                T::from_f64(acc.re.to_f64()),
-                T::from_f64(acc.im.to_f64()),
-            ));
+            out.push(series.at(mu));
         }
     }
     out

@@ -57,7 +57,15 @@ Helmholtz CH4.2a: the ignored `m2l_at_the_degrees_of_kd_1000` in `tests/helmholt
 (review 2026-11-19, M11): `diagonal::m2l` at k a = 108 (p = 131) and 216 (p = 245) on three
 classes, against `rcr::m2l` within 2E, or else, at 108, no farther than max(2E, RCR's error)
 from the projection `direct::m2l`, and at 216 within a regression limit (5·10⁻¹³; no f64
-reference resolves E's floor at p = 245: docs/helmholtz/tasks/CH4.2a.md). In release.
+reference resolves E's floor at p = 245: docs/helmholtz/tasks/CH4.2a.md). In release. Since
+CH4.3c1 a class above 2E against RCR is read against `diagonal::ExtendedM2l` within 2E instead.
+Helmholtz CH4.3c1: `diagonal::{ExtendedM2l, ExtendedTransfer, ExtendedLocal}`, the chain of
+`diagonal::m2l` in double-double from the same f64 inputs, the reference that resolves E's floor
+(C₀ u) at large degrees; `Transfer`'s sampling split into `sample_dd` and its rounding, the
+samples bit for bit as before (`the_transfer_samples_as_before_the_split`, a hash taken on
+`main`). Tests: the identity in double-double (unit, and ignored at p = 251), the θ-factors
+against f64 at p = 300, `the_extended_chain_against_the_f64_chains` (CI);
+fmm-validate/results/helmholtz-ch4-3c1.md.
 Helmholtz CH4.2c1: `diagonal::AngleTable` (T̂ of a shift on a uniform grid in the angle ψ
 between ŝ and t̂, each value double-double rounded once, and each grid sample's position on it
 in double-double, S6's `angle`), the double-double parts of `nd_fmm_tables`' interpolated build;
