@@ -19,7 +19,7 @@
 #             box,pair --v-after-plan raised,off`), to separate a run's place in the launch
 #             from the setting's effect
 #   counts    the w1 and w3 cases under the defaults alone with `--v-raised pair,box` (the count's
-#             build time after it ran on the pool, 0c1ff8a… onwards; the plans are unchanged)
+#             build time after it ran on the pool, deec3e0 onwards; the plans are unchanged)
 #   smoke     W1 at kD = 30, 10⁻⁷, the runs of w1 (a check of the script)
 # TIMEOUT per launch (default 3600 s), ONLY (a regular expression on the launch names),
 # DRY_RUN (print the launches only).
