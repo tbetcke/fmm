@@ -254,3 +254,7 @@ V rule's waves crossover, not the waves' M2L. The same holds on every raised lea
 4. **Unraised levels with waves**: by the levels' own seconds the after-plan mean over-converts
    dense levels (§4; the evaluation is within its spread there); not adopted,
    no task. *Recommended: accept.*
+
+Signed off 2026-11-21 by the user on #245, "Q1-4 as recommended": 1, the explanation accepted,
+nothing changes; 2, the levels taken from the waves justified as they are, `VAfterPlan` stays
+opt-in; 3, the follow-up CH4.3b2d before CH4.3b2c, added to the roadmap; 4, not adopted, no task.

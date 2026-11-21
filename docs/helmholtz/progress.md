@@ -4143,7 +4143,10 @@ request, using this template:
   ranks at opt-level 1, after c315554; `helmholtz_fmm` one rank at opt-level 0 703.5 s at load 4–9,
   CH4.3b2a 646 s at load 2–7). Not run: `cargo deny` (no manifest), Laplace's benchmarks (no
   Laplace path), 8 ranks (no distributed code beyond the agreed second plan, run at 2 and 4).
-- Decisions: the report's questions 1–4, pending.
+- Decisions: the report's questions 1–4, signed off 2026-11-21 by the user on #245, "Q1-4 as
+  recommended": 1, the explanation as read, nothing changes; 2, the levels taken from the waves
+  justified as they are, `VAfterPlan` stays opt-in; 3, the follow-up CH4.3b2d before CH4.3b2c;
+  4, unraised levels with waves not adopted, no task.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
-- Follow-ups: CH4.3b2d (the waves' V crossover on raised levels, one plan; proposed, question 3),
+- Follow-ups: CH4.3b2d (the waves' V crossover on raised levels, one plan; added, question 3),
   in the roadmap before CH4.3b2c; CH4.3b2c's Also notes the run-order spread.

@@ -142,7 +142,7 @@ The report: fmm-validate/results/helmholtz-ch4-3b2b.md.
   within the spread, against a second plan as dear as the first: justified as it is (question 2).
 - The raised levels that keep their waves (§5, §6): the after-plan crossover converts their leaf
   pairs and gains 0.09–0.75 s per case in both orders, linearly in the pairs converted; the
-  Also's level is one of them. A one-plan rule is proposed as a follow-up (question 3).
+  Also's level is one of them. A one-plan rule is the follow-up CH4.3b2d (question 3).
 - Unraised dense levels with waves: the mean over-converts, +0.02–0.45 s (question 4).
 
 ## Pending runs
@@ -152,5 +152,7 @@ None. Kathleen job 653717 (node-c11a-021, 2026-11-21 00:29–01:36, `singlenode`
 `~/projects/fmm-archive/kathleen/runs/ch4-3b2b{,-reverse}/`.
 
 ## Open questions
-The report's §7, questions 1–4 (the explanation; the levels taken, as it is; the raised levels, a
-follow-up CH4.3b2d; unraised levels, no task).
+None. The report's §7, questions 1–4, signed off 2026-11-21 by the user on #245, "Q1-4 as
+recommended": 1, the explanation as read, nothing changes; 2, the levels taken from the waves
+justified as they are, `VAfterPlan` stays opt-in; 3, the follow-up CH4.3b2d before CH4.3b2c (in the
+roadmap); 4, unraised levels with waves not adopted, no task.

@@ -9,10 +9,10 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-21): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
-item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1 and CH4.3b2a. CH4.3b2b (the V rule after the plan;
-the defaults' errors at 10⁻⁶ are the V rule's plan, not the waves' M2L) waits for its sign-off: the
-levels taken from the waves as they are, and a proposed follow-up CH4.3b2d (the waves' V crossover
-on raised levels, one plan) before CH4.3b2c (the form by default); then CH4.3c–CH4.3e; CH4.2d off
+item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a and CH4.3b2b (signed off 2026-11-21: the
+defaults' errors at 10⁻⁶ are the V rule's plan, not the waves' M2L; the levels taken from the waves
+as they are, `VAfterPlan` opt-in). Next CH4.3b2d (the waves' V crossover on raised levels, one plan;
+added at CH4.3b2b), then CH4.3b2c (the form by default); then CH4.3c–CH4.3e; CH4.2d off
 the list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
 done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this
 file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
@@ -88,7 +88,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e, CH4.3b as CH4.3b1 and CH4.3b2a–d; split on 2026-11-20; CH4.3b2d proposed at CH4.3b2b, its question 3), CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e, CH4.3b as CH4.3b1 and CH4.3b2a–d; split on 2026-11-20; CH4.3b2d added at CH4.3b2b, its question 3), CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -787,9 +787,9 @@ task's full line is in its record or report and its progress entry
   Rotation's plan converts 1.6–9.2× as many pairs); `VAfterPlan` (opt-in) decides the crossovers
   again after the plan: on the levels taken from the waves within the spread (justified as it is),
   on raised levels with waves 0.09–0.75 s gained per case (the Also's level among them).
-  *Sign-off:* the report's questions 1–4 (pending).
+  *Sign-off:* the report's questions 1–4: signed off 2026-11-21 by the user on #245, "Q1-4 as recommended": 1, the explanation as read, nothing changes; 2, the levels taken from the waves justified as they are, `VAfterPlan` opt-in (a measurement tool and CH4.3b2d's trusted path); 3, the follow-up CH4.3b2d before CH4.3b2c; 4, unraised levels with waves not adopted, no task.
 - [ ] **CH4.3b2d The waves' V crossover on raised levels, in one plan.** *Done when:* (CH4.3b2b's
-  report §5–§7, question 3, pending sign-off) on a level with waves raised to p_w > p_l (ε < 10⁻⁶),
+  report §5–§7, question 3, signed off 2026-11-21) on a level with waves raised to p_w > p_l (ε < 10⁻⁶),
   the V near rule's crossover before the plan priced by the waves' cost per box at p_w (not the
   per-pair constant `VCosts::plane_wave`), one plan; against `VAfterPlan::AllLevels` on the raised
   levels as the trusted measure: pair evidence (per level, the conversions and the levels' M2L and
@@ -808,7 +808,7 @@ task's full line is in its record or report and its progress entry
   evaluation with every choice within 1.05× (the same waves level slower in the time rule's run):
   repeated, and spread separated from a placement effect of the form's buffers (CH4.3b2b's runs
   saw it too: same-plan runs of one launch up to 30 % apart, later runs slower; its report §1).
-  *Needs:* CH4.3b2a, CH4.3b2b, CH4.3b2d (proposed at CH4.3b2b, its question 3). *Machines:*
+  *Needs:* CH4.3b2a, CH4.3b2b, CH4.3b2d (added at CH4.3b2b, its question 3). *Machines:*
   Kathleen, locust. *Sign-off:* the default.
 - [ ] **CH4.3c The high-frequency degrees refit, and C₀ at large degrees.** *Done when:* (review
   2026-11-19, A8, M12) the refit of the high-frequency degrees searches downward at x ≥ 54
