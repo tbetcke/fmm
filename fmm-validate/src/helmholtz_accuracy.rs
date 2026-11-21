@@ -80,6 +80,9 @@
 //!   [`Case::v_after_plan`] (Helmholtz CH4.3b2b) whether the V rule's crossovers are decided
 //!   again after the plan; [`Row::v_crossovers`] the crossovers before and after it and
 //!   [`Row::replanned`] whether the plan was built again (the build part "replan").
+//!   [`Case::v_raised_price`] (Helmholtz CH4.3b2d) how the V rule prices a pair before the plan
+//!   on a level whose waves are raised; [`Row::raised_v_shapes`] the leaves and V entries it
+//!   counted there.
 
 use std::ops::Range;
 use std::thread;
@@ -92,8 +95,8 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DiagonalCosts, DiagonalCounts,
     DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
     HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, PlaneWaveTimes, RcrSplit, TransferBuild, VAfterPlan, VCosts, VNear, Wavenumber,
-    WxNear, diagonal_rule_classes,
+    PlaneWaveSplit, PlaneWaveTimes, RcrSplit, TransferBuild, VAfterPlan, VCosts, VNear,
+    VRaisedPrice, Wavenumber, WxNear, diagonal_rule_classes,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -229,6 +232,10 @@ pub struct Case {
     /// The near rules' costs (`HelmholtzFmmBuilder::v_costs`, Helmholtz CH4.3b2b; `None` in
     /// [`Case::new`], the machine class's), for tests whose plans must not depend on it.
     pub v_costs: Option<VCosts>,
+    /// How the V rule prices a pair before the plan on a level whose waves are raised
+    /// (`HelmholtzFmmBuilder::v_raised_price`, Helmholtz CH4.3b2d; `None` in [`Case::new`], the
+    /// library's).
+    pub v_raised_price: Option<VRaisedPrice>,
 }
 
 /// Time-rule costs under which the diagonal form beats every other M2L wherever a class passes
@@ -297,6 +304,7 @@ impl Case {
             diagonal_costs: None,
             v_after_plan: VAfterPlan::Off,
             v_costs: None,
+            v_raised_price: None,
         }
     }
 }
@@ -863,6 +871,13 @@ pub struct Row {
     /// Whether a crossover rose after the plan, so that the plan was built again
     /// (`HelmholtzFmm::replanned`).
     pub replanned: bool,
+    /// The V rule's price on raised levels as built (`HelmholtzFmm::v_raised_price`; Helmholtz
+    /// CH4.3b2d).
+    pub v_raised_price: VRaisedPrice,
+    /// Per level, the leaves with a V entry and their entries [leaves, pairs] as counted before
+    /// the plan, summed over the ranks (`HelmholtzFmm::raised_v_shapes`; on the raised levels
+    /// under `VRaisedPrice::PerBox`); empty where nothing was counted.
+    pub raised_v_shapes: Vec<[u64; 2]>,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -1127,6 +1142,9 @@ pub fn run_output<C: CommunicatorCollectives>(
         .diagonal_costs(case.diagonal_costs)
         .v_after_plan(case.v_after_plan)
         .v_costs(case.v_costs);
+    if let Some(price) = case.v_raised_price {
+        builder = builder.v_raised_price(price);
+    }
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
     }
@@ -1489,6 +1507,11 @@ pub fn run_output<C: CommunicatorCollectives>(
             before.iter().zip(after).map(|(&b, &a)| [b, a]).collect()
         },
         replanned: fmm.replanned(),
+        v_raised_price: fmm.v_raised_price(),
+        raised_v_shapes: fmm
+            .raised_v_shapes()
+            .map(|shapes| shapes.iter().map(|s| [s.leaves, s.pairs]).collect())
+            .unwrap_or_default(),
         errors,
         checksum,
     };
