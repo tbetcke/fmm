@@ -440,9 +440,9 @@ fn m2l_against_rcr_within_the_bound_at_large_degrees() {
 /// against the projection `direct::m2l` at k a = 108 and against a regression limit at 216,
 /// where no f64 reference resolved the floor.
 ///
-/// Release only, a few minutes on the M6.
+/// Release only, about 16 s on the M6.
 #[test]
-#[ignore = "large degrees: run in release by hand (a few minutes)"]
+#[ignore = "large degrees: run in release by hand"]
 fn m2l_at_the_degrees_of_kd_1000() {
     for (ka, p) in [(108.0, 131), (216.0, 245)] {
         let k = wavenumber(ka, 0.0);
@@ -508,7 +508,7 @@ fn against_extended(
 }
 
 /// CH4.3c1: the chain in double-double (`ExtendedM2l`) is the M2L. On the 34 classes at
-/// k a = 2.83 (p = 7), 8 (p 21 and, weakly damped, η = 0.1) and 16 (p 30; p from §3.5's
+/// k a = 2.83 (p = 7), 8 (p 27 and, weakly damped, η = 0.1) and 16 (p 36; p from §3.5's
 /// formula at 10⁻⁶), the f64 diagonal form against it within 2E, the bound's contract, and RCR
 /// against it within [`RCR_AGAINST_EXTENDED`]; RCR and the diagonal form, two algorithms, meet
 /// the same reference. On the nearest classes at k a = 8 the f64 diagonal form errs by up to
@@ -849,3 +849,33 @@ fn at_the_floor_against_the_projection() {
         assert!(diagonal <= e / THETA, "{o:?}: {diagonal:.2e} > 2E");
     }
 }
+
+/// CH4.3c1: the transfer function's samples bit for bit as on `main` before the sampling was
+/// split (`sample_dd`): an FNV-1a hash of the bits of `Transfer::new`'s samples, real and damped
+/// k, two shifts, taken on `main` (78a6f65).
+#[test]
+fn the_transfer_samples_as_before_the_split() {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for (k, to) in [
+        (C::new(9.0, 0.0), [2.0, 1.0, -1.0]),
+        (C::new(9.0, 0.9), [0.0, 0.0, 3.0]),
+        (C::new(40.0, 0.0), [3.0, -2.0, 1.0]),
+    ] {
+        let p = 14;
+        let grid = Grid::<f64>::new(p);
+        let level = Level::new(k, HALF);
+        let transfer = Transfer::new(&grid, &level, &source(), &Frame::new(to, HALF));
+        for z in transfer.samples() {
+            for b in [z.re.to_bits(), z.im.to_bits()] {
+                for byte in b.to_le_bytes() {
+                    h ^= u64::from(byte);
+                    h = h.wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+        }
+    }
+    assert_eq!(h, EXPECTED_TRANSFER_HASH);
+}
+
+/// The hash of [`the_transfer_samples_as_before_the_split`] on `main` at 78a6f65.
+const EXPECTED_TRANSFER_HASH: u64 = 0xf76c_1641_1bf1_0a59;

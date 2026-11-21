@@ -4150,3 +4150,29 @@ request, using this template:
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
 - Follow-ups: CH4.3b2d (the waves' V crossover on raised levels, one plan; added, question 3),
   in the roadmap before CH4.3b2c; CH4.3b2c's Also notes the run-order spread.
+
+## 2026-11-21: CH4.3c1 C₀ at large degrees, against a double-double reference
+- Done:
+  - CH4.3c split into CH4.3c1 (C₀) and CH4.3c2 (the degrees refit, Kathleen), by the size rule.
+  - `nd_fmm_ref::helmholtz::diagonal`: `ExtendedM2l`, `ExtendedTransfer`, `ExtendedLocal`, the
+    chain of `diagonal::m2l` in double-double from the same f64 inputs (θ-factors by a scaled
+    recursion, T before its rounding, the factor and sⁿ in double-double); `Transfer`'s sampling
+    split into `sample_dd` and its rounding (bit for bit); `Grid` keeps its weights in double-double.
+  - The floor readings of `the_bound_on_the_fmms_levels`, `against_rcr_at_large_degrees`,
+    `interpolated_at_large_degrees` (tables) and `m2l_at_the_degrees_of_kd_1000` (ref) now against
+    the double-double chain within 2E (before: the projection, max(2E, RCR's error), and a
+    regression limit at k a 216).
+  - Report `fmm-validate/results/helmholtz-ch4-3c1.md`; record `docs/helmholtz/tasks/CH4.3c1.md`.
+- Tests: ref's unit tests (S → F → R identity in double-double to 3.6·10⁻³¹; θ-factors against
+  f64 at p = 300; exact scaling), `the_extended_chain_against_the_f64_chains` (CI: the f64 diagonal
+  form within 0.57 E, RCR within 5.5·10⁻¹², bound 5·10⁻¹¹); the ignored study
+  `the_floor_against_the_extended_chain` (tables, release, 303 s on the M6).
+- Measurements (the M6, accuracy only): at E's floor the diagonal form errs 25–149 u over k a
+  27–216, p 36–251 (≤ 44 u at k a 54, p ≤ 76), all three f64 paths within 0.94 E; RCR 290–3,345 u
+  (1.3–9.4 E); the floor about 0.6 u per degree. The kD = 1000 classes 2.86 E and 5.84 E against RCR
+  are 0.12 E and 0.24 E against the reference. CH4.3a's finding at k a 1.69, η = 0.1 confirmed as the
+  form's own (2.9 E, E ≪ ε).
+- Checks: see the PR.
+- Decisions: questions for sign-off: 1, C₀ = 200 kept; 2, CH4.3c2 a *Need* of CH4.3b2c.
+- Laplace: not touched (ref's Helmholtz diagonal module, tests of `nd-fmm-tables`; no Laplace path).
+- Follow-ups: CH4.3c2 (added by the split, in the roadmap after CH4.3c1).

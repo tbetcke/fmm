@@ -53,8 +53,12 @@ Tests (`nd-fmm-ref`, CI):
   5.5·10⁻¹² (bound 5·10⁻¹¹). On the nearest classes at k a = 8 the f64 diagonal form errs by up to
   10⁴ (E up to 2.8·10⁵) while RCR stays within 5.5·10⁻¹² of the reference: two algorithms meet it,
   one of them where the f64 chain the reference mirrors fails by sixteen orders.
-- The transfer functions bit for bit as before (`rings_are_the_transfer_functions_rings`, the
-  tables' `the_samples_are_refs_transfer_functions`, `both_builds_in_parts_by_ring`).
+- `the_identity_in_double_double_at_p_251` (ignored, release): the identity at p = 251, the
+  study's largest degree, to 1.0·10⁻²⁹, so the reference's own rounding is far below the floor
+  it reads there.
+- The transfer functions bit for bit as on `main`: `the_transfer_samples_as_before_the_split`
+  asserts an FNV hash of `Transfer::new`'s samples (real and damped k) taken on `main` at
+  78a6f65; the ring and parts tests pass unchanged.
 
 ## 2. The floor at the FMM's degrees
 

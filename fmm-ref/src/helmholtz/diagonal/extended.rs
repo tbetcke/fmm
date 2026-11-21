@@ -481,6 +481,32 @@ mod tests {
         }
     }
 
+    /// As [`s2f_then_f2r_is_the_identity_in_double_double`] at the degree of level 2 at
+    /// kD = 1000 and 10⁻⁸ (p = 251), where CH4.3c1 reads the floor: the reference's own rounding
+    /// there, to 10⁻²⁶ of the largest coefficient (the θ-factors' scaled recursion near the
+    /// poles included). Measured 1.0·10⁻²⁹ on the M6. Release only.
+    #[test]
+    #[ignore = "a large degree: run in release by hand"]
+    fn the_identity_in_double_double_at_p_251() {
+        use nd_fmm_math::Complex;
+        let p = 251;
+        let grid = Grid::<f64>::new(p);
+        let level = Level::new(Complex::new(216.5 / 3f64.sqrt(), 0.0), 1.0);
+        let reference = ExtendedM2l::new(&grid, &level);
+        let len = Layout::new(p).len();
+        let m: Vec<Dd> = (0..2 * len)
+            .map(|i| Dd::from_f64(((i * 7 + 3) as f64).sin()))
+            .collect();
+        let local = reference.local(&reference.signature(&m));
+        let worst = m
+            .iter()
+            .zip(&local)
+            .map(|(&a, &b)| (b - a).to_f64().abs())
+            .fold(0.0f64, f64::max);
+        println!("p = {p}: {worst:e}");
+        assert!(worst < 1e-26, "{worst:e}");
+    }
+
     /// Exact scaling by powers of two, through the subnormal range to zero.
     #[test]
     fn scaling_by_powers_of_two() {

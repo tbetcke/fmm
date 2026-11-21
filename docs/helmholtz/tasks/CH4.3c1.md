@@ -143,7 +143,29 @@ stays, a decisions test if it moves.
   fast transforms), not ref's; both are measured.
 
 ## Pending runs
-None planned.
+None.
+
+## Results
+- C₀ = 200 confirmed (report §2): at E's floor the diagonal form errs 25–149 u over k a 27–216,
+  p 36–251, all three f64 paths (tables direct and interpolated, ref's) within 0.94 E; RCR
+  290–3,345 u. C₀ stays, so test 7 (decisions unchanged) is not needed and the FMM evidence is
+  CH4.3a's.
+- The reference (report §1): identity 3.6·10⁻³¹, θ-factors 8.4·10⁻¹⁶ against f64, f64 diagonal
+  within 0.57 E and RCR within 5.5·10⁻¹² of it at p ≤ 36.
+- The floor readings read again (report §3): every pair above 2E against RCR lies within 0.24 E
+  of the reference; CH4.3a's k a 1.69 finding confirmed as the form's own.
+- As built: three public types (`ExtendedM2l` with `transfer` and `apply`, `ExtendedTransfer`,
+  `ExtendedLocal` with `difference`) in place of one function `m2l_extended`, so that a class's
+  transfer function serves both placements; the scaled Legendre column and the power-of-two
+  scaling live in `extended.rs`, not `dd.rs`. Test 5 became the "ref" column of the tables' study
+  (one study, four f64 paths against one reference); the study's ε are 10⁻³ and 10⁻⁸ above
+  k a 100 (p moves little there) and 10⁻³, 10⁻⁶, 10⁻⁸ below.
+- The reference's own accuracy at the study's largest degree: the identity at p = 251 to
+  1.0·10⁻²⁹ (ignored unit test). The transfer samples bit for bit as on `main`: an FNV hash of
+  `Transfer::new`'s samples taken on `main` (78a6f65), asserted on the branch (self-review note:
+  the earlier tests compared two paths through the new code).
+- Test 2's "hi + lo against hi alone" was dropped: `ExtendedLocal::difference` forms the
+  difference in double-double, which the tests use, so a separate check adds nothing.
 
 ## Open questions
 - (For the PR) whether CH4.3c2 (the degrees refit) should be a *Need* of CH4.3b2c, so that the

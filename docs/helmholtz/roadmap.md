@@ -9,13 +9,14 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-21): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
-item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a and CH4.3b2b (signed off 2026-11-21: the
-defaults' errors at 10⁻⁶ are the V rule's plan, not the waves' M2L; the levels taken from the waves
-as they are, `VAfterPlan` opt-in). Next CH4.3b2d (the waves' V crossover on raised levels, one plan;
-added at CH4.3b2b), then CH4.3b2c (the form by default); then CH4.3c–CH4.3e; CH4.2d off
-the list; the FFT track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are
-done, and of H7, CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this
-file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
+item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a and CH4.3b2b. CH4.3b2d (the waves' V
+crossover on raised levels) is in progress; CH4.3c was split into CH4.3c1 and CH4.3c2, and CH4.3c1
+(C₀ confirmed at p ≥ 72 against a double-double reference) waits for its sign-off. Next CH4.3b2c
+(the form by default, after CH4.3b2d) and CH4.3c2 (the degrees refit; whether before CH4.3b2c is
+CH4.3c1's question 2), then CH4.3d and CH4.3e; CH4.2d off the list; the FFT track stays item 11.
+HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of
+this line until H6.G is in `progress.md` and in this file's history
+(`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
 ## How `/next-task` reads this file
@@ -813,11 +814,12 @@ task's full line is in its record or report and its progress entry
 - CH4.3c The high-frequency degrees refit, and C₀ at large degrees. Split on 2026-11-21 (by the
   size rule of `/next-task`: two independent studies, pairs on the M6 and a calibration on
   Kathleen) into CH4.3c1 and CH4.3c2.
-- [ ] **CH4.3c1 C₀ at large degrees, against a double-double reference.** *Done when:* (review
-  2026-11-19, M12) C₀ checked at p ≥ 72 against a double-double reference, or raised, with the
-  glibc margin (at p = 131–245 no f64 reference resolves the floor: CH4.2a's record, the
-  diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245, the
-  projection rounding more than both); pair evidence and FMM evidence, both. *Needs:* CH4.3a.
+- [x] **CH4.3c1 C₀ at large degrees, against a double-double reference.** Report:
+  `fmm-validate/results/helmholtz-ch4-3c1.md`; record `docs/helmholtz/tasks/CH4.3c1.md`. C₀ = 200
+  confirmed against the diagonal chain in double-double (`ExtendedM2l`): at E's floor the form
+  errs 25–149 u over k a 27–216, p 36–251, every class within 0.94 E, both builds; M12's excess
+  was the f64 references' rounding (RCR 290–3,345 u). FMM evidence CH4.3a's (no decision moves).
+  *Sign-off:* pending (#PR's questions 1–2).
 - [ ] **CH4.3c2 The high-frequency degrees refit.** *Done when:* (review 2026-11-19, A8) the
   refit of the high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of
   the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted in L (proposal §3.5; CH3.3's
