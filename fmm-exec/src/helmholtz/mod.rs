@@ -69,9 +69,10 @@ pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, O
 pub use fmm::{
     DEFAULT_C_LEAF, DEFAULT_DENSE_NODE_BUDGET, DEFAULT_PLANE_WAVE_NODE_BUDGET,
     DEFAULT_RCR_NODE_BUDGET, HelmholtzBuildTimings, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VAfterPlan, VCosts,
-    VLevelM2l, VNear, WX_COSTS_NEON, WX_COSTS_X86, WxCosts, WxNear, default_max_points_per_leaf,
-    v_after_plan_crossover, v_costs, v_crossover, wx_costs, wx_crossovers,
+    HelmholtzFmmError, LeafVShape, V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VAfterPlan,
+    VCosts, VLevelM2l, VNear, VRaisedPrice, WX_COSTS_NEON, WX_COSTS_X86, WxCosts, WxNear,
+    default_max_points_per_leaf, raised_crossover, v_after_plan_crossover, v_costs, v_crossover,
+    wx_costs, wx_crossovers,
 };
 pub use operator::{
     AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, DEFAULT_DIAGONAL_BUILD, DEFAULT_RCR_BUFFER,

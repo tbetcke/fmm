@@ -2,12 +2,15 @@
 //! M2L's thread time per pair over the P2P's per interaction, from each machine class's
 //! published constants; and the W and X rule's (Helmholtz CH4.0d3): `wx_crossovers` against
 //! its closed form and the report's values at p = 15; and the crossover after the plan
-//! (Helmholtz CH4.3b2b): `v_after_plan_crossover` against its closed form.
+//! (Helmholtz CH4.3b2b): `v_after_plan_crossover` against its closed form; and the raised
+//! levels' crossover before the plan (Helmholtz CH4.3b2d): `raised_crossover` against its
+//! closed form and against the after-plan crossover of the same counts.
 
 use nd_fmm_exec::helmholtz::{
     DIAGONAL_COSTS_NEON, DIAGONAL_COSTS_X86, DiagonalCosts, DiagonalShape, HelmholtzM2l,
-    V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VLevelM2l, WX_COSTS_NEON, WX_COSTS_X86,
-    v_after_plan_crossover, v_costs, v_crossover, wx_costs, wx_crossovers,
+    LeafVShape, V_COSTS_NEON, V_COSTS_X86, V_P2P_POTENTIAL_SHARE, VLevelM2l, WX_COSTS_NEON,
+    WX_COSTS_X86, raised_crossover, v_after_plan_crossover, v_costs, v_crossover, wx_costs,
+    wx_crossovers,
 };
 use nd_fmm_exec::operator::Isa;
 
@@ -131,4 +134,66 @@ fn the_crossover_after_the_plan_is_the_runs_time_over_the_p2ps() {
             );
         }
     }
+}
+
+/// Before the plan on a raised level (Helmholtz CH4.3b2d): the waves' cost per box with a V row
+/// at p_w times the leaves with a V entry over their entries, over the P2P's per interaction
+/// (without gradients over its potential share); a level without entries 0; equal to the
+/// after-plan crossover of a level that keeps its waves with the same boxes and pairs; on W1's
+/// sparse raised levels (a few pairs per leaf, CH4.3b2b's report §6: 79,211 at p_w = 32 on
+/// x86) far above the per-pair constant, on a dense level (189 pairs per leaf) at most a few
+/// times it.
+#[test]
+fn the_raised_crossover_is_the_waves_cost_per_box_over_the_pairs_per_leaf() {
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-12 * b;
+    for (v, d) in [
+        (V_COSTS_X86, DIAGONAL_COSTS_X86),
+        (V_COSTS_NEON, DIAGONAL_COSTS_NEON),
+    ] {
+        for p_w in [28usize, 32] {
+            let shape = |leaves, pairs| LeafVShape { leaves, pairs };
+            let at = |s, gradients| raised_crossover(&v, &d, p_w, s, gradients);
+            let per_box = DiagonalCosts::unit(d.plane_wave, p_w);
+            let sparse = shape(1_000, 16_000);
+            assert!(
+                close(at(sparse, true), per_box / 16.0 / v.p2p),
+                "p_w = {p_w}"
+            );
+            assert!(close(
+                at(sparse, false),
+                per_box / 16.0 / (v.p2p * V_P2P_POTENTIAL_SHARE)
+            ));
+            assert_eq!(at(shape(0, 0), true), 0.0);
+            // The after-plan crossover of the same boxes and pairs.
+            let mut class_pairs = [0u64; 34];
+            class_pairs[5] = 16_000;
+            let level = DiagonalShape {
+                targets: 1_000,
+                class_pairs,
+            };
+            assert!(close(
+                at(sparse, true),
+                v_after_plan_crossover(&v, &d, VLevelM2l::Waves, p_w, &level, true)
+            ));
+            let per_pair = v_crossover(&v, HelmholtzM2l::PlaneWave, p_w, true);
+            assert!(at(sparse, true) > 5.0 * per_pair, "p_w = {p_w}");
+            assert!(
+                at(shape(1_000, 189_000), true) < 3.0 * per_pair,
+                "p_w = {p_w}"
+            );
+        }
+    }
+    // CH4.3b2b's sparse level (W1 at kD = 200, level 5, p_w = 32, x86): 79,211 after the plan,
+    // at about 16.8 pairs per box.
+    let x86 = raised_crossover(
+        &V_COSTS_X86,
+        &DIAGONAL_COSTS_X86,
+        32,
+        LeafVShape {
+            leaves: 10_000,
+            pairs: 168_000,
+        },
+        true,
+    );
+    assert!((70_000.0..90_000.0).contains(&x86), "{x86}");
 }
