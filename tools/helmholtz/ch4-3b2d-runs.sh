@@ -18,6 +18,8 @@
 #   reverse   the w1 and w3 cases with every list reversed (`--diagonal auto,off --v-raised
 #             box,pair --v-after-plan raised,off`), to separate a run's place in the launch
 #             from the setting's effect
+#   counts    the w1 and w3 cases under the defaults alone with `--v-raised pair,box` (the count's
+#             build time after it ran on the pool, 0c1ff8a… onwards; the plans are unchanged)
 #   smoke     W1 at kD = 30, 10⁻⁷, the runs of w1 (a check of the script)
 # TIMEOUT per launch (default 3600 s), ONLY (a regular expression on the launch names),
 # DRY_RUN (print the launches only).
@@ -44,6 +46,7 @@ COMMON=(--near-wx cost --levels --threads "$cores" --evaluations 2
     --diagonal-build interpolated)
 RUNS=(--m2l auto-pw --near-v cost --diagonal off,auto --v-raised pair,box
     --v-after-plan off,raised)
+COUNTS=(--m2l auto-pw --near-v cost --v-raised pair,box)
 REVERSE=(--m2l auto-pw --near-v cost --diagonal auto,off --v-raised box,pair
     --v-after-plan raised,off)
 
@@ -84,6 +87,20 @@ w3() {
         done
     done
 }
+counts() {
+    local kd eps
+    for kd in 100 200 500; do
+        for eps in $EPS; do
+            launch "counts-w1-$kd-$eps" --workload w1 --kd "$kd" --eps "$eps" "${COUNTS[@]}"
+        done
+    done
+    for kd in 200 500; do
+        for eps in $EPS; do
+            launch "counts-w3-$kd-$eps" --workload w3:1000000 --kd "$kd" --eps "$eps" \
+                "${COUNTS[@]}"
+        done
+    done
+}
 reverse() {
     local kd eps
     for kd in 100 200 500; do
@@ -105,6 +122,7 @@ for stage in "$@"; do
     w1) w1 ;;
     w3) w3 ;;
     reverse) reverse ;;
+    counts) counts ;;
     *)
         echo "ch4-3b2d-runs.sh: unknown stage $stage" >&2
         exit 2

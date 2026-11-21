@@ -2308,7 +2308,14 @@ fn check_v_raised(scenario: &Scenario, comm: &SimpleCommunicator) {
             && errors.1 <= NEAR_ERROR_BOUND * errors_pair.1,
         "{what}: errors {errors:?} against PerPair's {errors_pair:?}"
     );
-    let (_, threaded) = run(&on.clone().threads(2), inputs, kind, comm);
+    // The counts on the pool (chunks of leaves) the serial counts.
+    let (fmm, threaded) = run(&on.clone().threads(2), inputs, kind, comm);
+    assert_eq!(
+        fmm.raised_v_shapes(),
+        Some(&shapes[..]),
+        "{what}, 2 threads: the counts"
+    );
+    drop(fmm);
     assert_same(&format!("{what}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&what, &on, inputs, kind, &output, comm);
 

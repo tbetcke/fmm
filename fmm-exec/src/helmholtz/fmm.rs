@@ -118,6 +118,7 @@ use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
 use nd_octree::octree::KeyType;
 use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, morton};
+use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use thiserror::Error;
 
@@ -1261,23 +1262,13 @@ impl HelmholtzFmmBuilder {
         // entries per leaf, agreed alike. The settings and the waves are every rank's, so
         // every rank takes part (constraints 2 and 9).
         let raised_v_shapes = if raised_levels.contains(&true) {
-            let parent = Cell::new(None);
-            let first = |pair: VPair| {
-                counts.as_ref().is_some_and(|counts| {
-                    v_group(
-                        pair,
-                        crossovers[morton::level(pair.target)],
-                        (octree.all_keys(), counts),
-                        &parent,
-                    )
-                })
-            };
             let local = leaf_v_shapes(
                 octree.all_keys(),
                 counts.as_ref(),
                 self.empty_boxes,
                 &raised_levels,
-                &first,
+                &crossovers,
+                pool.as_deref(),
             );
             let local: Vec<u64> = local.iter().flat_map(|s| [s.leaves, s.pairs]).collect();
             let mut summed = vec![0u64; local.len()];
@@ -1909,15 +1900,17 @@ pub fn v_after_plan_crossover(
 /// empty-box rule none for a t without target points, and none for a source box without
 /// source points; less the entries between two leaves that `first` converts (the V rule at
 /// the per-pair crossover), so the entries a plan of that rule leaves in t's row, and t
-/// counted only with one left. From keys and counts by key, so summed over the ranks it is
-/// the one-rank count. The candidates are found once per parent and filtered per child, in
-/// key order, as the plan offers its pairs (`first` may cache per parent).
+/// counted only with one left (`first`: [`v_group`] at the agreed per-pair `crossovers` on a
+/// level with waves, the plan's decision). From keys and counts by key, so summed over the
+/// ranks it is the one-rank count. The leaves in chunks on `pool` (serially without one),
+/// each chunk's candidates found once per parent and filtered per child.
 fn leaf_v_shapes(
     keys: &HashMap<MortonKey, KeyType>,
     counts: Option<&LeafCounts>,
     empty_boxes: bool,
     levels: &[bool],
-    first: &dyn Fn(VPair) -> bool,
+    crossovers: &[f64],
+    pool: Option<&ThreadPool>,
 ) -> Vec<LeafVShape> {
     let interior = |key: &MortonKey| {
         matches!(
@@ -1943,61 +1936,91 @@ fn leaf_v_shapes(
         })
         .map(|(key, _)| *key)
         .collect();
-    // By level, then key: a level's siblings come together, so each parent's candidates once.
+    // By level, then key: a level's siblings come together, so each parent's candidates once
+    // (but at a chunk's start).
     leaves.sort_unstable_by_key(|&key| (morton::level(key), key));
-    let mut shapes = vec![LeafVShape::default(); levels.len()];
-    let mut candidates: Vec<(MortonKey, [usize; 3])> = Vec::new();
-    let mut current = None;
-    for leaf in leaves {
-        let Some(parent) = morton::parent(leaf) else {
-            continue;
+    // One chunk of leaves: its own candidates and its own cache of `v_group`'s parent.
+    let chunk = |leaves: &[MortonKey]| -> Vec<LeafVShape> {
+        let mut shapes = vec![LeafVShape::default(); levels.len()];
+        let mut candidates: Vec<(MortonKey, [usize; 3])> = Vec::new();
+        let mut current = None;
+        let parent_cache = Cell::new(None);
+        // The V rule at the per-pair crossover, as the plan would decide the pair.
+        let first = |pair: VPair| {
+            counts.is_some_and(|counts| {
+                v_group(
+                    pair,
+                    crossovers[morton::level(pair.target)],
+                    (keys, counts),
+                    &parent_cache,
+                )
+            })
         };
-        if current != Some(parent) {
-            current = Some(parent);
-            candidates.clear();
-            for neighbour in morton::neighbours(parent)
-                .into_iter()
-                .filter(|&n| morton::is_valid(n) && interior(&n))
-            {
-                let Some(children) = morton::children(neighbour) else {
-                    continue;
-                };
-                candidates.extend(
-                    children
-                        .into_iter()
-                        .filter(|&c| has_sources(c))
-                        .map(|c| (c, morton::decode(c).1)),
-                );
+        for &leaf in leaves {
+            let Some(parent) = morton::parent(leaf) else {
+                continue;
+            };
+            if current != Some(parent) {
+                current = Some(parent);
+                candidates.clear();
+                for neighbour in morton::neighbours(parent)
+                    .into_iter()
+                    .filter(|&n| morton::is_valid(n) && interior(&n))
+                {
+                    let Some(children) = morton::children(neighbour) else {
+                        continue;
+                    };
+                    candidates.extend(
+                        children
+                            .into_iter()
+                            .filter(|&c| has_sources(c))
+                            .map(|c| (c, morton::decode(c).1)),
+                    );
+                }
+            }
+            if !has_targets(leaf) {
+                continue;
+            }
+            let (level, t) = morton::decode(leaf);
+            let targets = counts.and_then(|counts| counts.targets(leaf));
+            let pairs = candidates
+                .iter()
+                .filter(|(_, c)| (0..3).any(|i| c[i].abs_diff(t[i]) > 1))
+                .filter(|(source, _)| {
+                    // A pair between two leaves that the first rule converts leaves the row.
+                    let sources = counts.and_then(|counts| counts.sources(*source));
+                    match (is_leaf(source), sources, targets) {
+                        (true, Some(sources), Some(targets)) => !first(VPair {
+                            target: leaf,
+                            source: *source,
+                            sources,
+                            targets,
+                        }),
+                        _ => true,
+                    }
+                })
+                .count() as u64;
+            if pairs > 0 {
+                shapes[level].leaves += 1;
+                shapes[level].pairs += pairs;
             }
         }
-        if !has_targets(leaf) {
-            continue;
+        shapes
+    };
+    // Chunks of leaves on the pool: sums of integers, so the counts are the serial ones.
+    const CHUNK: usize = 1024;
+    let sum = |mut a: Vec<LeafVShape>, b: Vec<LeafVShape>| {
+        for (a, b) in a.iter_mut().zip(b) {
+            a.leaves += b.leaves;
+            a.pairs += b.pairs;
         }
-        let (level, t) = morton::decode(leaf);
-        let targets = counts.and_then(|counts| counts.targets(leaf));
-        let pairs = candidates
-            .iter()
-            .filter(|(_, c)| (0..3).any(|i| c[i].abs_diff(t[i]) > 1))
-            .filter(|(source, _)| {
-                // A pair between two leaves that the first rule converts leaves the row.
-                let sources = counts.and_then(|counts| counts.sources(*source));
-                match (is_leaf(source), sources, targets) {
-                    (true, Some(sources), Some(targets)) => !first(VPair {
-                        target: leaf,
-                        source: *source,
-                        sources,
-                        targets,
-                    }),
-                    _ => true,
-                }
-            })
-            .count() as u64;
-        if pairs > 0 {
-            shapes[level].leaves += 1;
-            shapes[level].pairs += pairs;
-        }
+        a
+    };
+    let zero = || vec![LeafVShape::default(); levels.len()];
+    match pool {
+        Some(pool) => pool.install(|| leaves.par_chunks(CHUNK).map(chunk).reduce(zero, sum)),
+        None => leaves.chunks(CHUNK).map(chunk).fold(zero(), sum),
     }
-    shapes
 }
 
 /// The crossover of n_s n_t before the plan on a level whose waves run at the raised degree
