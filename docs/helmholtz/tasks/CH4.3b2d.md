@@ -155,5 +155,5 @@ None. Kathleen jobs 653776 (node-c11b-025, the first count, cancelled after `w1`
 Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-3b2d{,-reverse,-counts,-first}/`.
 
 ## Open questions
-The report's §7, questions 1–3, for sign-off: 1, the acceptance as read; 2, `PerBox` the default
-(made so here); 3, `VAfterPlan` stays opt-in.
+None. The report's §7, questions 1–3, signed off 2026-11-21 by the user on #247, "All sign off questions as recommended": 1, the acceptance as read; 2, `PerBox` the default
+(made so here); 3, `VAfterPlan` stays opt-in, no task.

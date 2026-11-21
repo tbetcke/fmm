@@ -228,3 +228,6 @@ Both follow from one plan that the operator reads: the choices are made on the p
 3. **`VAfterPlan` stays opt-in** (with `RaisedLevels` added), a measurement tool: after the per-box
    plan a second plan converts at most 7,466 more pairs, within the spread. *Recommended: accept, no
    task.*
+
+Signed off 2026-11-21 by the user on #247, "All sign off questions as recommended": 1, the
+acceptance as read; 2, `VRaisedPrice::PerBox` the default; 3, `VAfterPlan` stays opt-in, no task.

@@ -9,9 +9,11 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-21): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
-item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a and CH4.3b2b; CH4.3b2d (the raised levels'
-V crossover priced per box before the plan, one plan, `PerBox` the default) is in review for
-sign-off. Next CH4.3b2c (the form by default); then CH4.3c–CH4.3e; CH4.2d off the list; the FFT
+item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a, CH4.3b2b, CH4.3b2d (signed off 2026-11-21:
+the raised levels' V crossover priced per box before the plan, one plan, `VRaisedPrice::PerBox` the
+default) and CH4.3c1 (C₀ = 200 confirmed at p ≥ 72 against a double-double reference); CH4.3c was
+split into CH4.3c1 and CH4.3c2. Next CH4.3c2 (the degrees refit), then CH4.3b2c (the form by
+default; it needs CH4.3c2 since CH4.3c1), then CH4.3d and CH4.3e; CH4.2d off the list; the FFT
 track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7,
 CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
@@ -87,7 +89,7 @@ the measured product leaves an FFT about 1–2 % of the run, so items 10 and 11 
    CH4.2's trusted path; split on 2026-11-19)
 9. CHA.11 The Helmholtz wave levels in one place (added on 2026-11-19 at the H1 gate, the
    user on #230: "CHA.11 + measure first (Recommended)"; review 2026-11-19, L1)
-10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e, CH4.3b as CH4.3b1 and CH4.3b2a–d; split on 2026-11-20; CH4.3b2d added at CH4.3b2b, its question 3), CH4.4, CH4.5 (CH4.1a first
+10. CH4.1 (CH4.1a, CH4.1b; split on 2026-11-19), CH4.2 (CH4.2a, CH4.2b1, CH4.2b2; split on 2026-11-19 and 2026-11-20), CH4.2c (CH4.2c1, CH4.2c2; added at CH4.2b2, its question 2, split on 2026-11-20), CH4.3 (CH4.3a–CH4.3e, CH4.3b as CH4.3b1 and CH4.3b2a–d; split on 2026-11-20; CH4.3b2d added at CH4.3b2b, its question 3; CH4.3c as CH4.3c1 and CH4.3c2, split on 2026-11-21), CH4.4, CH4.5 (CH4.1a first
     measures the product conversions against RCR and stops to ask before CH4.2 whether item 11
     moves ahead: review 2026-11-19, A5)
 11. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
@@ -793,10 +795,11 @@ task's full line is in its record or report and its progress entry
   per-pair price leaves, counted before the plan, one plan; the trusted measure's
   (`VAfterPlan::RaisedLevels`) output bit for bit on 36 of 40 runs (W1, W3 at 10⁻⁷, 10⁻⁸, both
   orders), the raised levels −0.12 to −0.98 s per case on W1, errors 0.58–1.00×; `PerBox` the default.
-  *Sign-off:* the report's questions 1–3 (the acceptance; `PerBox` the default; `VAfterPlan` opt-in).
+  *Sign-off:* the report's questions 1–3: signed off 2026-11-21 by the user on #247, "All sign off questions as recommended": 1, the acceptance as read; 2, `PerBox` the
+  default; 3, `VAfterPlan` stays opt-in, no task.
 - [ ] **CH4.3b2c The diagonal form by default.** *Done when:* W1 and W3 at 10⁻³–10⁻⁸ on Kathleen
   and locust, the defaults with `HelmholtzDiagonal::Auto` (as CH4.3b2a and CH4.3b2b leave it)
-  against the defaults (with CH4.3b2d's V price on raised levels as its sign-off leaves it):
+  against the defaults (with CH4.3b2d's `VRaisedPrice::PerBox`, the default since its sign-off):
   the errors within 1.1×, the evaluation and the build per level; the order
   between the waves, the form and RCR per level (D8 amended here if it moves); the whole-level
   fallback at 40 × 1 (W1 at kD = 1000, levels 2–3); `Auto` the default (`HelmholtzDiagonal`, `Off`
@@ -807,16 +810,24 @@ task's full line is in its record or report and its progress entry
   evaluation with every choice within 1.05× (the same waves level slower in the time rule's run):
   repeated, and spread separated from a placement effect of the form's buffers (CH4.3b2b's runs
   saw it too: same-plan runs of one launch up to 30 % apart, later runs slower; its report §1).
-  *Needs:* CH4.3b2a, CH4.3b2b, CH4.3b2d (added at CH4.3b2b, its question 3). *Machines:*
+  *Needs:* CH4.3b2a, CH4.3b2b, CH4.3b2d (added at CH4.3b2b, its question 3), CH4.3c2 (added at
+  CH4.3c1, its question 2: the form's default measured on the refitted degrees). *Machines:*
   Kathleen, locust. *Sign-off:* the default.
-- [ ] **CH4.3c The high-frequency degrees refit, and C₀ at large degrees.** *Done when:* (review
-  2026-11-19, A8, M12) the refit of the high-frequency degrees searches downward at x ≥ 54
-  (levels 2–4 carry 0.6–1.0 % of the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted
-  in L (proposal §3.5); C₀ checked at p ≥ 72 against a double-double reference, or raised, with
-  the glibc margin (at p = 131–245 no f64 reference resolves the floor: CH4.2a's record, the
-  diagonal form within 2.3·10⁻¹³, 5.8 E, of RCR on (3, 3, 3) at k a = 216, p = 245, the
-  projection rounding more than both); pair evidence and FMM evidence, both. *Needs:* CH4.3a.
-  *Machines:* Kathleen.
+- CH4.3c The high-frequency degrees refit, and C₀ at large degrees. Split on 2026-11-21 (by the
+  size rule of `/next-task`: two independent studies, pairs on the M6 and a calibration on
+  Kathleen) into CH4.3c1 and CH4.3c2.
+- [x] **CH4.3c1 C₀ at large degrees, against a double-double reference.** Report:
+  `fmm-validate/results/helmholtz-ch4-3c1.md`; record `docs/helmholtz/tasks/CH4.3c1.md`. C₀ = 200
+  confirmed against the diagonal chain in double-double (`ExtendedM2l`): at E's floor the form
+  errs 25–149 u over k a 27–216, p 36–251, every class within 0.94 E, both builds; M12's excess
+  was the f64 references' rounding (RCR 290–3,345 u). FMM evidence CH4.3a's (no decision moves).
+  *Sign-off:* 2026-11-21 on #246, the user: "Both questions as recommended.": C₀ = 200 kept;
+  CH4.3c2 a *Need* of CH4.3b2c.
+- [ ] **CH4.3c2 The high-frequency degrees refit.** *Done when:* (review 2026-11-19, A8) the
+  refit of the high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of
+  the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted in L (proposal §3.5; CH3.3's
+  report §6 names the branch x + (a L + b) x^{1/3}); pair evidence and FMM evidence, both; the
+  rule for sign-off. *Needs:* CH4.3a. *Machines:* Kathleen. *Sign-off:* the rule.
 - [ ] **CH4.3d The transfer function's length.** *Done when:* (S6 §6) whether a shorter
   transfer function (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, S6's
   report §6) earns a truncation analysis; (review 2026-11-12, M8) the excess-bandwidth length
