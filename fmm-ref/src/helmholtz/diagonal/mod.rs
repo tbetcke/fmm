@@ -65,7 +65,12 @@
 //! RCR's truncation plus 2E. Measured/E is at most 1.23 to k a = 32 and reaches 1.99 at
 //! k a = 54 on the farthest classes, where E is the floor C₀ u and the f64 RCR rounds more
 //! than the diagonal form: against the projection of [`direct::m2l`](super::direct::m2l)
-//! the diagonal form errs 1.8–2.9·10⁻¹⁴ and RCR 3.4–6.9·10⁻¹⁴ (E = 2.7·10⁻¹⁴). Complex k
+//! the diagonal form errs 1.8–2.9·10⁻¹⁴ and RCR 3.4–6.9·10⁻¹⁴ (E = 2.7·10⁻¹⁴).
+//! Against the same chain in double-double ([`ExtendedM2l`], Helmholtz CH4.3c1), which
+//! resolves the floor, the diagonal form errs 25–149 u at E's floor over k a 27–216 and
+//! p 36–251 (at most 44 u at k a 54, p ≤ 76), within C₀ u = 200 u, and RCR 290–3,345 u: the
+//! floor readings above are the f64 references' rounding
+//! (`fmm-validate/results/helmholtz-ch4-3c1.md`). Complex k
 //! beyond weak damping and Yukawa are not tested: the diagonal form serves the
 //! high-frequency levels of real and weakly damped k (proposal §3.6, "Regimes").
 //!

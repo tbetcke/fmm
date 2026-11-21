@@ -433,40 +433,31 @@ fn m2l_against_rcr_within_the_bound_at_large_degrees() {
 /// Review 2026-11-19, M11: the trusted path at the degrees H4 gates on, on the nearest class,
 /// a middle one and the farthest, k a = 108 (level 2 of W1 at kD = 500, p = 131, calibrated at
 /// 10⁻⁶) and 216 (level 2 at kD = 1000, p = 245; fmm-validate/results/helmholtz-ch4-1b.md).
-/// There E is near its floor C₀ u and the f64 references round about as much as the diagonal
-/// form (review 2026-11-19, M12; docs/helmholtz/tasks/CH4.2a.md). A class passes within 2E
-/// against RCR, or else:
-/// - at k a = 108, if the diagonal form lies no farther than max(2E, RCR's error) from a third
-///   path, the projection `direct::m2l` (measured: (3, 3, 3) 2.9 E against RCR, the diagonal
-///   form 6.3·10⁻¹⁴ from the projection and RCR 1.06·10⁻¹³);
-/// - at k a = 216, if it lies within [`REGRESSION_LIMIT`] of RCR: a limit, not a bound. The
-///   projection takes over 20 minutes per class at p = 245 and rounds more than either path
-///   there ((0, 0, 2): the diagonal form and RCR 4.2·10⁻¹⁴ apart, each 2.6·10⁻¹³ from it), so
-///   no f64 reference resolves the floor; measured against RCR 0.70, 1.29 and 5.84 E
-///   (2.3·10⁻¹³ on (3, 3, 3)). Whether C₀ holds at p ≥ 72 is CH4.3's, against a double-double
-///   reference (its Also, review M12).
+/// There E is near its floor C₀ u and f64 RCR rounds more than the diagonal form (review
+/// 2026-11-19, M12; docs/helmholtz/tasks/CH4.2a.md: against RCR 2.9 E on (3, 3, 3) at k a = 108
+/// and 5.84 E at 216), so a class above 2E against RCR is read against the chain in
+/// double-double (`ExtendedM2l`, Helmholtz CH4.3c1), within 2E. Before CH4.3c1 it was read
+/// against the projection `direct::m2l` at k a = 108 and against a regression limit at 216,
+/// where no f64 reference resolved the floor.
 ///
-/// Release only, about 5 minutes on the M6.
+/// Release only, a few minutes on the M6.
 #[test]
-#[ignore = "large degrees: run in release by hand (about 5 minutes)"]
+#[ignore = "large degrees: run in release by hand (a few minutes)"]
 fn m2l_at_the_degrees_of_kd_1000() {
     for (ka, p) in [(108.0, 131), (216.0, 245)] {
         let k = wavenumber(ka, 0.0);
         let level = Level::new(k, HALF);
         let grid = Grid::new(p);
+        let reference = ExtendedM2l::new(&grid, &level);
         let mut failures = Vec::new();
         for (n, o) in [[0, 0, 2], [1, 2, 2], [3, 3, 3]].into_iter().enumerate() {
             let case = Case::new(3000 + n as u64, o);
             let m = multipole(p, &level, &case);
-            let by_rcr = evaluate(p, &level, o, &rcr_local(p, &level, o, &m), &case.targets);
+            let rcr = rcr_local(p, &level, o, &m);
+            let by_rcr = evaluate(p, &level, o, &rcr, &case.targets);
             let transfer = Transfer::new(&grid, &level, &source(), &target(o));
-            let by_diagonal = evaluate(
-                p,
-                &level,
-                o,
-                &diagonal_local(&grid, &level, o, &transfer, &m),
-                &case.targets,
-            );
+            let diagonal = diagonal_local(&grid, &level, o, &transfer, &m);
+            let by_diagonal = evaluate(p, &level, o, &diagonal, &case.targets);
             let e = bound(k, distance(o), circumradius(), p, BoundConstants::F64);
             let measured = error(&by_diagonal, &by_rcr);
             println!(
@@ -477,32 +468,18 @@ fn m2l_at_the_degrees_of_kd_1000() {
             if measured <= e / THETA {
                 continue;
             }
-            if p == 131 {
-                let mut ws = Workspace::new(p);
-                let mut projected = vec![0.0; m.len()];
-                direct::m2l(
-                    p,
-                    p,
-                    &level,
-                    &source(),
-                    &target(o),
-                    &mut ws,
-                    &m,
-                    &mut projected,
-                );
-                let projected = evaluate(p, &level, o, &projected, &case.targets);
-                let (diagonal, rcr) = (error(&by_diagonal, &projected), error(&by_rcr, &projected));
-                println!(
-                    "  against the projection: the diagonal form {diagonal:.2e}, RCR {rcr:.2e}"
-                );
-                if diagonal > (e / THETA).max(rcr) {
-                    failures.push(format!(
-                        "{o:?}: {diagonal:.2e} from the projection > max(2E, RCR's {rcr:.2e})"
-                    ));
-                }
-            } else if measured > REGRESSION_LIMIT {
+            let exact = reference.apply(&reference.transfer(&grid, &source(), &target(o)), &m);
+            let by_extended = against_extended(p, &level, o, &exact, &diagonal, &case.targets);
+            let rcr_extended = against_extended(p, &level, o, &exact, &rcr, &case.targets);
+            println!(
+                "  against the chain in double-double: the diagonal form {by_extended:.2e} \
+                 ({:.2} E), RCR {rcr_extended:.2e}",
+                by_extended / e
+            );
+            if by_extended.is_nan() || by_extended > e / THETA {
                 failures.push(format!(
-                    "{o:?}: {measured:.2e} against RCR > the limit {REGRESSION_LIMIT:.0e}"
+                    "{o:?}: {by_extended:.2e} from the chain in double-double > 2E = {:.2e}",
+                    e / THETA
                 ));
             }
         }
@@ -603,11 +580,6 @@ fn the_extended_chain_against_the_f64_chains() {
 /// [`the_extended_chain_against_the_f64_chains`] allows: about 10× the largest measured on the
 /// M6, 5.5·10⁻¹² (class (0, 2, 0) at k a = 8, η = 0.1), for glibc's last bits.
 const RCR_AGAINST_EXTENDED: f64 = 5e-11;
-
-/// The largest difference against RCR that [`m2l_at_the_degrees_of_kd_1000`] allows at
-/// k a = 216 (p = 245) above 2E: about twice the largest measured, 2.3·10⁻¹³ (about 1,000 u);
-/// a regression limit, not a bound.
-const REGRESSION_LIMIT: f64 = 5e-13;
 
 /// All 316 offsets through their class's permuted transfer function, against RCR within
 /// 2E, at k a = 5 and p = 16.

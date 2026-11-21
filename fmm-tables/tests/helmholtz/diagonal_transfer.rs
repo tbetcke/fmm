@@ -12,15 +12,19 @@
 //!   errors of φ̃ and ∇φ̃ after `leaf::l2p` at points of the target box (uniform and its
 //!   corners), the multipole by `leaf::p2m` of complex charges in the source box (uniform and
 //!   its corners), within 2E = E/θ ("within E" as S6 fitted it, proposal §3.6). At E's floor
-//!   (C₀ u) at large p f64 RCR rounds more than the diagonal form, so the comparison measures
-//!   RCR's error too: where the measurement exceeds 2E, RCR's own error against a third path,
-//!   ref's projection `direct::m2l`, is added to the limit (CH1.3d1 saw 1.99 E at k a = 54,
-//!   p = 72; this task 2.4 E at p = 82 and 2.9 E at k a = 108, p = 131: the record).
+//!   (C₀ u) at large p f64 RCR rounds more than the diagonal form (CH1.3d1 saw 1.99 E at
+//!   k a = 54, p = 72; CH4.2a 2.4 E at p = 82 and 2.9 E at k a = 108, p = 131), so the
+//!   comparison measures RCR's error too: where the measurement exceeds 2E, the offset is read
+//!   against ref's chain in double-double, `ExtendedM2l`, within 2E (Helmholtz CH4.3c1; before
+//!   it, against ref's projection `direct::m2l`, which rounds as much as RCR).
 
 use nd_fmm_math::{Complex, RealScalar};
 use nd_fmm_ref::Frame;
-use nd_fmm_ref::helmholtz::diagonal::{BoundConstants, Grid, THETA, Transfer, class_of, classes};
-use nd_fmm_ref::helmholtz::{Level, Workspace, direct, leaf, rcr};
+use nd_fmm_ref::helmholtz::diagonal::{
+    self as ref_diagonal, BoundConstants, ExtendedLocal, ExtendedM2l, Grid, SignatureWorkspace,
+    THETA, Transfer, class_of, classes,
+};
+use nd_fmm_ref::helmholtz::{Level, Workspace, leaf, rcr};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offset_index, m2l_offsets};
 use nd_fmm_tables::helmholtz::diagonal::{
     CLASS_COUNT, Conversions, DiagonalM2l, LevelBuffers, TransferBuild, class_bounds,
@@ -415,20 +419,12 @@ fn rcr_local(p: usize, level: &Level<f64>, o: [i32; 3], m: &[f64]) -> Vec<f64> {
     local
 }
 
-/// ref's `direct::m2l`, the projection on a sphere (CH1.3c), a third path.
-fn projected_local(p: usize, level: &Level<f64>, o: [i32; 3], m: &[f64]) -> Vec<f64> {
-    let mut local = vec![0.0; m.len()];
-    direct::m2l(
-        p,
-        p,
-        level,
-        &frame([0; 3]),
-        &frame(o),
-        &mut Workspace::new(p),
-        m,
-        &mut local,
-    );
-    local
+/// ref's chain in double-double (`ExtendedM2l`, CH4.3c1) of offset o: the M2L without
+/// rounding, the reference that resolves E's floor.
+fn extended_local(p: usize, level: &Level<f64>, o: [i32; 3], m: &[f64]) -> ExtendedLocal {
+    let grid = Grid::<f64>::new(p);
+    let reference = ExtendedM2l::new(&grid, level);
+    reference.apply(&reference.transfer(&grid, &frame([0; 3]), &frame(o)), m)
 }
 
 /// Where the comparison with RCR is read at the floor of the bound.
@@ -437,9 +433,9 @@ enum Floor {
     /// Every offset against RCR within 2E: the acceptance.
     Strict,
     /// At large p, where f64 RCR rounds more than the diagonal form at E's floor: an offset
-    /// above 2E against RCR passes if the diagonal form is no farther than max(2E, RCR's error)
-    /// from a third path, ref's projection `direct::m2l`.
-    AgainstTheProjection,
+    /// above 2E against RCR passes if the diagonal form lies within 2E of ref's chain in
+    /// double-double (`ExtendedM2l`, CH4.3c1), the M2L without rounding.
+    AgainstTheExtendedChain,
 }
 
 /// What the tables' M2L is measured against.
@@ -536,22 +532,19 @@ fn against<T: RealScalar>(
             failures.push(format!("{o:?}: {measured:.2e} > 2E = {:.2e}", e / THETA));
             continue;
         }
-        let projected = evaluate(
-            p,
-            &level,
-            centre,
-            &projected_local(p, &level, o, &m),
-            &targets,
-        );
-        let (diagonal, rcr) = (error(&got, &projected), error(&reference, &projected));
+        let exact = extended_local(p, &level, o, &m);
+        let got_local = tables_local(&m2l, &conversions, d, &m);
+        let diagonal = against_extended(p, &level, centre, &exact, &got_local, &targets);
+        let rcr = against_extended(p, &level, centre, &exact, &reference_local, &targets);
         println!(
             "  {o:?} at the floor: against RCR {measured:.2e} > 2E = {:.2e}; against the \
-             projection the diagonal form {diagonal:.2e}, RCR {rcr:.2e}",
+             chain in double-double the diagonal form {diagonal:.2e}, RCR {rcr:.2e}",
             e / THETA
         );
-        if diagonal > (e / THETA).max(rcr) {
+        if diagonal.is_nan() || diagonal > e / THETA {
             failures.push(format!(
-                "{o:?}: {diagonal:.2e} from the projection > max(2E, RCR's {rcr:.2e})"
+                "{o:?}: {diagonal:.2e} from the chain in double-double > 2E = {:.2e}",
+                e / THETA
             ));
         }
     }
@@ -645,15 +638,15 @@ fn against_rcr_at_k_a_16() {
 /// at kD = 500 calibrated, and 82, the formula at 10⁻⁶) on the 34 classes, and 108 (p = 131,
 /// level 2) on the nearest, a middle and the farthest class. Here E is near its floor C₀ u
 /// on the far classes and f64 RCR rounds more than the diagonal form: an offset above 2E
-/// against RCR is read against the projection ([`Floor::AgainstTheProjection`]). Measured on
-/// the M6: 2.4 E against RCR on (2, 2, 2) at k a = 54, p = 82, and 3.7 E on (3, 3, 3) at
-/// k a = 108; the diagonal form nearer the projection than RCR on both
-/// (docs/helmholtz/tasks/CH4.2a.md). Release only (about 2 minutes).
+/// against RCR is read against ref's chain in double-double
+/// ([`Floor::AgainstTheExtendedChain`]). Measured on the M6: 2.4 E against RCR on (2, 2, 2) at
+/// k a = 54, p = 82, and 3.7 E on (3, 3, 3) at k a = 108 (docs/helmholtz/tasks/CH4.2a.md); the
+/// diagonal form within 2E of the chain in double-double on both (CH4.3c1). Release only.
 #[test]
 #[ignore = "large degrees: run in release by hand"]
 fn against_rcr_at_large_degrees() {
     let reps = representatives();
-    let floor = Floor::AgainstTheProjection;
+    let floor = Floor::AgainstTheExtendedChain;
     for (i, (ka, p)) in [(32.0, formula_degree(32.0, 1e-8)), (54.0, 72), (54.0, 82)]
         .into_iter()
         .enumerate()
@@ -828,7 +821,8 @@ fn both_builds_in_parts_by_ring() {
 
 /// The interpolated acceptance's larger cases (release only): against RCR within 2E at
 /// C_T = 0.23 at k a = 16 (the formula's p at 10⁻⁶) and at the large degrees of
-/// `against_rcr_at_large_degrees` (k a 32–108, read against the projection at E's floor), and
+/// `against_rcr_at_large_degrees` (k a 32–108, read against ref's chain in double-double at E's
+/// floor), and
 /// against the direct build at k a = 16 and 54 (p = 72).
 #[test]
 #[ignore = "larger degrees: run in release by hand"]
@@ -860,7 +854,7 @@ fn interpolated_at_large_degrees() {
             Floor::Strict,
         );
     }
-    let floor = Floor::AgainstTheProjection;
+    let floor = Floor::AgainstTheExtendedChain;
     for (i, (ka, p)) in [(32.0, formula_degree(32.0, 1e-8)), (54.0, 72), (54.0, 82)]
         .into_iter()
         .enumerate()
@@ -1189,7 +1183,7 @@ struct StudyRow {
     eps: f64,
     p: usize,
     /// The largest per-pair relative error over E (CH1.3d1's measure, `against`'s), with the
-    /// classes read against the projection at E's floor counted at their projection's error.
+    /// classes read against the chain in double-double at E's floor counted at that error.
     worst: f64,
     /// The largest input-relative error (over the undamped field) over E, and over E without
     /// the damping factor e^{Im(k)(|t| + 2a)}.
@@ -1258,21 +1252,25 @@ fn study_row(build: TransferBuild, ka: f64, eta: f64, eps: f64, seed: u64) -> St
             continue;
         }
         if measured > e / THETA {
-            // E's floor at large p: read against ref's projection, as `against` does.
-            let projected = evaluate(
-                p,
-                &level,
-                centre,
-                &projected_local(p, &level, o, &m),
-                &targets,
-            );
-            let (diagonal, rcr) = (error(&got, &projected), error(&reference, &projected));
-            if p >= 72 && diagonal <= (e / THETA).max(rcr) {
-                measured = diagonal.min(measured);
+            // E's floor at large p: read against ref's chain in double-double, as `against`
+            // does (CH4.3c1; CH4.3a read it against the projection).
+            let exact = extended_local(p, &level, o, &m);
+            let got_local = tables_local(&m2l, &conversions, d, &m);
+            let diagonal = against_extended(p, &level, centre, &exact, &got_local, &targets);
+            if p >= 72 && diagonal <= e / THETA {
+                measured = diagonal;
             } else {
+                let rcr = against_extended(
+                    p,
+                    &level,
+                    centre,
+                    &exact,
+                    &rcr_local(p, &level, o, &m),
+                    &targets,
+                );
                 row.failures.push(format!(
-                    "{o:?}: {measured:.2e} > 2E = {:.2e} (projection: {diagonal:.2e}, RCR \
-                     {rcr:.2e})",
+                    "{o:?}: {measured:.2e} > 2E = {:.2e} (against the chain in double-double: \
+                     {diagonal:.2e}, RCR {rcr:.2e})",
                     e / THETA
                 ));
             }
@@ -1300,7 +1298,8 @@ const S6_MIN_KA: f64 = 2.8;
 /// ε = 10⁻³, 10⁻⁴, 10⁻⁶ and 10⁻⁸, real k and η = Im k / Re k = 0.1 (every k a: W1 at
 /// kD = 500 + 50i) and 1 (k a ≤ 21.65, kD = 100 + 100i's levels; at k a = 108 and η = 1 the
 /// transfer functions leave f64's range), both builds of the transfer functions. Asserted: every
-/// class within 2E per pair against RCR (read against ref's projection at E's floor, p ≥ 72), for
+/// class within 2E per pair against RCR (read against ref's chain in double-double at E's floor,
+/// p ≥ 72; CH4.3a read it against the projection), for
 /// real k at every k a and for damped k in S6's calibrated range k a ≥ 2.8 (`S6_MIN_KA`; below it
 /// a damped class above 2E is printed as a finding: on the M6 the direct build's (0, 0, 3) at
 /// k a = 1.69, η = 0.1, 10⁻⁴, 2.9 E with E ≪ ε, CH4.3a's record); and the RCR chain against the
@@ -1402,6 +1401,237 @@ fn the_bound_on_the_fmms_levels() {
         if r.eta == 0.0 && r.eps == 1e-8 && r.units > 1e-4 {
             failures.push(format!("units at k a {:.2}: {:.2e}", r.ka, r.units));
         }
+    }
+    for f in &failures {
+        println!("FAIL {f}");
+    }
+    assert!(failures.is_empty(), "{} failures", failures.len());
+}
+
+// ---------------------------------------------------------------------------------------
+// CH4.3c1: C₀ at large degrees, against the double-double reference
+// (docs/helmholtz/tasks/CH4.3c1.md).
+
+/// An f64 local's error against the double-double reference: the field of their difference
+/// (formed in double-double) over the reference's, the larger of φ̃'s and ∇φ̃'s relative ℓ2
+/// norms at `x` (the measure of `error`, with the rounding of the evaluation relative to the
+/// difference).
+fn against_extended(
+    p: usize,
+    level: &Level<f64>,
+    centre: [f64; 3],
+    reference: &ExtendedLocal,
+    local: &[f64],
+    x: &[[f64; 3]],
+) -> f64 {
+    let delta = evaluate(p, level, centre, &reference.difference(local), x);
+    let exact = evaluate(p, level, centre, reference.hi(), x);
+    let norm = |v: &[C]| v.iter().map(|z| z.norm_sqr()).sum::<f64>().sqrt();
+    let flat = |f: &Field| f.gradient.iter().flatten().copied().collect::<Vec<_>>();
+    (norm(&delta.potential) / norm(&exact.potential)).max(norm(&flat(&delta)) / norm(&flat(&exact)))
+}
+
+/// The four f64 M2Ls of the floor study.
+const FLOOR_PATHS: [&str; 4] = ["tables, direct", "tables, interpolated", "ref", "RCR"];
+
+/// One (k a, ε) of the floor study: per path, the largest error over E, the largest in units
+/// of u over the classes at E's floor (E < 2 C₀ u, the Hankel term below C₀ u) and over all
+/// classes; and the failures (a diagonal path above 2E).
+struct FloorRow {
+    ka: f64,
+    eps: f64,
+    p: usize,
+    floor_classes: usize,
+    over_e: [f64; 4],
+    floor_u: [f64; 4],
+    all_u: [f64; 4],
+    failures: Vec<String>,
+}
+
+fn floor_row(ka: f64, eps: f64, placements: u64, threads: usize) -> FloorRow {
+    let p = calibrated_degree(ka, eps);
+    let k = k_hat(ka, 0.0);
+    let level = Level::new(k, 1.0);
+    let grid = Grid::<f64>::new(p);
+    let reference = ExtendedM2l::new(&grid, &level);
+    let builds = [TransferBuild::Direct, TransferBuild::Interpolated];
+    let m2ls = builds.map(|b| DiagonalM2l::<f64>::build_by(p, k, &ALL, b, &Serial));
+    let conversions = Conversions::<f64>::new(p, level.scale());
+    // E per path: the direct build's constants for the direct paths (tables and ref's), the
+    // interpolated build's for its own; RCR is read against the direct one.
+    let bounds = [
+        class_bounds(p, k, builds[0].bound_constants(false)),
+        class_bounds(p, k, builds[1].bound_constants(false)),
+    ];
+    let floor = BoundConstants::F64.c_0 * BoundConstants::F64.unit_roundoff;
+    let u = f64::EPSILON / 2.0;
+    let list = classes();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                loop {
+                    let c = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(class) = list.get(c) else { break };
+                    let o = class.representative;
+                    let (from, to) = (frame([0; 3]), frame(o));
+                    let exact_transfer = reference.transfer(&grid, &from, &to);
+                    let transfer = Transfer::new(&grid, &level, &from, &to);
+                    let d = m2l_offset_index(o.map(i64::from)).unwrap();
+                    for placement in 0..placements {
+                        let seed = 90_000 + 1_000 * c as u64 + 10 * placement;
+                        let m = multipole(p, &level, [0.0; 3], seed);
+                        let targets = in_box(to.centre, 24, seed + 3);
+                        let exact = reference.apply(&exact_transfer, &m);
+                        let mut by_ref = vec![0.0; m.len()];
+                        ref_diagonal::m2l(
+                            &grid,
+                            &level,
+                            &from,
+                            &to,
+                            &transfer,
+                            &mut SignatureWorkspace::new(p),
+                            &m,
+                            &mut by_ref,
+                        );
+                        let locals = [
+                            tables_local(&m2ls[0], &conversions, d, &m),
+                            tables_local(&m2ls[1], &conversions, d, &m),
+                            by_ref,
+                            rcr_local(p, &level, o, &m),
+                        ];
+                        let errors = locals
+                            .map(|l| against_extended(p, &level, to.centre, &exact, &l, &targets));
+                        results.lock().unwrap().push((c, placement, errors));
+                    }
+                }
+            });
+        }
+    });
+    let mut row = FloorRow {
+        ka,
+        eps,
+        p,
+        floor_classes: 0,
+        over_e: [0.0; 4],
+        floor_u: [0.0; 4],
+        all_u: [0.0; 4],
+        failures: Vec::new(),
+    };
+    let detail = std::env::var_os("FLOOR_DETAIL").is_some();
+    let mut results = results.into_inner().unwrap();
+    results.sort_by_key(|&(c, placement, _)| (c, placement));
+    for (c, placement, errors) in results {
+        let at_floor = bounds[0][c] < 2.0 * floor;
+        if placement == 0 && at_floor {
+            row.floor_classes += 1;
+        }
+        for (i, &err) in errors.iter().enumerate() {
+            let e = bounds[usize::from(i == 1)][c];
+            row.over_e[i] = row.over_e[i].max(err / e);
+            row.all_u[i] = row.all_u[i].max(err / u);
+            if at_floor {
+                row.floor_u[i] = row.floor_u[i].max(err / u);
+            }
+            if i < 3 && (err.is_nan() || err > e / THETA) {
+                row.failures.push(format!(
+                    "{}: {:?} placement {placement}: {err:.2e} > 2E = {:.2e}",
+                    FLOOR_PATHS[i],
+                    list[c].representative,
+                    e / THETA
+                ));
+            }
+        }
+        if detail {
+            println!(
+                "k a {ka:.2} p {p} {:?} placement {placement}: E {:.2e} ({:.0} u); in u {:.0}, \
+                 {:.0}, {:.0}, {:.0}",
+                list[c].representative,
+                bounds[0][c],
+                bounds[0][c] / u,
+                errors[0] / u,
+                errors[1] / u,
+                errors[2] / u,
+                errors[3] / u
+            );
+        }
+    }
+    row
+}
+
+/// CH4.3c1's pair evidence (docs/helmholtz/tasks/CH4.3c1.md; review 2026-11-19, M12): the
+/// diagonal form at E's floor C₀ u against the double-double reference (`ExtendedM2l`), at the
+/// (k a, p) of the FMM's levels with p ≥ 72 and below, so that the floor is read where the f64
+/// references (RCR, the projection) round more than the diagonal form. k a = kD √3 / 2^{l+1}:
+/// 216.5 and 108.3 (levels 2 and 3 at kD = 1000), 54.1 and 27.1 (levels 4 and 5), 43.3 (level 2
+/// at kD = 200); the calibrated p at ε = 10⁻³ and 10⁻⁸ (and 10⁻⁶ below k a 100), real k; the
+/// 34 classes, two placements each (`multipole`'s charges, `in_box`'s targets); four f64 paths:
+/// the tables' level call (CH4.1's conversions) with the direct and the interpolated build, ref's
+/// `diagonal::m2l`, and RCR. Asserted: every diagonal path within 2E on every class (the rule's
+/// contract; C₀ = 200 holds where the floor classes meet it). Printed per row: the largest
+/// error over E, and in units of u over the floor classes and over all. `FLOOR_DETAIL` prints
+/// every class, `FLOOR_KA` (a comma-separated list) restricts the k a. Release, one class per
+/// thread.
+#[test]
+#[ignore = "a study at large degrees: run in release by hand"]
+fn the_floor_against_the_extended_chain() {
+    let only: Option<Vec<f64>> = std::env::var("FLOOR_KA")
+        .ok()
+        .map(|v| v.split(',').map(|x| x.trim().parse().unwrap()).collect());
+    let mut cases = Vec::new();
+    for ka in [
+        216.5063509461097,
+        108.25317547305485,
+        54.126587736527426,
+        43.30127018922193,
+        27.063293868263713,
+    ] {
+        if only
+            .as_ref()
+            .is_some_and(|o| !o.iter().any(|&x| (x - ka).abs() < 0.01))
+        {
+            continue;
+        }
+        let eps: &[f64] = if ka > 100.0 {
+            &[1e-3, 1e-8]
+        } else {
+            &[1e-3, 1e-6, 1e-8]
+        };
+        for &e in eps {
+            cases.push((ka, e));
+        }
+    }
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    println!(
+        "| k a | ε | p | floor classes | over E: tables direct, interpolated, ref, RCR | at the \
+         floor, in u | all classes, in u |"
+    );
+    println!("| ---: | ---: | ---: | ---: | --- | --- | --- |");
+    let mut failures = Vec::new();
+    for (ka, eps) in cases {
+        let start = std::time::Instant::now();
+        let r = floor_row(ka, eps, 2, threads);
+        let f = |v: [f64; 4], digits: usize| v.map(|x| format!("{x:.digits$}")).join(", ");
+        println!(
+            "| {:.2} | {:.0e} | {} | {} | {} | {} | {} |",
+            r.ka,
+            r.eps,
+            r.p,
+            r.floor_classes,
+            f(r.over_e, 3),
+            f(r.floor_u, 0),
+            f(r.all_u, 0)
+        );
+        eprintln!(
+            "k a {ka:.2}, ε {eps:e}: {:.0} s",
+            start.elapsed().as_secs_f64()
+        );
+        failures.extend(
+            r.failures
+                .into_iter()
+                .map(|x| format!("k a {ka:.2}, ε {eps:e}: {x}")),
+        );
     }
     for f in &failures {
         println!("FAIL {f}");
