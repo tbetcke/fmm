@@ -1414,9 +1414,10 @@ impl HelmholtzFmmBuilder {
         };
         let replanned = raised.contains(&true);
         let plan = if replanned {
-            // The first plan goes before the second is built (constraint 7).
-            let index = plan.index().clone();
+            // The first plan goes before the second is built (constraint 7). Its index has the
+            // ghost leaves numbered, so the second plan takes a fresh index of the octree.
             drop(plan);
+            let index = BoxIndex::of_octree(&octree).map_err(FmmError::Plan)?;
             let after = after.as_deref().unwrap_or(&crossovers);
             let runs_waves: Vec<bool> = (0..crossovers.len())
                 .map(|l| operator.m2l_on(l) == HelmholtzM2l::PlaneWave)
