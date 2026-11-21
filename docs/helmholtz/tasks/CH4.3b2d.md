@@ -116,8 +116,44 @@ plan, and keeps the errors within 1.1×; then its adoption as the default.
 - Under the time rule the form may take a raised level after the plan; the plan then converts
   more pairs than the form's crossover would, still exact. The runs show the cost.
 
+## As built
+- `VRaisedPrice`, `HelmholtzFmmBuilder::v_raised_price`, `LeafVShape`, `leaf_v_shapes`,
+  `raised_crossover`, `HelmholtzFmm::{v_raised_price, raised_v_shapes}`, `VAfterPlan::RaisedLevels`
+  as planned, with three changes from the runs and the self-review:
+  - the count leaves out the pairs the per-pair crossover converts (43f29ad): the first count
+    (every V entry of a leaf, job 653776) put W1 at kD = 500's level 6 at 0.64–0.68× the trusted
+    crossover and left 11,160–39,839 pairs; the trusted measure prices the pairs its first plan
+    leaves, so the count now takes `v_group` at the agreed per-pair crossover, and equals the
+    per-pair plan's leaf rows (the test asserts it);
+  - the count runs in chunks of leaves on the pool (8c51ae0): serially it cost 4.5–5.0 s of build on
+    W3 at kD = 500 (job 653782), on the pool 0.35–0.37 s (job 653786);
+  - `PerBox` the builder's default (71598ff), for sign-off (question 2); the tests that need the
+    per-pair plan name `PerPair`.
+- Self-review (a subagent on the branch at 43f29ad): no bug; `RaisedLevels` was not tested where it
+  differs from `AllLevels`, now `check_v_after_plan` runs it on the unraised sphere (no second plan
+  where `TakenLevels` and `AllLevels` replan); the count sorted by level, then key. Not changed:
+  under `HelmholtzM2l::PlaneWave` with a named `PlaneWavePrecision::PerLevel` and a tolerance the
+  operator raises nothing while the builder predicts p_w (the per-pair crossover did the same before;
+  opt-in settings only); the empty-box rule's source and target checks are exercised on a tree whose
+  targets are its sources.
+
+## Results
+The report: fmm-validate/results/helmholtz-ch4-3b2d.md.
+- Pair evidence (§4): the per-box crossover is the trusted measure's on every raised level of leaves
+  (W1's levels 4–6, the Also's level among them), 0.1–10 % off on mixed levels; W3's dense level 4
+  converts nothing under any price.
+- FMM evidence (§5): the trusted measure's output bit for bit on 36 of 40 runs (the other 4: the time
+  rule decides on the one plan, §6); against the per-pair price the raised levels' M2L and P2P −0.12
+  to −0.98 s per case on W1 in both orders, the evaluation 0.53–0.98×, the errors 0.58–1.00×; W3 the
+  same plans, within the spread.
+- Build: no second plan (0.03–1.09 s on W1); the count 0.35–0.37 s at most (W3 at kD = 500).
+
 ## Pending runs
-(filled at step 6)
+None. Kathleen jobs 653776 (node-c11b-025, the first count, cancelled after `w1` and `w3`), 653782
+(node-c11b-008, 10:17–11:08, at 43f29ad: `smoke`, `w1`, `w3`, `reverse`, 21 launches, every one exit
+0) and 653786 (node-c11b-032, 11:14–11:22, at 8c51ae0: `counts`, 10 launches, every one exit 0).
+Raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-3b2d{,-reverse,-counts,-first}/`.
 
 ## Open questions
-(filled when they arise)
+The report's §7, questions 1–3, for sign-off: 1, the acceptance as read; 2, `PerBox` the default
+(made so here); 3, `VAfterPlan` stays opt-in.

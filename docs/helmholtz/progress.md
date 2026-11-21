@@ -4150,3 +4150,52 @@ request, using this template:
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
 - Follow-ups: CH4.3b2d (the waves' V crossover on raised levels, one plan; added, question 3),
   in the roadmap before CH4.3b2c; CH4.3b2c's Also notes the run-order spread.
+
+## 2026-11-21: CH4.3b2d The waves' V crossover on raised levels, in one plan
+- Done:
+  - `nd_fmm_exec::helmholtz`: `VRaisedPrice` (`PerPair`, CH4.0d2's per-pair constant; `PerBox`, the
+    default here, for sign-off), `HelmholtzFmmBuilder::v_raised_price`, `LeafVShape`,
+    `raised_crossover`, `HelmholtzFmm::{v_raised_price, raised_v_shapes}`; before the plan, on each
+    level whose waves are raised, `leaf_v_shapes` counts the local leaves' V entries that the per-pair
+    crossover leaves (the per-key rule, the empty-box rule, `v_group`), in chunks on the pool, one
+    all-reduce sum, and the crossover the higher of the per-pair one and the waves' cost per box over
+    those entries per leaf (one all-reduce min); one plan. `VAfterPlan::RaisedLevels` (the second plan
+    on the raised levels that keep their waves alone): the trusted measure.
+  - `nd-fmm-validate`: `Case::v_raised_price`, `Row::{v_raised_price, raised_v_shapes}`, the example's
+    `--v-raised pair|box` and `--v-after-plan raised`, the counts in "Near pairs".
+  - `tools/helmholtz/ch4-3b2d-runs.sh` (`smoke`, `w1`, `w3`, `reverse`, `counts`) and
+    `ch4-3b2d-tables.py`. Report `fmm-validate/results/helmholtz-ch4-3b2d.md`; record
+    `docs/helmholtz/tasks/CH4.3b2d.md`.
+  - The plan counted every V entry of a leaf; the first runs (job 653776) left 11,160–39,839 pairs
+    on W1 at kD = 500's level 6 that the trusted measure converts (its crossover 0.64–0.68× the
+    trusted one), so the count leaves out what the per-pair crossover converts. Serial, the count
+    cost 4.5–5.0 s on W3 at kD = 500 (job 653782); on the pool 0.35–0.37 s (job 653786).
+- Tests: `tests/helmholtz/v_crossover.rs` (the closed form, equal to the after-plan crossover of the
+  same boxes and pairs); `check_v_raised` in `tests/helmholtz_fmm.rs` (3,000 points on the sphere at
+  kD = 30, 10⁻⁷: the counts equal the per-pair plan's leaf rows, the crossovers on the raised levels
+  only, more conversions, one plan, errors within 1.1×, 2 threads with the same counts, the one-rank
+  FMM bit for bit, Rotation counting nothing, the trusted measure's crossover the per-box one);
+  `check_v_after_plan` `RaisedLevels` and `PerBox` on the unraised sphere; `check_defaults` the
+  default; the harness's W1 at kD = 30, 10⁻⁷ (the library's default `PerBox`).
+- Measurements (Kathleen job 653782, node-c11b-008, `singlenode`, 1 × 40; job 653786, node-c11b-032):
+  W1 at kD = 100, 200, 500 and W3 at N = 10⁶, kD = 200 and 500, at 10⁻⁷ and 10⁻⁸, the defaults and
+  the time rule, per pair, the trusted measure, per box, per box with a second plan, both orders:
+  - the per-box crossover the trusted measure's on every raised level of leaves (the Also's level
+    5 among them: all 58,551 pairs convert in one plan), 0.1–10 % off on mixed levels; W3's dense
+    level 4 converts nothing under any price (n_s n_t up to 256² against 6,743–9,348);
+  - the output the trusted measure's bit for bit on 36 of 40 runs; on the other 4 (the time rule at
+    10⁻⁷, W1 at kD = 200 and 500) the time rule decides on the one plan (kD = 500's level 6 then
+    runs RCR on its 7,466 pairs left, 0.08–0.15 s faster than the trusted measure's waves);
+  - against the per-pair price on W1 the raised levels' M2L and P2P −0.12 to −0.98 s per case, the
+    evaluation 0.53–0.98×, the errors 0.58–1.00×; W3 the same plans (its changes the spread);
+  - the second plan saved: 0.03–1.09 s of build on W1, 0.21 s on W3 at kD = 200;
+  - raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-3b2d{,-reverse,-counts,-first}/`.
+- Checks: see the PR (fmt; Clippy default, examples, workspace all-targets; rustdoc `-D warnings`;
+  the default and workspace tests at opt-level 1; the MPI list at 2 and 4 ranks at opt-level 1;
+  `helmholtz_fmm` one rank at opt-level 0 703 s at load 2.5–4 on the M6, before the self-review's
+  runs). Not run: `cargo deny` (no manifest), Laplace's benchmarks (no Laplace path), 8 ranks (no
+  distributed code beyond two all-reduces of the builder, run at 2 and 4).
+- Decisions: the report's questions 1–3 for sign-off (the acceptance as read; `PerBox` the default;
+  `VAfterPlan` stays opt-in).
+- Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
+- Follow-ups: CH4.3b2c measures the defaults with the V price as signed off here (its line).
