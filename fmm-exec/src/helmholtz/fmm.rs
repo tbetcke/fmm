@@ -318,10 +318,12 @@ pub enum VRaisedPrice {
     #[default]
     PerPair,
     /// The higher of that and the waves' cost per box with a V row at p_w
-    /// ([`DiagonalCosts::plane_wave`]) over the level's V entries per leaf with one
-    /// ([`raised_crossover`]), the leaves and entries counted from the octree's keys before
-    /// the plan ([`HelmholtzFmm::raised_v_shapes`]): on a sparse raised level the waves cost
-    /// per box, so a pair saves more than the constant says (CH4.3b2b's report §6).
+    /// ([`DiagonalCosts::plane_wave`]) over the V entries per leaf that the per-pair price
+    /// leaves ([`raised_crossover`]), the leaves and entries counted from the octree's keys
+    /// and the point counts before the plan ([`HelmholtzFmm::raised_v_shapes`]): on a sparse
+    /// raised level the waves cost per box, so a pair saves more than the constant says
+    /// (CH4.3b2b's report §6). Where the level's boxes with a V row are leaves this is the
+    /// crossover that [`VAfterPlan::RaisedLevels`] finds after a first plan, in one plan.
     PerBox,
 }
 
@@ -336,8 +338,10 @@ impl std::fmt::Display for VRaisedPrice {
 
 /// The V lists of a level's leaves as counted before the plan (Helmholtz CH4.3b2d,
 /// [`VRaisedPrice::PerBox`]), summed over the ranks: the leaves (each counted by the rank
-/// that holds it as a local leaf) with a V entry, and their V entries, by the per-key rule
-/// of `nd_fmm_plan::interaction_manager` less what the empty-box rule leaves out.
+/// that holds it as a local leaf) with a V entry left, and those entries, by the per-key
+/// rule of `nd_fmm_plan::interaction_manager` less what the empty-box rule leaves out and
+/// the pairs between leaves that the V rule converts at the per-pair crossover: the leaves'
+/// V rows of that rule's plan.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LeafVShape {
     /// The leaves with a V entry.
@@ -1209,9 +1213,8 @@ impl HelmholtzFmmBuilder {
             Some(epsilon) if waves[l] => plane_wave_degree(degrees[l], epsilon),
             _ => degrees[l],
         };
-        // Under `VRaisedPrice::PerBox` (Helmholtz CH4.3b2d), the leaves and V entries of each
-        // level whose waves are raised, counted from the keys and summed over the ranks
-        // (constraints 2 and 9); the settings are every rank's, so every rank takes part.
+        // The levels whose waves are raised (p_w above the degree given), and those that
+        // `VRaisedPrice::PerBox` prices per box (Helmholtz CH4.3b2d).
         let raised_waves: Vec<bool> = (0..degrees.len())
             .map(|l| waves[l] && wave_degree(l) > degrees[l])
             .collect();
@@ -1223,11 +1226,58 @@ impl HelmholtzFmmBuilder {
                     && self.v_raised_price == VRaisedPrice::PerBox
             })
             .collect();
+        // The crossover of each level: named, or the cost model's for the cheapest M2L the
+        // setting may run there (Auto's choice after the plan reads the pairs left, so a
+        // dearer one only means that more pairs would have paid).
+        let crossovers: Vec<f64> = (0..degrees.len())
+            .map(|l| match self.near_v {
+                VNear::Off => 0.0,
+                VNear::Crossover(n) => n,
+                VNear::CostModel => {
+                    let p = degrees[l];
+                    let (m2l, p) = if waves[l] {
+                        (HelmholtzM2l::PlaneWave, wave_degree(l))
+                    } else {
+                        let cheapest = match self.m2l {
+                            HelmholtzM2l::Auto if p <= max_degree as usize => HelmholtzM2l::Batched,
+                            HelmholtzM2l::Auto | HelmholtzM2l::PlaneWave => HelmholtzM2l::Rotation,
+                            m2l => m2l,
+                        };
+                        (cheapest, p)
+                    };
+                    v_crossover(&v_cost_model, m2l, p, self.gradients)
+                }
+            })
+            .collect();
+        // Agreed over the ranks (the smallest), so that ranks of different ISAs decide alike
+        // (constraints 2 and 9).
+        let mut agreed = vec![0.0f64; crossovers.len()];
+        comm.all_reduce_into(&crossovers[..], &mut agreed[..], SystemOperation::min());
+        let crossovers = agreed;
+        // Under `PerBox`, each raised level's leaves and V entries that the per-pair crossover
+        // leaves (its V rule's decision per (parent, source), as the plan would take it),
+        // counted from the keys and counts and summed over the ranks; then the level's
+        // crossover the higher of the per-pair one and the waves' cost per box over those
+        // entries per leaf, agreed alike. The settings and the waves are every rank's, so
+        // every rank takes part (constraints 2 and 9).
         let raised_v_shapes = if raised_levels.contains(&true) {
+            let parent = Cell::new(None);
+            let first = |pair: VPair| {
+                counts.as_ref().is_some_and(|counts| {
+                    v_group(
+                        pair,
+                        crossovers[morton::level(pair.target)],
+                        (octree.all_keys(), counts),
+                        &parent,
+                    )
+                })
+            };
             let local = leaf_v_shapes(
                 octree.all_keys(),
-                counts.as_ref().filter(|_| self.empty_boxes),
+                counts.as_ref(),
+                self.empty_boxes,
                 &raised_levels,
+                &first,
             );
             let local: Vec<u64> = local.iter().flat_map(|s| [s.leaves, s.pairs]).collect();
             let mut summed = vec![0u64; local.len()];
@@ -1246,55 +1296,29 @@ impl HelmholtzFmmBuilder {
         } else {
             None
         };
-        // The crossover of each level: named, or the cost model's for the cheapest M2L the
-        // setting may run there (Auto's choice after the plan reads the pairs left, so a
-        // dearer one only means that more pairs would have paid); on a raised level under
-        // `PerBox` the higher of that and the waves' cost per box over the pairs per leaf.
-        let crossovers: Vec<f64> = (0..degrees.len())
-            .map(|l| match self.near_v {
-                VNear::Off => 0.0,
-                VNear::Crossover(n) => n,
-                VNear::CostModel => {
-                    let p = degrees[l];
-                    let (m2l, p) = if waves[l] {
-                        let p_w = wave_degree(l);
-                        let per_pair = v_crossover(
-                            &v_cost_model,
-                            HelmholtzM2l::PlaneWave,
-                            p_w,
-                            self.gradients,
-                        );
-                        if let Some(shape) = raised_v_shapes
-                            .as_ref()
-                            .and_then(|s| s.get(l))
-                            .filter(|_| raised_levels[l])
-                        {
-                            return per_pair.max(raised_crossover(
+        let crossovers = match &raised_v_shapes {
+            Some(shapes) => {
+                let local: Vec<f64> = (0..crossovers.len())
+                    .map(|l| {
+                        if raised_levels[l] {
+                            crossovers[l].max(raised_crossover(
                                 &v_cost_model,
                                 &costs,
-                                p_w,
-                                *shape,
+                                wave_degree(l),
+                                shapes[l],
                                 self.gradients,
-                            ));
+                            ))
+                        } else {
+                            crossovers[l]
                         }
-                        (HelmholtzM2l::PlaneWave, p_w)
-                    } else {
-                        let cheapest = match self.m2l {
-                            HelmholtzM2l::Auto if p <= max_degree as usize => HelmholtzM2l::Batched,
-                            HelmholtzM2l::Auto | HelmholtzM2l::PlaneWave => HelmholtzM2l::Rotation,
-                            m2l => m2l,
-                        };
-                        (cheapest, p)
-                    };
-                    v_crossover(&v_cost_model, m2l, p, self.gradients)
-                }
-            })
-            .collect();
-        // Agreed over the ranks (the smallest), so that ranks of different ISAs decide alike
-        // (constraints 2 and 9).
-        let mut agreed = vec![0.0f64; crossovers.len()];
-        comm.all_reduce_into(&crossovers[..], &mut agreed[..], SystemOperation::min());
-        let crossovers = agreed;
+                    })
+                    .collect();
+                let mut agreed = vec![0.0f64; local.len()];
+                comm.all_reduce_into(&local[..], &mut agreed[..], SystemOperation::min());
+                agreed
+            }
+            None => crossovers,
+        };
         let all_keys = octree.all_keys();
         let parent = Cell::new(None);
         let v_pairs = |pair: VPair| {
@@ -1882,13 +1906,18 @@ pub fn v_after_plan_crossover(
 /// [`VRaisedPrice::PerBox`]), on this rank, as [`LeafVShape`] counts them: per local leaf t,
 /// its V entries by the per-key rule of `nd_fmm_plan::interaction_manager`, the children of
 /// the interior same-level neighbours of t's parent P that are not adjacent to t; under the
-/// empty-box rule (`counts` given) none for a t without target points, and none for a source
-/// box without source points. From keys and counts by key, so summed over the ranks it is the
-/// one-rank count. The candidates are found once per parent and filtered per child.
+/// empty-box rule none for a t without target points, and none for a source box without
+/// source points; less the entries between two leaves that `first` converts (the V rule at
+/// the per-pair crossover), so the entries a plan of that rule leaves in t's row, and t
+/// counted only with one left. From keys and counts by key, so summed over the ranks it is
+/// the one-rank count. The candidates are found once per parent and filtered per child, in
+/// key order, as the plan offers its pairs (`first` may cache per parent).
 fn leaf_v_shapes(
     keys: &HashMap<MortonKey, KeyType>,
     counts: Option<&LeafCounts>,
+    empty_boxes: bool,
     levels: &[bool],
+    first: &dyn Fn(VPair) -> bool,
 ) -> Vec<LeafVShape> {
     let interior = |key: &MortonKey| {
         matches!(
@@ -1896,10 +1925,17 @@ fn leaf_v_shapes(
             Some(KeyType::LocalInterior | KeyType::GhostInterior(_) | KeyType::Global)
         )
     };
+    let empty = counts.filter(|_| empty_boxes);
     let has_sources =
-        |key: MortonKey| counts.is_none_or(|counts| counts.box_sources(key).is_none_or(|n| n > 0));
+        |key: MortonKey| empty.is_none_or(|counts| counts.box_sources(key).is_none_or(|n| n > 0));
     let has_targets =
-        |key: MortonKey| counts.is_none_or(|counts| counts.box_targets(key).is_none_or(|n| n > 0));
+        |key: MortonKey| empty.is_none_or(|counts| counts.box_targets(key).is_none_or(|n| n > 0));
+    let is_leaf = |key: &MortonKey| {
+        matches!(
+            keys.get(key),
+            Some(KeyType::LocalLeaf | KeyType::GhostLeaf(_))
+        )
+    };
     let mut leaves: Vec<MortonKey> = keys
         .iter()
         .filter(|(key, kind)| {
@@ -1910,7 +1946,7 @@ fn leaf_v_shapes(
     // Key order: a level's siblings come together, so each parent's candidates once.
     leaves.sort_unstable();
     let mut shapes = vec![LeafVShape::default(); levels.len()];
-    let mut candidates: Vec<[usize; 3]> = Vec::new();
+    let mut candidates: Vec<(MortonKey, [usize; 3])> = Vec::new();
     let mut current = None;
     for leaf in leaves {
         let Some(parent) = morton::parent(leaf) else {
@@ -1930,7 +1966,7 @@ fn leaf_v_shapes(
                     children
                         .into_iter()
                         .filter(|&c| has_sources(c))
-                        .map(|c| morton::decode(c).1),
+                        .map(|c| (c, morton::decode(c).1)),
                 );
             }
         }
@@ -1938,9 +1974,23 @@ fn leaf_v_shapes(
             continue;
         }
         let (level, t) = morton::decode(leaf);
+        let targets = counts.and_then(|counts| counts.targets(leaf));
         let pairs = candidates
             .iter()
-            .filter(|c| (0..3).any(|i| c[i].abs_diff(t[i]) > 1))
+            .filter(|(_, c)| (0..3).any(|i| c[i].abs_diff(t[i]) > 1))
+            .filter(|(source, _)| {
+                // A pair between two leaves that the first rule converts leaves the row.
+                let sources = counts.and_then(|counts| counts.sources(*source));
+                match (is_leaf(source), sources, targets) {
+                    (true, Some(sources), Some(targets)) => !first(VPair {
+                        target: leaf,
+                        source: *source,
+                        sources,
+                        targets,
+                    }),
+                    _ => true,
+                }
+            })
             .count() as u64;
         if pairs > 0 {
             shapes[level].leaves += 1;
@@ -2469,8 +2519,8 @@ where
     }
 
     /// The leaves and V entries of each level as counted before the plan under
-    /// [`VRaisedPrice::PerBox`], summed over the ranks: on the levels whose waves run at a
-    /// raised degree, zero on the others; `None` where nothing was counted (another price,
+    /// [`VRaisedPrice::PerBox`] (those the per-pair crossover leaves; [`LeafVShape`]), summed
+    /// over the ranks: on the levels whose waves run at a raised degree, zero on the others; `None` where nothing was counted (another price,
     /// another [`VNear`], no raised level).
     pub fn raised_v_shapes(&self) -> Option<&[LeafVShape]> {
         self.raised_v_shapes.as_deref()

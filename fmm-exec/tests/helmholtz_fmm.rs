@@ -2099,7 +2099,8 @@ fn raised_v_scenario() -> Scenario {
 /// Auto with waves from degree 0, the empty-box rule and NEON's V and time-rule costs named (so
 /// that the plans are the same on every machine class):
 /// - the counts before the plan against the plan: the computed local leaves with a V row and
-///   their entries on each raised level of the plan with the V rule off, summed over the ranks;
+///   their entries on each raised level of `PerPair`'s plan (what the per-pair crossover
+///   leaves), summed over the ranks;
 /// - `PerBox` against `PerPair`: the M2L per level unchanged; the crossovers the higher of the
 ///   per-pair one and `raised_crossover` of the counts exactly on the raised levels with entries,
 ///   unchanged elsewhere, raised on some level; V pairs per level at most and conversions at
@@ -2174,12 +2175,9 @@ fn check_v_raised(scenario: &Scenario, comm: &SimpleCommunicator) {
         .collect();
     let converted_pair = sum(fmm_pair.plan().near_pairs().v_converted as u64);
     let crossovers_pair = fmm_pair.v_crossovers().to_vec();
-    drop(fmm_pair);
-    let errors_pair = errors(scenario, inputs, &output_pair, 0, comm);
-
-    // The counts against the plan's own V lists, with the V rule off (the same tree).
-    let (fmm_off, _) = run(&base.clone().near_v(VNear::Off), inputs, kind, comm);
-    let plan = fmm_off.plan();
+    // The counts against the per-pair plan's own V rows: per level its computed local leaves
+    // with a V entry left, and those entries.
+    let plan = fmm_pair.plan();
     let index = plan.index();
     let counted: Vec<LeafVShape> = (0..nlevels)
         .map(|l| {
@@ -2195,7 +2193,8 @@ fn check_v_raised(scenario: &Scenario, comm: &SimpleCommunicator) {
             }
         })
         .collect();
-    drop(fmm_off);
+    drop(fmm_pair);
+    let errors_pair = errors(scenario, inputs, &output_pair, 0, comm);
 
     let on = base.clone().v_raised_price(VRaisedPrice::PerBox);
     let (fmm, output) = run(&on, inputs, kind, comm);
@@ -2296,12 +2295,23 @@ fn check_v_raised(scenario: &Scenario, comm: &SimpleCommunicator) {
         .map(|(a, p)| a > p)
         .collect();
     // A raised level rises where its first plan kept a V pair between leaves: on this tree
-    // every raised level with entries (the per-pair constant converts only a few).
+    // every raised level with entries left.
     assert_eq!(
         rose, leaf_pairs_named,
         "{what}: {crossovers_pair:?} → {after:?}"
     );
     assert!(fmm.replanned(), "{what}: no second plan");
+    // The per-box price before the plan counts what the per-pair plan leaves, so where a
+    // raised level's boxes with a V row are leaves (on this tree), it is the trusted measure's
+    // crossover after the plan.
+    for l in (0..nlevels).filter(|&l| leaf_pairs_named[l]) {
+        assert!(
+            (after[l] - crossovers[l]).abs() <= 1e-9 * after[l],
+            "{what}: level {l}: after the plan {} against {} per box before it",
+            after[l],
+            crossovers[l]
+        );
+    }
     drop(fmm);
     if comm.rank() == 0 {
         println!("{what}: crossovers {crossovers_pair:.0?} → {after:.0?}");
