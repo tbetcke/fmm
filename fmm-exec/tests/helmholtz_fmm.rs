@@ -145,6 +145,7 @@ use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, select};
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_octree::PhysicalBox;
+use nd_octree::octree::KeyType;
 
 type C = Complex<f64>;
 
@@ -1891,7 +1892,7 @@ const DEARER_FORM: DiagonalCosts = DiagonalCosts {
 /// [`DEAR_FORM_PAIR`] (the form takes levels with waves) under `TakenLevels` and `AllLevels`,
 /// and at [`DEARER_FORM`] (the waves kept) under `AllLevels`: the M2L per level the setting
 /// off's; the crossovers after the plan at least those before, above them exactly on the levels
-/// the setting names that have V pairs (the levels taken, and under `AllLevels` those that keep
+/// the setting names whose first plan holds V pairs between leaves (the levels taken, and under `AllLevels` those that keep
 /// their waves), a second plan exactly then; the V pairs of every level at most, the converted V
 /// pairs and the near interactions at least the setting off's; the errors against the direct sum
 /// within [`NEAR_ERROR_BOUND`] of the setting off's; 2 threads and on P ranks the one-rank FMM
@@ -1954,10 +1955,22 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
         let converted_off = sum(fmm_off.plan().near_pairs().v_converted as u64);
         let interactions_off = sum(fmm_off.near_interactions().iter().sum());
         let planned = fmm_off.v_crossovers().to_vec();
-        let shapes: Vec<u64> = op
-            .diagonal_shapes()
-            .map(|s| s.iter().map(|s| s.pairs()).collect())
-            .unwrap_or_default();
+        // The V pairs between two leaves per level, over every rank: only those can convert.
+        let plan = fmm_off.plan();
+        let index = plan.index();
+        let leaf = |l: usize, i: usize| {
+            matches!(index.kind(l, i), KeyType::LocalLeaf | KeyType::GhostLeaf(_))
+        };
+        let leaf_pairs: Vec<u64> = (0..nlevels)
+            .map(|l| {
+                let v = plan.level(l).v();
+                let local = (0..v.nrows())
+                    .filter(|&t| plan.computes(l, t) && leaf(l, t))
+                    .map(|t| v.row(t).0.iter().filter(|&&s| leaf(l, s as usize)).count())
+                    .sum::<usize>();
+                sum(local as u64)
+            })
+            .collect();
         drop(fmm_off);
         let errors_off = errors(scenario, inputs, &output_off, 0, comm);
 
@@ -1979,12 +1992,12 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
             .unwrap_or_else(|| panic!("{what}: no crossovers after the plan"))
             .to_vec();
         // The levels the setting names: taken from the waves, and under `AllLevels` those that
-        // keep them; a level without V pairs has nothing to price.
+        // keep them; a level without V pairs between leaves has nothing more to convert.
         let named: Vec<bool> = (0..nlevels)
             .map(|l| {
                 let (m2l, _, taken) = &m2l[l];
                 let keeps = choice == VAfterPlan::AllLevels && *m2l == HelmholtzM2l::PlaneWave;
-                (*taken || keeps) && shapes.get(l).is_some_and(|&p| p > 0)
+                (*taken || keeps) && leaf_pairs[l] > 0
             })
             .collect();
         let raised: Vec<bool> = after.iter().zip(&planned).map(|(a, p)| a > p).collect();

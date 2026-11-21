@@ -6,6 +6,7 @@ docs/helmholtz/tasks/CH4.3b2b.md), from the launches of `tools/helmholtz/ch4-3b2
     python3 tools/helmholtz/ch4-3b2b-tables.py errors <dir>
     python3 tools/helmholtz/ch4-3b2b-tables.py runs <dir>
     python3 tools/helmholtz/ch4-3b2b-tables.py levels <dir>
+    python3 tools/helmholtz/ch4-3b2b-tables.py summary <dir> [<dir> …]
 
 `errors` reads the `errors-*` launches (Rotation and the defaults, each with the V rule off and of
 the cost model): per case the errors (φ, ∇φ) of each, the defaults' over Rotation's with the rule
@@ -16,7 +17,10 @@ built again. `levels` prints per level whose crossover rose after the plan, each
 rule after the plan against the same run without it: the crossovers, the V pairs, the near
 interactions, the M2L's and the P2P's seconds before and after, their change, and the change the
 level's own mean costs predict (the M2L's seconds per pair and the P2P's per interaction of the
-run without it: the after-plan rule's assumption). No timing is asserted; the numbers go into
+run without it: the after-plan rule's assumption). `summary` prints per case and run with the V
+rule after the plan (each directory's launches, `reverse-` ones in the reverse order) the raised
+levels' measured change summed, the predicted change, the evaluation's change, the second plan's
+seconds and the errors over the run without it. No timing is asserted; the numbers go into
 fmm-validate/results/helmholtz-ch4-3b2b.md.
 """
 
@@ -188,6 +192,57 @@ def all_runs(where):
             )
 
 
+def level_rows(where):
+    """Per case, run and raised level: (case, name, level, b, a, predicted, Δ evaluate,
+    on, off)."""
+    for case, paths in cases(where, "").items():
+        r = runs(paths)
+        for name in ORDER:
+            if not (name.endswith("+all") or name.endswith("+taken")) or name not in r:
+                continue
+            off = r.get(name.rsplit("+", 1)[0])
+            if not off:
+                continue
+            on = r[name]
+            ev = float(on["near"]["evaluate s"]) - float(off["near"]["evaluate s"])
+            p2p_rate = sum(e.get("p2p", 0.0) for e in off["levels"].values()) / max(
+                1, sum(e.get("interactions", 0) for e in off["levels"].values())
+            )
+            rows = []
+            for level, a in sorted(on.get("levels", {}).items()):
+                if not (a.get("after") and a.get("before") is not None) or a["after"] <= a["before"]:
+                    continue
+                b = off["levels"].get(level, {})
+                per_pair = b.get("m2l", 0.0) / b["pairs"] if b.get("pairs") else 0.0
+                predicted = (a.get("pairs", 0) - b.get("pairs", 0)) * per_pair + (
+                    a.get("interactions", 0) - b.get("interactions", 0)
+                ) * p2p_rate
+                rows.append((level, b, a, predicted))
+            yield case, name, rows, ev, on, off
+
+
+def summary(wheres):
+    print(
+        "| case | run | raised levels | Δ M2L + P2P s | predicted s | Δ evaluate s | evaluate s "
+        "(without) | replan s | φ ÷ without | ∇φ ÷ without |"
+    )
+    print("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    for where in wheres:
+        for case, name, rows, ev, on, off in level_rows(where):
+            measured = sum(
+                a.get("m2l", 0.0) + a.get("p2p", 0.0) - b.get("m2l", 0.0) - b.get("p2p", 0.0)
+                for _, b, a, _ in rows
+            )
+            predicted = sum(p for *_, p in rows)
+            ratio = lambda k: number(on["main"][k]) / number(off["main"][k]) if number(off["main"][k]) else float("nan")
+            print(
+                f"| {case} | {name} | {','.join(str(l) for l, *_ in rows) or '–'} | "
+                f"{measured:+.4f} | {predicted:+.4f} | {ev:+.4f} | "
+                f"{float(off['near']['evaluate s']):.4f} | {on.get('build', {}).get('replan s', '–')} | "
+                f"{ratio('φ'):.3f} | {ratio('∇φ'):.3f} |"
+            )
+
+
 def levels(where):
     print(
         "| case | run | level | p | ran (without) | crossover | V pairs | near interactions | M2L s | "
@@ -228,8 +283,11 @@ def levels(where):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ("errors", "runs", "levels"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("errors", "runs", "levels", "summary"):
         sys.exit(__doc__)
+    if sys.argv[1] == "summary":
+        summary(sys.argv[2:])
+        return
     {"errors": errors, "runs": all_runs, "levels": levels}[sys.argv[1]](sys.argv[2])
 
 

@@ -273,8 +273,9 @@ impl std::fmt::Display for VNear {
 /// their crossover from the waves' per-pair constant, grouped per (parent, source); the time
 /// rule ([`HelmholtzDiagonal::Auto`]) decides from the plan's V lists which of them keep the
 /// waves. After the operator's choice, each level named below gets the crossover of the M2L
-/// it runs ([`v_after_plan_crossover`]) where that is higher, and the plan is built once more
-/// if any crossover rose: it converts the first plan's pairs and those the higher crossover
+/// it runs ([`v_after_plan_crossover`]) where that is higher (and where the first plan still
+/// holds a V pair between two leaves, on some rank), and the plan is built once more if any
+/// crossover rose: it converts the first plan's pairs and those the higher crossover
 /// adds (per pair on a level without waves, per (parent, source) on a level with them), so
 /// its V lists are within the first plan's and the operator's M2L per level and buffers
 /// hold. Opt-in, for CH4.3b2b's measurements.
@@ -1362,41 +1363,69 @@ impl HelmholtzFmmBuilder {
         // The V rule after the plan (Helmholtz CH4.3b2b): each level `v_after_plan` names gets
         // the crossover of the M2L the operator runs there where that is higher, from the agreed
         // costs and V lists alone, so every rank raises the same levels and builds the second
-        // plan or none (constraints 2 and 9).
-        let after: Option<Vec<f64>> =
-            (self.near_v == VNear::CostModel && self.v_after_plan != VAfterPlan::Off).then(|| {
-                let shapes = operator.diagonal_shapes();
-                (0..crossovers.len())
-                    .map(|l| {
-                        let run = if operator.taken_from_waves(l) {
-                            Some(if operator.diagonal_classes(l).is_some() {
-                                VLevelM2l::Form
-                            } else {
-                                VLevelM2l::Rcr
-                            })
-                        } else if self.v_after_plan == VAfterPlan::AllLevels
-                            && waves[l]
-                            && operator.m2l_on(l) == HelmholtzM2l::PlaneWave
-                        {
-                            Some(VLevelM2l::Waves)
+        // plan or none (constraints 2 and 9). A level whose first plan holds no V pair between
+        // two leaves (over every rank) has nothing more to convert and keeps its crossover, so
+        // that no second plan is built for nothing.
+        let on = self.near_v == VNear::CostModel && self.v_after_plan != VAfterPlan::Off;
+        let v_leaf_pairs: Vec<u64> = if on {
+            let index = plan.index();
+            let leaf = |l: usize, i: usize| {
+                matches!(index.kind(l, i), KeyType::LocalLeaf | KeyType::GhostLeaf(_))
+            };
+            let local: Vec<u64> = (0..plan.nlevels())
+                .map(|l| {
+                    let v = plan.level(l).v();
+                    (0..v.nrows())
+                        .filter(|&t| plan.computes(l, t) && leaf(l, t))
+                        .map(|t| {
+                            let sources = v.row(t).0;
+                            sources.iter().filter(|&&s| leaf(l, s as usize)).count() as u64
+                        })
+                        .sum()
+                })
+                .collect();
+            let mut summed = vec![0u64; local.len()];
+            comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+            summed
+        } else {
+            Vec::new()
+        };
+        let after: Option<Vec<f64>> = on.then(|| {
+            let shapes = operator.diagonal_shapes();
+            (0..crossovers.len())
+                .map(|l| {
+                    if v_leaf_pairs.get(l).is_none_or(|&n| n == 0) {
+                        return crossovers[l];
+                    }
+                    let run = if operator.taken_from_waves(l) {
+                        Some(if operator.diagonal_classes(l).is_some() {
+                            VLevelM2l::Form
                         } else {
-                            None
-                        };
-                        let shape = shapes.and_then(|s| s.get(l)).copied();
-                        match (run, shape) {
-                            (Some(run), Some(shape)) => crossovers[l].max(v_after_plan_crossover(
-                                &v_costs(isa),
-                                &costs,
-                                run,
-                                operator.degree(l),
-                                &shape,
-                                self.gradients,
-                            )),
-                            _ => crossovers[l],
-                        }
-                    })
-                    .collect()
-            });
+                            VLevelM2l::Rcr
+                        })
+                    } else if self.v_after_plan == VAfterPlan::AllLevels
+                        && waves[l]
+                        && operator.m2l_on(l) == HelmholtzM2l::PlaneWave
+                    {
+                        Some(VLevelM2l::Waves)
+                    } else {
+                        None
+                    };
+                    let shape = shapes.and_then(|s| s.get(l)).copied();
+                    match (run, shape) {
+                        (Some(run), Some(shape)) => crossovers[l].max(v_after_plan_crossover(
+                            &v_costs(isa),
+                            &costs,
+                            run,
+                            operator.degree(l),
+                            &shape,
+                            self.gradients,
+                        )),
+                        _ => crossovers[l],
+                    }
+                })
+                .collect()
+        });
         // Agreed over the ranks (the smallest), as the planned crossovers: the P2P's constant
         // is the rank's ISA's.
         let after = after.map(|local| {
