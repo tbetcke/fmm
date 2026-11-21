@@ -11,9 +11,9 @@ Status (2026-11-21): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 202
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
 item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a and CH4.3b2b. CH4.3b2d (the waves' V
 crossover on raised levels) is in progress; CH4.3c was split into CH4.3c1 and CH4.3c2, and CH4.3c1
-(C₀ confirmed at p ≥ 72 against a double-double reference) waits for its sign-off. Next CH4.3b2c
-(the form by default, after CH4.3b2d) and CH4.3c2 (the degrees refit; whether before CH4.3b2c is
-CH4.3c1's question 2), then CH4.3d and CH4.3e; CH4.2d off the list; the FFT track stays item 11.
+(C₀ = 200 confirmed at p ≥ 72 against a double-double reference) is signed off. Next CH4.3c2 (the
+degrees refit), then CH4.3b2c (the form by default; it needs CH4.3b2d and, since CH4.3c1, CH4.3c2),
+then CH4.3d and CH4.3e; CH4.2d off the list; the FFT track stays item 11.
 HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of
 this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
@@ -809,7 +809,8 @@ task's full line is in its record or report and its progress entry
   evaluation with every choice within 1.05× (the same waves level slower in the time rule's run):
   repeated, and spread separated from a placement effect of the form's buffers (CH4.3b2b's runs
   saw it too: same-plan runs of one launch up to 30 % apart, later runs slower; its report §1).
-  *Needs:* CH4.3b2a, CH4.3b2b, CH4.3b2d (added at CH4.3b2b, its question 3). *Machines:*
+  *Needs:* CH4.3b2a, CH4.3b2b, CH4.3b2d (added at CH4.3b2b, its question 3), CH4.3c2 (added at
+  CH4.3c1, its question 2: the form's default measured on the refitted degrees). *Machines:*
   Kathleen, locust. *Sign-off:* the default.
 - CH4.3c The high-frequency degrees refit, and C₀ at large degrees. Split on 2026-11-21 (by the
   size rule of `/next-task`: two independent studies, pairs on the M6 and a calibration on
@@ -819,7 +820,8 @@ task's full line is in its record or report and its progress entry
   confirmed against the diagonal chain in double-double (`ExtendedM2l`): at E's floor the form
   errs 25–149 u over k a 27–216, p 36–251, every class within 0.94 E, both builds; M12's excess
   was the f64 references' rounding (RCR 290–3,345 u). FMM evidence CH4.3a's (no decision moves).
-  *Sign-off:* pending (#246's questions 1–2).
+  *Sign-off:* 2026-11-21 on #246, the user: "Both questions as recommended.": C₀ = 200 kept;
+  CH4.3c2 a *Need* of CH4.3b2c.
 - [ ] **CH4.3c2 The high-frequency degrees refit.** *Done when:* (review 2026-11-19, A8) the
   refit of the high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of
   the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted in L (proposal §3.5; CH3.3's

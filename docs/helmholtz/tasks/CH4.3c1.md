@@ -169,4 +169,5 @@ None.
 
 ## Open questions
 - (For the PR) whether CH4.3c2 (the degrees refit) should be a *Need* of CH4.3b2c, so that the
-  form's default is measured on the final high-frequency degrees.
+  form's default is measured on the final high-frequency degrees. Signed off 2026-11-21 on #246
+  with question 1 (C₀ = 200 kept), the user: "Both questions as recommended."; the *Need* added.

@@ -123,6 +123,8 @@ projection's reading that M12 quoted.
 
 ## 4. Questions for sign-off
 
+Signed off 2026-11-21 by the user on #246: "Both questions as recommended."
+
 1. **C₀ = 200 kept** (recommended): confirmed at p = 36–251 against the double-double chain, the
    floor at most 149 u; no change to the bound, the rule or the proposal (§3.6 already says C₀ = 200
    "below 176 u", which holds). Alternative: none indicated by the data.

@@ -4173,6 +4173,8 @@ request, using this template:
   are 0.12 E and 0.24 E against the reference. CH4.3a's finding at k a 1.69, η = 0.1 confirmed as the
   form's own (2.9 E, E ≪ ε).
 - Checks: see the PR.
-- Decisions: questions for sign-off: 1, C₀ = 200 kept; 2, CH4.3c2 a *Need* of CH4.3b2c.
+- Decisions: questions 1–2 signed off 2026-11-21 by the user on #246, "Both questions as
+  recommended.": 1, C₀ = 200 kept (no change to the bound or the proposal); 2, CH4.3c2 a *Need* of
+  CH4.3b2c.
 - Laplace: not touched (ref's Helmholtz diagonal module, tests of `nd-fmm-tables`; no Laplace path).
-- Follow-ups: CH4.3c2 (added by the split, in the roadmap after CH4.3c1).
+- Follow-ups: CH4.3c2 (added by the split, in the roadmap after CH4.3c1), now a *Need* of CH4.3b2c.
