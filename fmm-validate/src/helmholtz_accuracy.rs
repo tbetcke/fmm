@@ -92,8 +92,8 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DiagonalCosts, DiagonalCounts,
     DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
     HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, PlaneWaveTimes, RcrSplit, TransferBuild, VAfterPlan, VNear, Wavenumber, WxNear,
-    diagonal_rule_classes,
+    PlaneWaveSplit, PlaneWaveTimes, RcrSplit, TransferBuild, VAfterPlan, VCosts, VNear, Wavenumber,
+    WxNear, diagonal_rule_classes,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -226,6 +226,9 @@ pub struct Case {
     /// (`HelmholtzFmmBuilder::v_after_plan`, Helmholtz CH4.3b2b; [`VAfterPlan::Off`] in
     /// [`Case::new`], the library's default).
     pub v_after_plan: VAfterPlan,
+    /// The near rules' costs (`HelmholtzFmmBuilder::v_costs`, Helmholtz CH4.3b2b; `None` in
+    /// [`Case::new`], the machine class's), for tests whose plans must not depend on it.
+    pub v_costs: Option<VCosts>,
 }
 
 /// Time-rule costs under which the diagonal form beats every other M2L wherever a class passes
@@ -293,6 +296,7 @@ impl Case {
             diagonal_build: TransferBuild::Direct,
             diagonal_costs: None,
             v_after_plan: VAfterPlan::Off,
+            v_costs: None,
         }
     }
 }
@@ -1121,7 +1125,8 @@ pub fn run_output<C: CommunicatorCollectives>(
         .diagonal(case.diagonal)
         .diagonal_build(case.diagonal_build)
         .diagonal_costs(case.diagonal_costs)
-        .v_after_plan(case.v_after_plan);
+        .v_after_plan(case.v_after_plan)
+        .v_costs(case.v_costs);
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
     }

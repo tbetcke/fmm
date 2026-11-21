@@ -134,7 +134,9 @@ with CH4.3b2c's default.
   ISA, x86's waves' crossover per (p + 1)² is about 11× NEON's, so x86's first plan already
   converted every leaf pair of the sphere's level 3 and nothing rose (reproduced on the M6 with
   `V_COSTS_X86` named). `HelmholtzFmmBuilder::v_costs` (default `None`, the ISA's) names the near
-  rules' costs; the test names NEON's, so its plans are the same on every machine class.
+  rules' costs; the test names NEON's, so its plans are the same on every machine class. The
+  harness test (`fmm-validate`'s `AllLevels` at 10⁻⁷) failed on x86 the same way and names them
+  through `Case::v_costs`.
 - The runs got a `reverse` stage (the same runs in the reverse order, job 653724): same-plan pairs
   in one launch differed by up to 30 % in the evaluation, so §5 of the report reads the levels' own
   seconds in both orders.

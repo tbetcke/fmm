@@ -27,8 +27,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzDiagonal, HelmholtzM2l, LevelShape, Output,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, VAfterPlan, VNear,
-    Wavenumber, WavenumberKind, WxNear, auto_m2l_mul_add, s7_degree,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, V_COSTS_NEON,
+    VAfterPlan, VNear, Wavenumber, WavenumberKind, WxNear, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -1356,9 +1356,12 @@ fn check_diagonal(world: &SimpleCommunicator) {
     // The V rule after the plan (Helmholtz CH4.3b2b): under the defaults at 10⁻⁷ with the cost
     // model's V rule, `AllLevels` keeps the crossovers before the plan, raises those of the
     // levels that keep their waves (none falls), builds the plan again (its part timed),
-    // converts at least as many V pairs, and errs within 1.1× the setting off's.
+    // converts at least as many V pairs, and errs within 1.1× the setting off's. NEON's V costs
+    // named, so the plans are the same on every machine class (x86's first plan converts every
+    // leaf pair the raise would add, and nothing rises).
     let near = Case {
         near_v: VNear::CostModel,
+        v_costs: Some(V_COSTS_NEON),
         ..defaults.clone()
     };
     assert_eq!(near.v_after_plan, VAfterPlan::Off, "Case::new's");

@@ -653,7 +653,8 @@ and after the plan; whether the plan was built again), the build part "replan", 
 `--v-after-plan off|taken|all,…` (each `--near-v cost` run at each, `taken` only with `--diagonal
 auto`; the column "M2L" ending `/vafter` or `/vafterall`) and two last columns of "Near pairs" (the
 crossovers per level; "replanned" on the run's row). `tests/helmholtz_accuracy.rs` (`check_diagonal`)
-checks `AllLevels` under the defaults at 10⁻⁷ on W1 at kD = 30. `tools/helmholtz/ch4-3b2b-runs.sh`
+checks `AllLevels` under the defaults at 10⁻⁷ on W1 at kD = 30, with NEON's V costs named
+(`Case::v_costs`, `HelmholtzFmmBuilder::v_costs`; on x86's the first plan leaves nothing to raise). `tools/helmholtz/ch4-3b2b-runs.sh`
 runs the task's stages (`errors`, `w1`, `w3`, `reverse`), `ch4-3b2b-tables.py` makes the report's
 tables. Its report is `results/helmholtz-ch4-3b2b.md`.
 
