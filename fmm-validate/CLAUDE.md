@@ -635,6 +635,17 @@ seconds of the level by the form, by RCR and by the waves on the agreed shape), 
 `tools/helmholtz/ch4-3b1-runs.sh` runs the task's stages, `ch4-3b1-fit.py` fits the costs. Its
 report is `results/helmholtz-ch4-3b1.md`.
 
+Helmholtz CH4.3b2a (the time rule at matched accuracy; docs/helmholtz/tasks/CH4.3b2a.md) added
+`helmholtz_accuracy::{FORM_COSTS, RCR_COSTS}` (time-rule costs that force the form and RCR on
+every level the rule reaches where a class passes) and `Row::{diagonal_costs,
+taken_from_waves}`, `Row::diagonal_model` at the degree as run (a raised level's p_w), and to the
+example `--diagonal-costs machine|form|rcr,…` (each `auto` run with each; the column "M2L" ending
+`/diagauto:form` or `/diagauto:rcr`) and the choice on a level with waves in the table "Time
+rule".
+`tests/helmholtz_accuracy.rs` (`check_diagonal`) checks both forced costs under Auto at 10⁻⁷ on W1
+at kD = 30. `tools/helmholtz/ch4-3b2a-runs.sh` runs the task's stages, `ch4-3b2a-tables.py`
+makes the report's tables. Its report is `results/helmholtz-ch4-3b2a.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

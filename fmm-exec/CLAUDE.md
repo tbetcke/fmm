@@ -781,6 +781,25 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   free costs) the agreed shapes, the classes on every rank, the errors within `DIAGONAL_RATIO`, 2
   threads and the one-rank FMM bit for bit. Its cost: `helmholtz_fmm` at one rank, opt-level 1,
   33 s on the M6.
+  Since Helmholtz CH4.3b2a (docs/helmholtz/tasks/CH4.3b2a.md; fmm-validate/results/helmholtz-ch4-3b2a.md)
+  the time rule runs at matched accuracy: a level with Auto's waves keeps its resolving degree
+  p_w (`plane_wave_degree`, CH6.1g) whatever M2L the rule gives it (stores, M2L and leaves at
+  p_w, translations as `PlaneWaveRaise` gives the waves); by `wave_level_choice`
+  (`WaveLevelChoice`) it keeps the waves unless the form (the bound's classes at p_w, its scratch
+  at p_w within the budget) beats them, and then runs the cheaper of the form and RCR (ties to
+  the waves, then to RCR); RCR never against the waves alone (a rule of three lost 0.47 s and
+  gained 0.11 s on the report's runs: RCR's constant under-predicts RCR at the raised degree on
+  sparse levels); below k a 2.8 the waves stay. `HelmholtzOperator::taken_from_waves` reports the levels taken.
+  `the_time_rule_against_the_waves` (10⁻⁴, 10⁻⁷, 10⁻⁸; free form, free RCR, dear and a tight
+  budget: the defaults' degrees and translation degrees under every costs) and the unit test
+  `the_choice_on_a_level_with_waves_by_hand`; `check_time_rule_raised` in `tests/helmholtz_fmm.rs` (a
+  cube at kD = 40 + 2i, 10⁻⁷, whose level 2 takes 15 classes at p_w = 28; in release builds also
+  the cubes of `check_resolving_degree` at kD = 20 + 2i, which pass no class at p_w and keep the
+  defaults' bits): the machine's (release), free form and free RCR costs, the defaults' degrees,
+  the form at free form costs and RCR on the same levels at free RCR costs, the errors within
+  `DIAGONAL_RATIO` of the defaults', 2 threads, chunks of 3 and the one-rank FMM bit for bit. Its
+  debug cost: the one-rank run at opt-level 0 646 s at load 2–7 (CH4.2c2 611 s), 34.6 s at
+  opt-level 1.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

@@ -321,19 +321,29 @@ fn the_time_rule_on_the_rcr_levels() {
     assert!((0..LEVELS).all(|l| below.diagonal_classes(l).is_none()));
 }
 
-/// The time rule against the exponential M2L (Helmholtz CH4.3b1): under Auto with waves from
-/// every degree, `HelmholtzDiagonal::Auto` gives a level with waves to the diagonal form where
-/// `diagonal_beats_plane_waves` says so, at the level's own degree (below 10⁻⁶ the waves'
-/// raised degree is not the form's), and keeps the waves elsewhere, where the form's scratch
-/// does not fit the budget, and below k a = 2.8
-/// (`DIAGONAL_AUTO_MIN_KA`, where the rule on an RCR level takes it). The FMM's calibrated
-/// degrees: at S7's per-pair degrees no class passes at 10⁻⁷ (p = 40 at k a = 8.7).
+/// Costs under which RCR beats the form, and the form the waves (the form's pair dear, the
+/// waves dearer per box than any level's pairs at the pair's cost).
+const RCR_FREE: DiagonalCosts = DiagonalCosts {
+    pair: [1e9, 1e9],
+    rotation: [0.0, 0.0],
+    ..FREE
+};
+
+/// The time rule against the exponential M2L (Helmholtz CH4.3b1, CH4.3b2a): under Auto with
+/// waves from every degree, `HelmholtzDiagonal::Auto` takes a level with waves in its range from
+/// them where the form beats them, then runs the cheaper of the form and RCR
+/// (`wave_level_choice`), at the level's resolving degree p_w, which it keeps whatever M2L runs
+/// (the defaults' degrees and translation degrees on every level, so matched accuracy), with the
+/// bound's classes at p_w; where no class passes at p_w or the form's scratch does not fit the
+/// budget, the waves (RCR never against the waves alone); below k a = 2.8
+/// (`DIAGONAL_AUTO_MIN_KA`, where the rule on an RCR level takes it) the waves. The FMM's calibrated degrees: at S7's per-pair
+/// degrees no class passes at 10⁻⁷ (p = 40 at k a = 8.7).
 #[test]
 fn the_time_rule_against_the_waves() {
     let k = Wavenumber::new(40.0, 0.0).unwrap();
     let mut raised = false;
     let mut below = false;
-    for epsilon in [EPSILON, 1e-7] {
+    for epsilon in [EPSILON, 1e-7, 1e-8] {
         let p: Vec<usize> = (0..LEVELS)
             .map(|l| match l {
                 0 | 1 => 0,
@@ -353,63 +363,98 @@ fn the_time_rule_against_the_waves() {
         let off = base(HelmholtzDiagonal::Off, FREE);
         let rule = base(HelmholtzDiagonal::Rule, FREE);
         let free = base(HelmholtzDiagonal::Auto, FREE);
+        let rcr = base(HelmholtzDiagonal::Auto, RCR_FREE);
         let dear = base(HelmholtzDiagonal::Auto, DEAR);
         // The scratch budget's fallback first: a level whose form would not fit keeps its
-        // waves (not RCR).
+        // waves (not RCR, although RCR is the cheaper at these costs).
         let tight = base(HelmholtzDiagonal::Auto, FREE)
             .with_diagonal_sources(Some(vec![0, 0, 64, 512, 4096]))
             .with_diagonal_budget(Some(64 << 10));
         let mut taken = 0;
         for (l, &p_l) in p.iter().enumerate().skip(2) {
             let waves = off.m2l_on(l) == HelmholtzM2l::PlaneWave;
+            let p_w = off.degree(l);
             let classes =
-                diagonal_rule_classes::<f64>(p_l, k_hat(&k, l), epsilon, DEFAULT_DIAGONAL_BUILD);
+                diagonal_rule_classes::<f64>(p_w, k_hat(&k, l), epsilon, DEFAULT_DIAGONAL_BUILD);
             println!(
-                "ε {epsilon:e}, level {l}, p {p_l} (run {}): waves {waves}, classes {classes:?}",
-                off.degree(l)
+                "ε {epsilon:e}, level {l}, p {p_l} (run {p_w}): waves {waves}, classes at p_w \
+                 {classes:?}"
             );
-            raised |= waves && off.degree(l) > p_l && !classes.is_empty();
+            // Every setting keeps the defaults' degrees: the level's M2L alone changes.
+            for (name, op) in [
+                ("rule", &rule),
+                ("free", &free),
+                ("rcr", &rcr),
+                ("dear", &dear),
+                ("tight", &tight),
+            ] {
+                assert_eq!(op.degree(l), p_w, "{name}, level {l}");
+                assert_eq!(
+                    op.translation_degree(l),
+                    off.translation_degree(l),
+                    "{name}, level {l}"
+                );
+            }
             // Rule keeps the waves: the form only on RCR levels.
             assert_eq!(rule.m2l_on(l), off.m2l_on(l), "level {l}");
-            // Dear costs and a tight budget: Off's levels.
+            // Dear costs (the waves free): Off's levels.
             assert_eq!(dear.m2l_on(l), off.m2l_on(l), "level {l}");
-            assert_eq!(tight.m2l_on(l), off.m2l_on(l), "level {l}");
-            assert!(tight.diagonal_classes(l).is_none(), "level {l}");
             assert!(dear.diagonal_classes(l).is_none() || !waves, "level {l}");
             let in_range = diagonal_auto_in_range(k_hat(&k, l));
-            below |= !in_range && !classes.is_empty();
-            if !in_range && !classes.is_empty() {
-                // Below S6's range (k a < 2.8): the time rule takes no level, the rule does
-                // on an RCR level.
-                assert!(free.diagonal_classes(l).is_none(), "level {l}");
+            let classes_at_p =
+                diagonal_rule_classes::<f64>(p_l, k_hat(&k, l), epsilon, DEFAULT_DIAGONAL_BUILD);
+            below |= !in_range && !classes_at_p.is_empty();
+            if !waves {
+                // An RCR or Batched level: the time rule on the RCR levels
+                // (`the_time_rule_on_the_rcr_levels`).
                 assert_eq!(free.m2l_on(l), off.m2l_on(l), "level {l}");
-                let rotation = |diagonal| {
-                    HelmholtzOperator::<f64>::new(k, densities, &domain(), &p, false, 64)
-                        .unwrap()
-                        .with_plane_wave_tolerance(Some(epsilon))
-                        .with_m2l(HelmholtzM2l::Rotation, 0)
-                        .with_diagonal_costs(Some(FREE))
-                        .with_diagonal(diagonal)
-                };
-                assert_eq!(
-                    rotation(HelmholtzDiagonal::Rule).diagonal_classes(l),
-                    Some(classes.clone()),
-                    "level {l}"
-                );
-                assert!(
-                    rotation(HelmholtzDiagonal::Auto)
-                        .diagonal_classes(l)
-                        .is_none(),
-                    "level {l}"
-                );
-            } else if waves && !classes.is_empty() {
-                // Free costs: the form, at the level's own degree.
-                assert_eq!(free.m2l_on(l), HelmholtzM2l::Rotation, "level {l}");
-                assert_eq!(free.diagonal_classes(l), Some(classes), "level {l}");
-                assert_eq!(free.degree(l), p_l, "level {l}");
-                taken += 1;
+                assert_eq!(rcr.m2l_on(l), off.m2l_on(l), "level {l}");
+            } else if !in_range {
+                // Below S6's range (k a < 2.8): the time rule leaves the waves, the rule on an
+                // RCR level takes the form.
+                for op in [&free, &rcr, &tight] {
+                    assert_eq!(op.m2l_on(l), HelmholtzM2l::PlaneWave, "level {l}");
+                    assert!(op.diagonal_classes(l).is_none(), "level {l}");
+                }
+                if !classes_at_p.is_empty() {
+                    let rotation = |diagonal| {
+                        HelmholtzOperator::<f64>::new(k, densities, &domain(), &p, false, 64)
+                            .unwrap()
+                            .with_plane_wave_tolerance(Some(epsilon))
+                            .with_m2l(HelmholtzM2l::Rotation, 0)
+                            .with_diagonal_costs(Some(FREE))
+                            .with_diagonal(diagonal)
+                    };
+                    assert_eq!(
+                        rotation(HelmholtzDiagonal::Rule).diagonal_classes(l),
+                        Some(classes_at_p.clone()),
+                        "level {l}"
+                    );
+                    assert!(
+                        rotation(HelmholtzDiagonal::Auto)
+                            .diagonal_classes(l)
+                            .is_none(),
+                        "level {l}"
+                    );
+                }
+            } else if classes.is_empty() {
+                // No class at p_w: the waves, whatever RCR costs.
+                for op in [&free, &rcr, &tight] {
+                    assert_eq!(op.m2l_on(l), HelmholtzM2l::PlaneWave, "level {l}");
+                    assert!(op.diagonal_classes(l).is_none(), "level {l}");
+                }
             } else {
-                assert_eq!(free.m2l_on(l), off.m2l_on(l), "level {l}");
+                // Free form: the form with the bound's classes at p_w.
+                assert_eq!(free.m2l_on(l), HelmholtzM2l::Rotation, "level {l}");
+                assert_eq!(free.diagonal_classes(l), Some(classes.clone()), "level {l}");
+                taken += 1;
+                raised |= p_w > p_l;
+                // Free RCR: the form beats the waves, RCR the form.
+                assert_eq!(rcr.m2l_on(l), HelmholtzM2l::Rotation, "level {l}");
+                assert!(rcr.diagonal_classes(l).is_none(), "level {l}");
+                // The tight budget: the waves.
+                assert_eq!(tight.m2l_on(l), HelmholtzM2l::PlaneWave, "level {l}");
+                assert!(tight.diagonal_classes(l).is_none(), "level {l}");
             }
         }
         assert!(
@@ -419,7 +464,7 @@ fn the_time_rule_against_the_waves() {
     }
     assert!(
         raised,
-        "some level taken from the waves ran them at a raised degree"
+        "some level taken from the waves ran the form at the raised degree"
     );
     assert!(below, "some level below k a = 2.8 passes the bound");
 }

@@ -281,17 +281,24 @@
 //! row and the pairs per class,
 //! [`with_diagonal_shapes`](HelmholtzOperator::with_diagonal_shapes), which the builder counts
 //! in its plan and sums over the ranks; the uniform level's without them): on an RCR level
-//! against RCR ([`diagonal_beats_rcr`]); under [`HelmholtzM2l::Auto`] on a level with waves
-//! against the waves at their degree ([`diagonal_beats_plane_waves`]: the waves cost per box,
-//! the form per pair, so the order turns on the pairs per box). A level taken from the waves
-//! runs at its own degree, not the waves' raised one, takes no batched tables, and runs the
-//! cheaper of the form and RCR by the same model (where RCR is the cheaper, it also beats the
-//! waves: at 10⁻⁸ the waves' raised degree made a sparse level 31× RCR's on Kathleen). The builder's V rule reads `wave_levels` before the plan, a
-//! superset of the operator's levels with waves; its grouping per (parent, source) converts
-//! exact pairs under every M2L. Each choice is a function of agreed counts, (p, k̂, ε, T) and
-//! agreed constants, so the same on every rank and at every rank count; the scratch budget's
-//! whole-level fallback comes first. It takes no level below k a = [`DIAGONAL_AUTO_MIN_KA`]
-//! (2.8, S6's calibrated range).
+//! against RCR ([`diagonal_beats_rcr`]); under [`HelmholtzM2l::Auto`] on a level with waves the
+//! waves unless the form beats them, then the cheaper of the form and RCR
+//! ([`wave_level_choice`]; the waves cost per box, the form per pair, so the order turns on the
+//! pairs per box; RCR never against the waves alone, Helmholtz CH4.3b2a: at the resolving
+//! degree RCR's constant under-predicts RCR on sparse levels). A
+//! level with waves keeps its resolving degree p_w whatever the time rule gives it (Helmholtz
+//! CH4.3b2a, matched accuracy: at 10⁻⁸ the raise made the defaults 1.07–2.2× more accurate than
+//! the form at p_l, CH4.3b1): its stores, its M2L and its leaves' operators at p_w, its
+//! translations as `PlaneWaveRaise` gives the waves, the form's classes the bound's at p_w (at a
+//! higher degree the bound's rounding term passes fewer classes at low k a); the form's scratch
+//! at p_w must fit the budget, or the level keeps its waves. A level taken
+//! from the waves takes no batched tables
+//! ([`taken_from_waves`](HelmholtzOperator::taken_from_waves)). The builder's V rule reads
+//! `wave_levels` before the plan, a superset of the operator's levels with waves; its grouping
+//! per (parent, source) converts exact pairs under every M2L. Each choice is a function of
+//! agreed counts, (p, k̂, ε, T) and agreed constants, so the same on every rank and at every
+//! rank count; the scratch budget's whole-level fallback comes first. It takes no level below
+//! k a = [`DIAGONAL_AUTO_MIN_KA`] (2.8, S6's calibrated range), and there leaves the waves too.
 //!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
@@ -403,9 +410,9 @@ mod rcr;
 pub use diagonal::{
     DEFAULT_DIAGONAL_BUILD, DIAGONAL_AUTO_MIN_KA, DIAGONAL_COST_CONSTANTS, DIAGONAL_COSTS_NEON,
     DIAGONAL_COSTS_X86, DIAGONAL_F32_MIN_TOLERANCE, DiagonalCosts, DiagonalCounts, DiagonalShape,
-    DiagonalTimes, HelmholtzDiagonal, diagonal_auto_in_range, diagonal_beats_plane_waves,
-    diagonal_beats_rcr, diagonal_chunk_targets, diagonal_costs, diagonal_rule_classes,
-    offset_class,
+    DiagonalTimes, HelmholtzDiagonal, WaveLevelChoice, diagonal_auto_in_range,
+    diagonal_beats_plane_waves, diagonal_beats_rcr, diagonal_chunk_targets, diagonal_costs,
+    diagonal_rule_classes, offset_class, wave_level_choice,
 };
 use diagonal::{DiagonalBuffer, DiagonalLevel, DiagonalScratch, DiagonalSettings};
 pub use nd_fmm_tables::helmholtz::diagonal::TransferBuild;
@@ -903,6 +910,8 @@ struct Kernel<T: SimdScalar> {
     diagonal_settings: DiagonalSettings,
     /// The diagonal M2L's tables per level, where a level takes it.
     diagonal: Vec<Option<DiagonalLevel<T>>>,
+    /// The levels the time rule took from the waves (Helmholtz CH4.3b2a), per level.
+    from_waves: Vec<bool>,
     /// The batched M2L's column kernel, on the P2P kernel's ISA (scalar for the reference).
     matrix: MatrixKernel<T>,
     /// The P2P kernel of `nd-fmm-simd`, or `None` for the reference.
@@ -1067,6 +1076,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             plane_waves: None,
             diagonal_settings: DiagonalSettings::default(),
             diagonal: Vec::new(),
+            from_waves: Vec::new(),
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
         };
@@ -1495,9 +1505,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// Builds the M2L tables of the setting, the budget and (under Auto) the crossover, and
-    /// the scratch sized for them; under [`HelmholtzM2l::PlaneWave`]'s rule with a tolerance
-    /// below 10⁻⁶, and under [`HelmholtzM2l::Auto`] at 10⁻⁸ ≤ ε < 10⁻⁷, the RCR tables at
-    /// the raised degrees (Helmholtz CH6.1g), or again at the degrees given where an earlier
+    /// the scratch sized for them; under [`HelmholtzM2l::PlaneWave`]'s rule and under
+    /// [`HelmholtzM2l::Auto`] with a tolerance below 10⁻⁶, the RCR tables at the raised degrees
+    /// of the levels with waves (Helmholtz CH6.1g, CH6.1h) and of those the diagonal form's time
+    /// rule took from them (Helmholtz CH4.3b2a), or again at the degrees given where an earlier
     /// setting raised them.
     fn select_tables(&mut self) {
         if self.unbuilt {
@@ -1527,6 +1538,11 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             k_root,
             &base,
         );
+        // Under the time rule (Helmholtz CH4.3b1, CH4.3b2a) a level with waves in its range
+        // keeps the waves unless the form beats them, then runs the cheaper of the form and RCR
+        // (`wave_level_choice`), at its resolving degree p_w, which it keeps whatever M2L runs
+        // (matched accuracy): the form's classes are the bound's at p_w, and its scratch
+        // budget's whole-level fallback comes first (constraint 7).
         let mut from_waves = vec![false; base.len()];
         if let (HelmholtzDiagonal::Auto, HelmholtzM2l::Auto, Some(epsilon), Some(levels)) = (
             kernel.diagonal_settings.choice,
@@ -1538,36 +1554,37 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 if precision.is_none() {
                     continue;
                 }
-                let p = base[l];
                 let k_hat = kernel.tables.k_hat(l);
-                // The scratch budget's whole-level fallback first (constraint 7): a level
-                // whose form would not fit keeps its waves.
-                if !diagonal_auto_in_range(k_hat)
-                    || !kernel
-                        .diagonal_settings
-                        .fits::<T>(l, p, kernel.densities.vectors())
-                {
+                if !diagonal_auto_in_range(k_hat) {
                     continue;
                 }
+                let p_w = plane_wave_degree(base[l], epsilon);
                 let classes =
-                    diagonal_rule_classes::<T>(p, k_hat, epsilon, kernel.diagonal_settings.build);
+                    if kernel
+                        .diagonal_settings
+                        .fits::<T>(l, p_w, kernel.densities.vectors())
+                    {
+                        diagonal_rule_classes::<T>(
+                            p_w,
+                            k_hat,
+                            epsilon,
+                            kernel.diagonal_settings.build,
+                        )
+                    } else {
+                        Vec::new()
+                    };
                 let shape = kernel.diagonal_settings.shape(l);
-                if diagonal_beats_plane_waves(
-                    &costs,
-                    p,
-                    plane_wave_degree(p, epsilon),
-                    &shape,
-                    &classes,
-                ) {
+                if wave_level_choice(&costs, p_w, &shape, &classes) != WaveLevelChoice::PlaneWave {
                     *precision = None;
                     from_waves[l] = true;
                 }
             }
         }
         // The rule's resolving degree on the levels with waves (Helmholtz CH6.1g), under
-        // PlaneWave's rule and under Auto: the level's stores, its M2L and its leaves at
-        // p_w = max(p_l, d), and its translations to and from its parent too unless
-        // `PlaneWaveRaise::M2l` keeps them at p_l (Helmholtz CH6.1h).
+        // PlaneWave's rule and under Auto, and on those the time rule took from them: the
+        // level's stores, its M2L and its leaves at p_w = max(p_l, d), and its translations to
+        // and from its parent too unless `PlaneWaveRaise::M2l` keeps them at p_l (Helmholtz
+        // CH6.1h).
         let by_rule = choice == HelmholtzM2l::Auto
             || (choice == HelmholtzM2l::PlaneWave
                 && kernel.plane_wave_precision == PlaneWavePrecision::Rule);
@@ -1575,9 +1592,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             (Some(epsilon), Some(precisions)) if by_rule => base
                 .iter()
                 .zip(precisions)
-                .map(|(&p, precision)| match precision {
-                    Some(_) => plane_wave_degree(p, epsilon),
-                    None => p,
+                .zip(&from_waves)
+                .map(|((&p, precision), &taken)| {
+                    if precision.is_some() || taken {
+                        plane_wave_degree(p, epsilon)
+                    } else {
+                        p
+                    }
                 })
                 .collect(),
             _ => base.clone(),
@@ -1648,6 +1669,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             BatchedM2l::build_on(k_root, &degrees, &levels, &parts)
         });
         timings.matrices += clock.elapsed();
+        kernel.from_waves = from_waves;
         // The levels whose M2L is RCR's: only they read its M2L blocks.
         let rcr: Vec<bool> = (0..degrees.len())
             .map(|l| {
@@ -1920,6 +1942,14 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// ([`with_diagonal_shapes`](Self::with_diagonal_shapes)), if given.
     pub fn diagonal_shapes(&self) -> Option<&[DiagonalShape]> {
         self.kernel.diagonal_settings.shapes.as_deref()
+    }
+
+    /// Whether the diagonal form's time rule ([`HelmholtzDiagonal::Auto`]) took `level` from
+    /// the exponential M2L that [`HelmholtzM2l::Auto`] would run there (Helmholtz CH4.3b2a): the
+    /// level then runs the form or RCR ([`diagonal_classes`](Self::diagonal_classes) says which)
+    /// at its resolving degree.
+    pub fn taken_from_waves(&self, level: usize) -> bool {
+        self.kernel.from_waves.get(level).copied().unwrap_or(false)
     }
 
     /// The offset classes (indices into `nd_fmm_ref::helmholtz::diagonal::classes()`) that

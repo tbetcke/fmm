@@ -80,10 +80,11 @@ pub use operator::{
     HelmholtzDiagonal, HelmholtzM2l, HelmholtzOperator, LevelShape, M2L_MIN_BLOCK_TARGETS,
     MIN_BUFFER_BOXES, OperatorError, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
     PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RCR_PAIR_MIN_DEGREE, RCR_PAIR_SHARE,
-    RcrCounts, RcrSplit, TIMED_KINDS, TableTimings, TransferBuild, auto_batched_max_degree,
-    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree, batched_block_targets,
-    diagonal_auto_in_range, diagonal_beats_plane_waves, diagonal_beats_rcr, diagonal_chunk_targets,
-    diagonal_costs, diagonal_rule_classes, offset_class, rcr_by_pairs,
+    RcrCounts, RcrSplit, TIMED_KINDS, TableTimings, TransferBuild, WaveLevelChoice,
+    auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
+    auto_plane_wave_min_degree, batched_block_targets, diagonal_auto_in_range,
+    diagonal_beats_plane_waves, diagonal_beats_rcr, diagonal_chunk_targets, diagonal_costs,
+    diagonal_rule_classes, offset_class, rcr_by_pairs, wave_level_choice,
 };
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).

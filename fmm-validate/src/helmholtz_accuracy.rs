@@ -216,9 +216,32 @@ pub struct Case {
     /// CH4.2b2's runs repeat; the library's default is interpolated since CH4.2c2's sign-off).
     pub diagonal_build: TransferBuild,
     /// The diagonal form's time rule's costs (`HelmholtzFmmBuilder::diagonal_costs`, Helmholtz
-    /// CH4.3b1; `None` in [`Case::new`], the machine class's).
+    /// CH4.3b1; `None` in [`Case::new`], the machine class's; [`FORM_COSTS`] and [`RCR_COSTS`]
+    /// force one option, Helmholtz CH4.3b2a).
     pub diagonal_costs: Option<DiagonalCosts>,
 }
+
+/// Time-rule costs under which the diagonal form beats every other M2L wherever a class passes
+/// the bound (Helmholtz CH4.3b2a): the form free, RCR 1 per (p + 1)² + (p + 1)³, the waves 10¹²
+/// per box. Under `HelmholtzDiagonal::Auto` each level the rule reaches with a class that passes
+/// then runs the form at its degree (a level with waves at its resolving degree), for timing it.
+pub const FORM_COSTS: DiagonalCosts = DiagonalCosts {
+    s2f: [0.0, 0.0],
+    f2r: [0.0, 0.0],
+    pair: [0.0, 0.0],
+    rotation: [1.0, 1.0],
+    plane_wave: [1e12, 1e12],
+};
+
+/// Time-rule costs under which RCR beats the form and the form the waves (Helmholtz CH4.3b2a):
+/// the diagonal pair dear, the waves dearer, RCR free. Under `HelmholtzDiagonal::Auto` each level
+/// the rule reaches with a class that passes then runs RCR at its degree (the rule never puts RCR
+/// against the waves alone).
+pub const RCR_COSTS: DiagonalCosts = DiagonalCosts {
+    pair: [1e9, 1e9],
+    rotation: [0.0, 0.0],
+    ..FORM_COSTS
+};
 
 impl Case {
     /// A case with complex charges, one vector, gradients and 1,000 samples (§9.1), seeded
@@ -805,12 +828,20 @@ pub struct Row {
     pub diagonal_multiply_adds: Vec<u64>,
     /// Per level, the diagonal form's time rule as the operator sees it (Helmholtz CH4.3b1):
     /// [k a = Re(k) √3 r_l, the bound's classes at the FMM's tolerance and the build (at the
-    /// level's base degree; 0 without a tolerance), and the model's seconds of the level call
-    /// (thread-ns of `HelmholtzOperator::diagonal_costs` over the ranks × threads) with those
-    /// classes diagonal, by RCR alone and by the exponential M2L at
-    /// `plane_wave_degree(p_l, ε)`], each on the level's agreed shape
+    /// level's degree as run, the resolving degree on a level the waves raised, which the time
+    /// rule keeps since Helmholtz CH4.3b2a; 0 without a tolerance), and the model's seconds of
+    /// the level call (thread-ns of `HelmholtzOperator::diagonal_costs` over the ranks ×
+    /// threads) with those classes diagonal and by RCR alone, both at that degree, and by the
+    /// exponential M2L at its resolving degree (the degree as run where raised, else
+    /// `plane_wave_degree(p_l, ε)`)], each on the level's agreed shape
     /// (`HelmholtzOperator::diagonal_shapes`).
     pub diagonal_model: Vec<[f64; 5]>,
+    /// The time rule's costs as built, agreed over the ranks (`HelmholtzOperator::diagonal_costs`;
+    /// Helmholtz CH4.3b2a), whatever the setting.
+    pub diagonal_costs: DiagonalCosts,
+    /// Per level, whether the time rule took it from the exponential M2L
+    /// (`HelmholtzOperator::taken_from_waves`; Helmholtz CH4.3b2a), the same on every rank.
+    pub taken_from_waves: Vec<bool>,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -1422,6 +1453,10 @@ pub fn run_output<C: CommunicatorCollectives>(
         diagonal_build: diagonal.build,
         diagonal_multiply_adds: diagonal.multiply_adds,
         diagonal_model: diagonal_model(case, &fmm, size * threads),
+        diagonal_costs: fmm.operator().diagonal_costs(),
+        taken_from_waves: (0..fmm.nlevels())
+            .map(|l| fmm.operator().taken_from_waves(l))
+            .collect(),
         errors,
         checksum,
     };
@@ -1453,7 +1488,10 @@ fn diagonal_model<C: CommunicatorCollectives>(
             let r = radius(l, fmm.domain());
             let k_hat = Complex::new(case.k.0 * r, case.k.1 * r);
             let ka = k_hat.re * 3f64.sqrt();
-            let p = op.base_degree(l);
+            // The degree as run: on a level the waves raised the resolving degree, which the
+            // time rule keeps whatever M2L runs (Helmholtz CH4.3b2a).
+            let p = op.degree(l);
+            let base = op.base_degree(l);
             let shape = shapes.get(l).copied().unwrap_or_default();
             let classes = match epsilon {
                 Some(epsilon) if l >= 2 => {
@@ -1461,7 +1499,10 @@ fn diagonal_model<C: CommunicatorCollectives>(
                 }
                 _ => Vec::new(),
             };
-            let p_w = epsilon.map_or(p, |epsilon| plane_wave_degree(p, epsilon));
+            let p_w = match epsilon {
+                Some(epsilon) if p == base => plane_wave_degree(base, epsilon),
+                _ => p,
+            };
             [
                 ka,
                 classes.len() as f64,
