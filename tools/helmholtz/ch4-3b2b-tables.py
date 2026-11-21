@@ -138,6 +138,8 @@ def errors(where):
             err("rotation"),
             err("defaults"),
         )
+        if None in (ro[0], do[0], rc[0], dc[0]):
+            continue  # an unfinished launch
         offered = r.get("rotation", {}).get("near", {}).get("V pairs offered", "–")
         ratio = lambda a, b: f"{a[0] / b[0]:.3f}, {a[1] / b[1]:.3f}" if a[0] and b[0] else "–"
         print(
