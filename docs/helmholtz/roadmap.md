@@ -819,7 +819,7 @@ task's full line is in its record or report and its progress entry
   confirmed against the diagonal chain in double-double (`ExtendedM2l`): at E's floor the form
   errs 25–149 u over k a 27–216, p 36–251, every class within 0.94 E, both builds; M12's excess
   was the f64 references' rounding (RCR 290–3,345 u). FMM evidence CH4.3a's (no decision moves).
-  *Sign-off:* pending (#PR's questions 1–2).
+  *Sign-off:* pending (#246's questions 1–2).
 - [ ] **CH4.3c2 The high-frequency degrees refit.** *Done when:* (review 2026-11-19, A8) the
   refit of the high-frequency degrees searches downward at x ≥ 54 (levels 2–4 carry 0.6–1.0 % of
   the error on W1 at kD = 1000, 10⁻⁸), the excess p − x refitted in L (proposal §3.5; CH3.3's
