@@ -19,7 +19,7 @@ interactions, the M2L's and the P2P's seconds before and after, their change, an
 level's own mean costs predict (the M2L's seconds per pair and the P2P's per interaction of the
 run without it: the after-plan rule's assumption). `summary` prints per case and run with the V
 rule after the plan (each directory's launches, `reverse-` ones in the reverse order) the raised
-levels' measured change summed, the predicted change, the evaluation's change, the second plan's
+levels' measured change summed over those whose plan changed (V pairs or near interactions), the predicted change, the evaluation's change, the second plan's
 seconds and the errors over the run without it. No timing is asserted; the numbers go into
 fmm-validate/results/helmholtz-ch4-3b2b.md.
 """
@@ -213,6 +213,11 @@ def level_rows(where):
                 if not (a.get("after") and a.get("before") is not None) or a["after"] <= a["before"]:
                     continue
                 b = off["levels"].get(level, {})
+                if (a.get("pairs", 0), a.get("interactions", 0)) == (
+                    b.get("pairs", 0),
+                    b.get("interactions", 0),
+                ):
+                    continue  # the plan of the level unchanged: its seconds' change is spread
                 per_pair = b.get("m2l", 0.0) / b["pairs"] if b.get("pairs") else 0.0
                 predicted = (a.get("pairs", 0) - b.get("pairs", 0)) * per_pair + (
                     a.get("interactions", 0) - b.get("interactions", 0)

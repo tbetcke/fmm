@@ -786,7 +786,7 @@ task's full line is in its record or report and its progress entry
   defaults' excess over Rotation's errors is the V rule's plan (0.966–1.024× with the rule off;
   Rotation's plan converts 1.6–9.2× as many pairs); `VAfterPlan` (opt-in) decides the crossovers
   again after the plan: on the levels taken from the waves within the spread (justified as it is),
-  on raised levels with waves 0.07–0.75 s gained per case (the Also's level among them).
+  on raised levels with waves 0.09–0.75 s gained per case (the Also's level among them).
   *Sign-off:* the report's questions 1–4 (pending).
 - [ ] **CH4.3b2d The waves' V crossover on raised levels, in one plan.** *Done when:* (CH4.3b2b's
   report §5–§7, question 3, pending sign-off) on a level with waves raised to p_w > p_l (ε < 10⁻⁶),

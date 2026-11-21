@@ -104,8 +104,8 @@
 //!
 //! The V rule after the plan (Helmholtz CH4.3b2b, `check_v_after_plan`): on the sphere at
 //! kD = 30 under the cost model's V rule, Auto with waves from degree 0 and the time rule at
-//! named costs (the form taking the levels with waves with a dear pair; the form dearer than
-//! the waves), `VAfterPlan::TakenLevels` and `AllLevels`: the M2L per level the setting off's,
+//! named costs (the form taking the levels with waves with a dear pair; RCR taking them; the
+//! form dearer than the waves), `VAfterPlan::TakenLevels` and `AllLevels`: the M2L per level the setting off's,
 //! the crossovers raised on the levels named and nowhere else, the V pairs per level at most
 //! and the converted pairs and near interactions at least the setting off's, the errors within
 //! `NEAR_ERROR_BOUND` of them, 2 threads and the one-rank FMM bit for bit; under Rotation
@@ -1889,8 +1889,8 @@ const DEARER_FORM: DiagonalCosts = DiagonalCosts {
 
 /// The V rule after the plan (Helmholtz CH4.3b2b; `HelmholtzFmmBuilder::v_after_plan`) on
 /// `scenario` under the cost model's V rule: Auto with waves from degree 0 and the time rule at
-/// [`DEAR_FORM_PAIR`] (the form takes levels with waves) under `TakenLevels` and `AllLevels`,
-/// and at [`DEARER_FORM`] (the waves kept) under `AllLevels`: the M2L per level the setting
+/// [`DEAR_FORM_PAIR`] (the form takes levels with waves) under `TakenLevels` and `AllLevels`, at
+/// [`FREE_RCR`] (RCR takes them) under `TakenLevels`, and at [`DEARER_FORM`] (the waves kept) under `AllLevels`: the M2L per level the setting
 /// off's; the crossovers after the plan at least those before, above them exactly on the levels
 /// the setting names whose first plan holds V pairs between leaves (the levels taken, and under `AllLevels` those that keep
 /// their waves), a second plan exactly then; the V pairs of every level at most, the converted V
@@ -1922,6 +1922,12 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
             "the form taking the waves",
             auto.clone().diagonal_costs(Some(DEAR_FORM_PAIR)),
             VAfterPlan::AllLevels,
+        ),
+        // RCR taking the levels the form would (`FREE_RCR`): RCR's pair after the plan.
+        (
+            "RCR taking the waves",
+            auto.clone().diagonal_costs(Some(FREE_RCR)),
+            VAfterPlan::TakenLevels,
         ),
         (
             "the waves kept",

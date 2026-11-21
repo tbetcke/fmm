@@ -137,11 +137,11 @@ with CH4.3b2c's default.
 ## Results
 The report: fmm-validate/results/helmholtz-ch4-3b2b.md.
 - The explanation (§2): with the V rule off the defaults err 0.966–1.024× Rotation's; with it on
-  1.000–1.344×, following the pairs converted (Rotation's plan 1.6–9.2× as many).
+  1.000–1.344×, with the pairs converted (Rotation's plan 1.6–9.2× as many).
 - The levels taken from the waves (§4, §5): the re-decision's change −0.12 to +0.02 s per case,
   within the spread, against a second plan as dear as the first: justified as it is (question 2).
 - The raised levels that keep their waves (§5, §6): the after-plan crossover converts their leaf
-  pairs and gains 0.07–0.75 s per case in both orders, as the levels' mean costs predict; the
+  pairs and gains 0.09–0.75 s per case in both orders, linearly in the pairs converted; the
   Also's level is one of them. A one-plan rule is proposed as a follow-up (question 3).
 - Unraised dense levels with waves: the mean over-converts, +0.02–0.45 s (question 4).
 

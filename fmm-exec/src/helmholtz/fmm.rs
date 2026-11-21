@@ -309,7 +309,8 @@ impl std::fmt::Display for VAfterPlan {
 pub enum VLevelM2l {
     /// The exponential M2L: its cost per box with a V row, over the level's pairs.
     Waves,
-    /// The diagonal form: its pair.
+    /// The diagonal form: its pair (on a level whose other classes run RCR too, the form's
+    /// pair prices them as well: lower than RCR's, so fewer of them convert).
     Form,
     /// RCR (Rotation): its pair.
     Rcr,
@@ -2238,7 +2239,8 @@ where
     }
 
     /// Whether a crossover rose after the plan, so that the plan was built again
-    /// ([`HelmholtzBuildTimings::replan`]).
+    /// ([`HelmholtzBuildTimings::replan`]). The operator's choices, and the level and diagonal
+    /// shapes it reports, are then those of the first plan, which decided them.
     pub fn replanned(&self) -> bool {
         self.replanned
     }

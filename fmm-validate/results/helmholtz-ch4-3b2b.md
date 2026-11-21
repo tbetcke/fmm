@@ -11,7 +11,8 @@ pairs under the defaults' plan against 2,296 under Rotation's (W1 at kD = 200, l
 
 1. **The defaults' errors are the V rule's plan, not the waves' M2L** (§2). With the V rule off
    the defaults err 0.966–1.024× Rotation's (φ) on W1 at kD = 100–1000 and W3 at kD = 200 and 500,
-   at 10⁻³ and 10⁻⁶. With it on, 1.000–1.344×, and the excess follows the V pairs converted:
+   at 10⁻³ and 10⁻⁶. With it on, 1.000–1.344×, the excess coming with the V pairs converted
+   (qualitatively, at 10⁻⁶; at 10⁻³ the leaf pairs carry little of the error):
    RCR is dear per pair, so Rotation's plan converts 1.6–9.2× as many pairs between leaves into
    exact near pairs (W1 at kD = 200, 10⁻⁶: 63,426 of 136,740 against 19,131; 1.344×). Where both
    convert every pair (W3 at kD = 500) the ratio is 1.000. Nothing to change: each plan converts
@@ -23,19 +24,20 @@ pairs under the defaults' plan against 2,296 under Rotation's (W1 at kD = 200, l
 3. **On the levels the time rule took from the waves: justified as it is** (§4, §5). The form's
    crossover after the plan is 1.2–1.4× the waves' per-pair one at ε ≥ 10⁻⁶; the second plan adds
    few pairs (W1 at kD = 1000: 2,813,175 → 2,433,718 V pairs on level 7), and the measured change of
-   the levels' M2L and P2P is −0.12 to +0.02 s per case (at most 1 % of the evaluation; its size
-   varies 4× and on two of six cases its sign with the run order), against a second plan as dear
+   the levels' M2L and P2P is −0.12 to +0.02 s per case (at most 3 % of the evaluation; its size
+   varies up to 6× and on two of six cases its sign with the run order), against a second plan as dear
    as the first (0.02–4.6 s of build).
 4. **On the raised levels that keep their waves (10⁻⁷, 10⁻⁸): the plan converts far too few pairs**
    (§5, §6). The waves' per-pair constant prices a pair at b (p_w + 1)², but a raised level's
    waves cost per box at p_w; on W1's sparse leaf levels (levels 4–6) the after-plan crossover is
    8–17× higher and converts every V pair between leaves (98.7 % on one level). Measured in both
-   run orders: the levels' M2L and P2P fall by 0.07–0.75 s per case, as the levels' mean costs
-   predict (within 2–32 %); the evaluation by up to 44 % (W1 at kD = 100 and 200), by 8–13 % under
+   run orders: the levels' M2L and P2P fall by 0.09–0.75 s per case, linearly in the pairs and
+   interactions converted at the levels' measured costs (within 2–32 %); the evaluation by up to 44 % (W1 at kD = 100 and 200), by 8–13 % under
    the time rule at kD = 500 (−0.2 to 7 % under the defaults there, within the spread); the errors
    at 10⁻⁷ to 0.58–0.99× (at 10⁻⁸ unchanged). The Also's level is one of them: all 58,551 pairs convert, its waves' 0.34–0.46 s
    become 0.05–0.07 s more P2P.
-5. **On unraised levels with waves (ε ≥ 10⁻⁶) the after-plan crossover over-converts** (§5): on W1
+5. **On unraised levels with waves (ε ≥ 10⁻⁶) the after-plan crossover over-converts, by the
+   levels' own seconds** (§5): on W1
    at kD = 500 and 1000 the levels' M2L and P2P grow by 0.02–0.45 s in both orders against a predicted fall,
    because converting part of a level's pairs leaves its boxes' waves (the mean cost per pair
    over-states what a pair saves).
@@ -65,14 +67,17 @@ pairs under the defaults' plan against 2,296 under Rotation's (W1 at kD = 200, l
   fix of 3ecfa8a builds a fresh one, whose time 653724's "replan" includes). Both jobs ran before
   c315554, which raises no level whose first plan holds no V pair between leaves: their runs built
   a second plan for nothing on W3 at kD = 500 (14 s, the same plan) and where only levels without
-  leaf pairs rose; the outputs are those of c315554 bit for bit.
+  leaf pairs rose; the outputs are those of c315554 bit for bit. c315554 still builds a second,
+  identical plan where a raised level's leaf pairs all lie above the new crossover (W3 at
+  kD = 200, level 4, at 10⁻⁷ and 10⁻⁸: 0.21 s).
 - **Raw outputs**: `~/projects/fmm-archive/kathleen/runs/ch4-3b2b/` and `ch4-3b2b-reverse/`.
 - **Tables**: `tools/helmholtz/ch4-3b2b-tables.py errors|runs|levels|summary <dir>`.
 - **Spread.** Two runs of the same plan in one launch (`taken` and `all` where no waves level rose)
   differ by up to 30 % in the evaluation and 50 % in a small level's seconds (W1 at kD = 200, 10⁻³:
-  0.317 against 0.415 s), and a launch's later runs tend to be slower (CH4.3b2a's §5.2). §5 therefore
-  reads the levels' own seconds (M2L and P2P of the raised levels, measured within each run) and
-  both orders, and treats a change whose sign flips with the order as noise.
+  0.317 against 0.415 s; W3 at kD = 200, 10⁻⁷ and 10⁻⁸, an unchanged plan: +0.32 and +0.41 s of
+  2.4 and 2.8 s), and a launch's later runs tend to be slower (CH4.3b2a's §5.2). §5 therefore
+  reads the levels' own seconds (M2L and P2P of the raised levels whose plan changed, measured
+  within each run) and both orders, and treats a change whose sign flips with the order as noise.
 
 ## 2. The defaults' errors at 10⁻⁶
 
@@ -134,8 +139,10 @@ FMM bit for bit, Rotation unchanged); the harness's columns at W1, kD = 30, 10�
 
 Per raised level, the run with the V rule after the plan against the same run without it (job
 653717; `levels`): the crossovers, the V pairs, and the change of the level's M2L and P2P seconds
-against the change its own mean costs predict (the M2L's seconds per pair and the P2P's per
-interaction of the run without it, the after-plan rule's assumption). A selection:
+against the change predicted from the level's measured costs (the M2L's seconds per pair and the
+P2P's per interaction of the run without it). This checks that a converted pair saves the level's
+mean M2L cost, the after-plan rule's assumption; it does not check the cost model's constants
+themselves (the crossovers come from `DiagonalCosts` and `VCosts`). A selection:
 
 | case | run | level | p | M2L | crossover | V pairs | Δ M2L + P2P s | predicted s |
 | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: |
@@ -164,16 +171,17 @@ interaction of the run without it, the after-plan rule's assumption). A selectio
 
 ## 5. FMM evidence
 
-Per case and run, the raised levels' measured change summed, the prediction, the evaluation's
+Per case and run, the measured change of the raised levels whose plan changed, summed, the
+prediction, the evaluation's
 change (each the run with the V rule after the plan over the same run without it; `summary`), in
 both orders (forward: job 653717, the setting after its reference; reverse: job 653724, before it):
 
 | case | run | Δ M2L + P2P s, forward / reverse | predicted s | Δ evaluate s, forward / reverse | evaluate s (without) | replan s | φ, ∇φ ÷ |
 | --- | --- | --- | ---: | --- | ---: | ---: | --- |
-| W1, kD = 100, 10⁻⁷ | defaults + all | −0.109 / −0.112 | −0.109 | −0.106 / −0.109 | 0.303 | 0.026 | 0.991, 0.745 |
+| W1, kD = 100, 10⁻⁷ | defaults + all | −0.112 / −0.111 | −0.109 | −0.106 / −0.109 | 0.303 | 0.026 | 0.991, 0.745 |
 | W1, kD = 100, 10⁻⁷ | time + all | −0.105 / −0.129 | −0.094 | −0.111 / −0.132 | 0.261 | 0.026 | 0.989, 0.745 |
-| W1, kD = 100, 10⁻⁸ | defaults + all | −0.074 / −0.098 | −0.092 | −0.056 / −0.092 | 0.331 | 0.027 | 1.000, 1.000 |
-| W1, kD = 100, 10⁻⁸ | time + all | −0.102 / −0.122 | −0.100 | −0.100 / −0.129 | 0.341 | 0.026 | 1.000, 1.000 |
+| W1, kD = 100, 10⁻⁸ | defaults + all | −0.090 / −0.105 | −0.092 | −0.056 / −0.092 | 0.331 | 0.027 | 1.000, 1.000 |
+| W1, kD = 100, 10⁻⁸ | time + all | −0.102 / −0.121 | −0.100 | −0.100 / −0.129 | 0.341 | 0.026 | 1.000, 1.000 |
 | W1, kD = 200, 10⁻⁷ | defaults + all | −0.249 / −0.450 | −0.260 | −0.214 / −0.594 | 1.123 | 0.125 | 0.983, 0.892 |
 | W1, kD = 200, 10⁻⁷ | time + all | −0.207 / −0.316 | −0.259 | −0.109 / −0.359 | 0.866 | 0.124 | 0.983, 0.891 |
 | W1, kD = 200, 10⁻⁸ | defaults + all | −0.284 / −0.365 | −0.279 | −0.314 / −0.315 | 1.369 | 0.124 | 1.000, 1.000 |
@@ -182,8 +190,8 @@ both orders (forward: job 653717, the setting after its reference; reverse: job 
 | W1, kD = 500, 10⁻⁷ | time + all | −0.439 / −0.446 | −0.518 | −0.357 / −0.557 | 4.706 | 1.082 | 0.756, 0.577 |
 | W1, kD = 500, 10⁻⁸ | defaults + all | −0.679 / −0.749 | −0.665 | −0.226 / −0.682 | 9.111 | 1.069 | 1.000, 1.000 |
 | W1, kD = 500, 10⁻⁸ | time + all | −0.713 / −0.727 | −0.681 | −0.814 / −0.830 | 6.447 | 1.076 | 1.000, 1.000 |
-| W3, kD = 200, 10⁻⁶ | defaults + all | +0.135 / −0.253 | −0.162 | +0.431 / −0.265 | 1.992 | 0.210 | 0.986, 0.967 |
-| W1, kD = 100, 10⁻⁶ | defaults + all | −0.018 / −0.025 | −0.028 | −0.021 / −0.035 | 0.195 | 0.026 | 0.612, 0.643 |
+| W3, kD = 200, 10⁻⁶ | defaults + all | −0.134 / −0.239 | −0.162 | +0.431 / −0.265 | 1.992 | 0.210 | 0.986, 0.967 |
+| W1, kD = 100, 10⁻⁶ | defaults + all | −0.012 / −0.018 | −0.028 | −0.021 / −0.035 | 0.195 | 0.026 | 0.612, 0.643 |
 | W1, kD = 200, 10⁻⁶ | defaults + all | −0.022 / +0.045 | −0.050 | −0.066 / +0.054 | 0.724 | 0.122 | 0.702, 0.695 |
 | W1, kD = 500, 10⁻³ | defaults + all | +0.041 / +0.023 | −0.031 | +0.616 / +0.016 | 4.510 | 1.016 | 0.966, 0.967 |
 | W1, kD = 500, 10⁻⁶ | defaults + all | +0.115 / +0.098 | −0.018 | +0.574 / −0.056 | 5.567 | 1.037 | 0.787, 0.808 |
@@ -196,16 +204,18 @@ both orders (forward: job 653717, the setting after its reference; reverse: job 
 | W3, kD = 200, 10⁻⁶ | time + taken | −0.041 / −0.014 | −0.045 | −0.119 / +0.156 | 2.250 | 0.206 | 0.988, 0.970 |
 
 - **Raised levels that keep their waves (10⁻⁷, 10⁻⁸; `all`)**: in both orders the levels gain
-  0.07–0.75 s per case, as predicted, and the evaluation falls by 12–44 % on W1 at kD = 100 and 200
+  0.09–0.75 s per case, as predicted, and the evaluation falls by 12–44 % on W1 at kD = 100 and 200
   (5 % on one run) and by 8–13 % under the time rule at kD = 500 (6.45 → 5.63 s forward, 6.47 →
   5.64 s reverse at 10⁻⁸); under the defaults at kD = 500 by −0.2 to 7 %, the spread of a 7–10 s
   evaluation. At 10⁻⁷ the errors fall to 0.58–0.99× (the converted pairs' truncation gone); at 10⁻⁸
   they are unchanged.
 - **Unraised levels with waves (ε ≥ 10⁻⁶; `all`)**: small and mixed on W1 at kD = 100–200; a
-  loss of 0.02–0.45 s on the dense levels of W1 at kD = 500 and 1000 in both orders (§4); W3 at
-  kD = 200 flips sign. The evaluation's changes there (−2.6 to +0.6 s at kD = 1000) are spread.
-- **Levels taken from the waves (`taken`)**: −0.12 to +0.02 s, the size varying up to 4× and on two
-  of six cases the sign with the order; at most 1 % of the evaluation, below the spread.
+  loss of 0.02–0.45 s of the levels' own seconds on the dense levels of W1 at kD = 500 and 1000 in
+  both orders (§4), although the evaluation's changes there (−2.6 to +0.6 s at kD = 1000) are
+  spread and fell in both orders at kD = 1000; W3 at kD = 200's level 5 gains 0.13–0.24 s (every
+  pair converts).
+- **Levels taken from the waves (`taken`)**: −0.12 to +0.02 s, the size varying up to 6× and on two
+  of six cases the sign with the order; at most 3 % of the evaluation, below the spread.
 - **The second plan** costs what the first does: 0.02 s (W1, kD = 100), 0.12 s (200), 1.0–1.1 s
   (500), 4.6 s (1000), 0.21 s (W3, kD = 200), and 14 s on W3 at kD = 500, where no more pairs
   could convert (c315554 now skips that). Against one evaluation the raised levels' gain pays for
@@ -229,17 +239,18 @@ V rule's waves crossover, not the waves' M2L. The same holds on every raised lea
    rule's plan (fewer exact near pairs under the waves' crossover), not the waves' M2L (0.966–1.024×
    with the rule off); nothing changes. *Recommended: accept.*
 2. **The levels taken from the waves: justified as it is** (§4, §5): the after-plan crossover of
-   the form adds few pairs, the measured change is within the spread (−0.12 to +0.02 s, ≤ 1 %), and a
+   the form adds few pairs, the measured change is within the spread (−0.12 to +0.02 s, ≤ 3 %), and a
    second plan costs as much as the first. The plan stays as built; `VAfterPlan` stays opt-in, a
    measurement tool and the trusted path of question 3's follow-up. *Recommended: accept.*
    *Alternative:* adopt `TakenLevels` with CH4.3b2c's default.
 3. **The raised levels with waves** (§5, §6, the Also): the waves' V crossover under-prices a raised
-   level (p_w > p_l, ε < 10⁻⁶), which then keeps 10–100 % of its leaf pairs on the waves at 0.07–0.75 s
+   level (p_w > p_l, ε < 10⁻⁶), which then keeps 10–100 % of its leaf pairs on the waves at 0.09–0.75 s
    per case. *Recommended:* a follow-up task, CH4.3b2d, before CH4.3b2c on the priority list: the
    waves' V crossover on a raised level priced per box before the plan (one plan), with
    `VAfterPlan::AllLevels` on raised levels as its trusted measure, pair and FMM evidence on this
    report's cases (and W3's dense raised levels, where converting every pair may not pay: n_s n_t
    up to 256² per pair). *Alternative:* adopt `AllLevels` restricted to raised levels with CH4.3b2c's
    default, a second plan in the build (+1.0–4.6 s on W1 at kD = 500–1000).
-4. **Unraised levels with waves**: the after-plan mean over-converts dense levels (§4); not adopted,
+4. **Unraised levels with waves**: by the levels' own seconds the after-plan mean over-converts
+   dense levels (§4; the evaluation is within its spread there); not adopted,
    no task. *Recommended: accept.*

@@ -4129,9 +4129,9 @@ request, using this template:
 - Measurements (Kathleen jobs 653717, node-c11a-021, and 653724, node-c11a-006; `singlenode`,
   1 × 40): W1 at kD = 100–1000 and W3 at N = 10⁶, kD = 200 and 500, 10⁻³–10⁻⁸:
   - with the V rule off the defaults err 0.966–1.024× Rotation's; with it on 1.000–1.344×,
-    following the pairs converted (Rotation's plan 1.6–9.2× as many);
-  - the levels taken from the waves: the re-decision −0.12 to +0.02 s per case, within the spread;
-  - the raised levels with waves (10⁻⁷, 10⁻⁸): their leaf pairs all convert after the plan, 0.07–
+    with the pairs converted (Rotation's plan 1.6–9.2× as many; qualitatively, at 10⁻⁶);
+  - the levels taken from the waves: the re-decision −0.12 to +0.02 s per case (≤ 3 %), within the spread;
+  - the raised levels with waves (10⁻⁷, 10⁻⁸): their leaf pairs all convert after the plan, 0.09–
     0.75 s gained per case in both run orders, within 2–32 % of the levels' mean costs; the Also's
     level (58,551 pairs) among them; errors at 10⁻⁷ 0.58–0.99×;
   - unraised dense levels: the mean over-converts, +0.02–0.45 s;
