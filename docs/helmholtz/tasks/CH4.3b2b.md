@@ -123,8 +123,34 @@ with CH4.3b2c's default.
   box's waves only if its box leaves every V list, so the mean may overstate the gain on dense
   levels. The FMM decides.
 
+## As built
+- `VAfterPlan`, `HelmholtzFmmBuilder::v_after_plan`, `v_after_plan_crossover` (`VLevelM2l`) as
+  planned. Two changes after the plan: the second plan takes a fresh `BoxIndex::of_octree` (the
+  first plan's index has the ghost leaves numbered, which `Plan::with_rules_on` refuses: the MPI
+  run at 2 ranks failed with the clone, 3ecfa8a), and a level is raised only where its first plan
+  still holds a V pair between leaves (summed over the ranks; c315554), after job 653717 built a
+  second, identical plan on W3 at kD = 500 (14 s) and where only levels without leaf pairs rose.
+- The runs got a `reverse` stage (the same runs in the reverse order, job 653724): same-plan pairs
+  in one launch differed by up to 30 % in the evaluation, so §5 of the report reads the levels' own
+  seconds in both orders.
+
+## Results
+The report: fmm-validate/results/helmholtz-ch4-3b2b.md.
+- The explanation (§2): with the V rule off the defaults err 0.966–1.024× Rotation's; with it on
+  1.000–1.344×, following the pairs converted (Rotation's plan 1.6–9.2× as many).
+- The levels taken from the waves (§4, §5): the re-decision's change −0.12 to +0.02 s per case,
+  within the spread, against a second plan as dear as the first: justified as it is (question 2).
+- The raised levels that keep their waves (§5, §6): the after-plan crossover converts their leaf
+  pairs and gains 0.07–0.75 s per case in both orders, as the levels' mean costs predict; the
+  Also's level is one of them. A one-plan rule is proposed as a follow-up (question 3).
+- Unraised dense levels with waves: the mean over-converts, +0.02–0.45 s (question 4).
+
 ## Pending runs
-(filled in step 6)
+None. Kathleen job 653717 (node-c11a-021, 2026-11-21 00:29–01:36, `singlenode`, 1 × 40, at 9c1f72e:
+`ch4-3b2b-runs.sh target/runs/ch4-3b2b errors w1 w3`, 54 launches, every one exit 0) and job 653724
+(node-c11a-006, 02:02–02:17, at 5184d30: `reverse`, 15 launches, every one exit 0). Raw outputs in
+`~/projects/fmm-archive/kathleen/runs/ch4-3b2b{,-reverse}/`.
 
 ## Open questions
-(filled when they arise)
+The report's §7, questions 1–4 (the explanation; the levels taken, as it is; the raised levels, a
+follow-up CH4.3b2d; unraised levels, no task).

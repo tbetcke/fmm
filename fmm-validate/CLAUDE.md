@@ -646,6 +646,17 @@ rule".
 at kD = 30. `tools/helmholtz/ch4-3b2a-runs.sh` runs the task's stages, `ch4-3b2a-tables.py`
 makes the report's tables. Its report is `results/helmholtz-ch4-3b2a.md`.
 
+Helmholtz CH4.3b2b (the V rule after the plan; docs/helmholtz/tasks/CH4.3b2b.md) added
+`helmholtz_accuracy::Case::v_after_plan` (`HelmholtzFmmBuilder::v_after_plan`, `VAfterPlan::Off` in
+`Case::new`) and `Row::{v_after_plan, v_crossovers, replanned}` (per level the V crossover before
+and after the plan; whether the plan was built again), the build part "replan", and to the example
+`--v-after-plan off|taken|all,…` (each `--near-v cost` run at each, `taken` only with `--diagonal
+auto`; the column "M2L" ending `/vafter` or `/vafterall`) and two last columns of "Near pairs" (the
+crossovers per level; "replanned" on the run's row). `tests/helmholtz_accuracy.rs` (`check_diagonal`)
+checks `AllLevels` under the defaults at 10⁻⁷ on W1 at kD = 30. `tools/helmholtz/ch4-3b2b-runs.sh`
+runs the task's stages (`errors`, `w1`, `w3`, `reverse`), `ch4-3b2b-tables.py` makes the report's
+tables. Its report is `results/helmholtz-ch4-3b2b.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
