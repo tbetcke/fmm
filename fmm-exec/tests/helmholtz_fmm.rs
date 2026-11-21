@@ -1898,7 +1898,11 @@ const DEARER_FORM: DiagonalCosts = DiagonalCosts {
 /// pairs and the near interactions at least the setting off's; the errors against the direct sum
 /// within [`NEAR_ERROR_BOUND`] of the setting off's; 2 threads and on P ranks the one-rank FMM
 /// bit for bit. Under Rotation nothing rises: no second plan, the setting off's output bit for
-/// bit. The V costs are named (NEON's), so the plans do not depend on the machine class.
+/// bit. `RaisedLevels` (Helmholtz CH4.3b2d) at both [`DEAR_FORM_PAIR`] and [`DEARER_FORM`] names
+/// neither the levels taken nor the levels that keep their waves at the degree given, so on a
+/// scenario without raised levels (ε ≥ 10⁻⁶) nothing rises where `TakenLevels` and `AllLevels`
+/// do; and `VRaisedPrice::PerBox` counts nothing there, the per-pair price's output bit for bit.
+/// The V costs are named (NEON's), so the plans do not depend on the machine class.
 fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
     let inputs = &Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
@@ -1939,6 +1943,18 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
             "the waves kept",
             auto.clone().diagonal_costs(Some(DEARER_FORM)),
             VAfterPlan::AllLevels,
+        ),
+        // `RaisedLevels` (CH4.3b2d): neither the levels taken nor those that keep their waves
+        // unraised.
+        (
+            "the form taking the waves",
+            auto.clone().diagonal_costs(Some(DEAR_FORM_PAIR)),
+            VAfterPlan::RaisedLevels,
+        ),
+        (
+            "the waves kept",
+            auto.clone().diagonal_costs(Some(DEARER_FORM)),
+            VAfterPlan::RaisedLevels,
         ),
         (
             "Rotation",
@@ -2009,7 +2025,9 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
             .map(|l| {
                 let (m2l, _, taken) = &m2l[l];
                 let keeps = choice == VAfterPlan::AllLevels && *m2l == HelmholtzM2l::PlaneWave;
-                (*taken || keeps) && leaf_pairs[l] > 0
+                // The scenario raises no level (ε ≥ 10⁻⁶), so `RaisedLevels` names none.
+                let taken = *taken && choice != VAfterPlan::RaisedLevels;
+                (taken || keeps) && leaf_pairs[l] > 0
             })
             .collect();
         let raised: Vec<bool> = after.iter().zip(&planned).map(|(a, p)| a > p).collect();
@@ -2025,6 +2043,8 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
         assert_eq!(fmm.replanned(), replanned, "{what}: the second plan");
         if setting == "Rotation" {
             assert!(!replanned, "{what}: nothing to raise under Rotation");
+        } else if choice == VAfterPlan::RaisedLevels {
+            assert!(!replanned, "{what}: no raised level");
         } else {
             raised_any[usize::from(setting == "the waves kept")] |= replanned;
         }
@@ -2078,6 +2098,23 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
         raised_any[0],
         raised_any[1]
     );
+    // The per-box price (CH4.3b2d) without a raised level: nothing counted, one plan, the
+    // per-pair price's output bit for bit.
+    let what = format!("{}, the V rule's price per box", scenario.name);
+    let kept = auto.clone().diagonal_costs(Some(DEARER_FORM));
+    let (_, output_pair) = run(&kept, inputs, kind, comm);
+    let (fmm, output) = run(
+        &kept.v_raised_price(VRaisedPrice::PerBox),
+        inputs,
+        kind,
+        comm,
+    );
+    assert!(
+        fmm.raised_v_shapes().is_none() && !fmm.replanned(),
+        "{what}: counted or planned again"
+    );
+    drop(fmm);
+    assert_same(&what, &output, &output_pair, comm);
 }
 
 /// The scenario of [`check_v_raised`]: 3,000 points on the sphere at kD = 30 under the leaf

@@ -95,8 +95,8 @@
 //!   (`pair` the waves' per-pair constant, `box` their cost per box over the pairs per leaf
 //!   counted before the plan), each run with `--near-v cost` at each in turn, outside
 //!   `--v-after-plan`'s loop (unnamed, the library's); the column "M2L" of a row with the cost
-//!   model's V rule priced per box ends with `/vbox`. The last column of "Near pairs" gives per level the leaves and V entries
-//!   counted before the plan (`Row::raised_v_shapes`).
+//!   model's V rule priced per box ends with `/vbox`. The last column of "Near pairs" gives per
+//!   level the leaves and V entries counted before the plan (`Row::raised_v_shapes`).
 //! - `--leaf-size auto|n,…` and `--c-leaf auto|c,…` (Helmholtz CH4.0d3,
 //!   `HelmholtzFmmBuilder::{max_points_per_leaf, c_leaf}`): the octree's points per leaf and
 //!   the maximum leaf width in wavelengths (`auto`, the default, the library's), every run at

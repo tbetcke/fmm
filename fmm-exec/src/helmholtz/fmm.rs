@@ -1943,8 +1943,8 @@ fn leaf_v_shapes(
         })
         .map(|(key, _)| *key)
         .collect();
-    // Key order: a level's siblings come together, so each parent's candidates once.
-    leaves.sort_unstable();
+    // By level, then key: a level's siblings come together, so each parent's candidates once.
+    leaves.sort_unstable_by_key(|&key| (morton::level(key), key));
     let mut shapes = vec![LeafVShape::default(); levels.len()];
     let mut candidates: Vec<(MortonKey, [usize; 3])> = Vec::new();
     let mut current = None;
@@ -2520,8 +2520,8 @@ where
 
     /// The leaves and V entries of each level as counted before the plan under
     /// [`VRaisedPrice::PerBox`] (those the per-pair crossover leaves; [`LeafVShape`]), summed
-    /// over the ranks: on the levels whose waves run at a raised degree, zero on the others; `None` where nothing was counted (another price,
-    /// another [`VNear`], no raised level).
+    /// over the ranks: on the levels whose waves run at a raised degree, zero on the others;
+    /// `None` where nothing was counted (another price, another [`VNear`], no raised level).
     pub fn raised_v_shapes(&self) -> Option<&[LeafVShape]> {
         self.raised_v_shapes.as_deref()
     }

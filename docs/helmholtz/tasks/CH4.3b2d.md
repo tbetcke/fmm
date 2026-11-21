@@ -28,8 +28,10 @@ How it is read:
   counted from the octree's keys: per local leaf t of a raised level, its V entries by the
   per-key rule (the children of the interior same-level neighbours of t's parent that are not
   adjacent to t; nd-fmm-plan's `interaction_manager` docs), less those the empty-box rule leaves
-  out (a source box without source points; t without target points); B the leaves with an entry,
-  P their entries, summed over the ranks. Leaves only: they are the only targets whose V row can
+  out (a source box without source points; t without target points) and those between leaves
+  that the V rule converts at the per-pair crossover (as built after the first runs, 43f29ad: the
+  trusted measure prices the pairs the first plan leaves); B the leaves with an entry left, P
+  those entries, summed over the ranks. Leaves only: they are the only targets whose V row can
   empty (only pairs between leaves convert), each local leaf is held by one rank, so the sums are
   the one-rank tree's (constraints 2 and 9); a raised level is a fine level, mostly leaves on W1
   (CH4.3b2b §4: 98.7–100 % of the pairs converted were leaf pairs).
@@ -60,14 +62,16 @@ How it is read:
 - `nd-fmm-exec` (Helmholtz modules only):
   - `VRaisedPrice` (`PerPair`, CH4.0d2's; `PerBox`), `HelmholtzFmmBuilder::v_raised_price`;
     `raised_crossover` (a pure function of the costs, p_w and the counts, constraint 9);
-    `leaf_v_counts` (per level, the local leaves with a V entry and their entries, from the
-    octree's keys and the counts); in `build`, before the plan, the counts of the raised levels
-    (agreed: one all-reduce sum) and the crossovers; `HelmholtzFmm::{v_raised_price,
-    raised_v_counts}`; `HelmholtzBuildTimings::counts` includes them.
+    `leaf_v_shapes` and `LeafVShape` (per level, the local leaves with a V entry left and those
+    entries, from the octree's keys and the counts); in `build`, before the plan, the counts of
+    the raised levels (agreed: one all-reduce sum) and the crossovers (one all-reduce min);
+    `HelmholtzFmm::{v_raised_price, raised_v_shapes}`; `HelmholtzBuildTimings::counts` includes
+    them.
   - `VAfterPlan::RaisedLevels`.
-- `nd-fmm-validate`: `Case::v_raised_price` (`None` the library's), `Row::v_raised_price`, the
-  example's `--v-raised pair|box,…` (the column "M2L" ending `/vpair` or `/vbox` where named) and
-  `--v-after-plan raised`.
+- `nd-fmm-validate`: `Case::v_raised_price` (`None` the library's), `Row::{v_raised_price,
+  raised_v_shapes}`, the example's `--v-raised pair|box,…` (the column "M2L" ending `/vbox` per
+  box) and `--v-after-plan raised` (`/vafterraised`), the counts as the last column of "Near
+  pairs".
 - `tools/helmholtz/ch4-3b2d-runs.sh`, `ch4-3b2d-tables.py`; the report
   `fmm-validate/results/helmholtz-ch4-3b2d.md`.
 - No convention, no dependency, no `nd-fmm-plan` change.
@@ -77,9 +81,10 @@ How it is read:
   pairs).
 - `tests/helmholtz_fmm.rs` `check_v_raised` (a sphere at kD = 30, ε = 10⁻⁷, Auto with waves from
   degree 0, NEON's V costs named, so that the plans are the same on every machine class):
-  - the counts against the plan: with the V rule off, per level, the computed local leaves with a
-    V row and their V entries of the plan (the per-key rule as built) equal `raised_v_counts`, on
-    every rank count (with the empty-box rule on);
+  - the counts against the plan: per level, the computed local leaves with a V row and their V
+    entries of `PerPair`'s plan equal `raised_v_shapes`, on every rank count (with the empty-box
+    rule on); where the raised level's boxes with a V row are leaves, the per-box crossover the
+    trusted measure's after-plan crossover;
   - `PerBox`: the crossovers raised exactly on the raised levels with waves and leaf pairs, by
     `raised_crossover`; V pairs per level at most and conversions at least `PerPair`'s; no second
     plan; the errors within `NEAR_ERROR_BOUND` (1.1) of `PerPair`'s; 2 threads and on P ranks the
