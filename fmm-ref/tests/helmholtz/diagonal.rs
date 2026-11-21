@@ -580,13 +580,13 @@ fn the_extended_chain_against_the_f64_chains() {
             let e = bound(k, distance(o), circumradius(), p, BoundConstants::F64);
             diagonal_worst = diagonal_worst.max(diagonal / e);
             rcr_worst = rcr_worst.max(rcr);
-            if !(diagonal <= e / THETA) {
+            if diagonal.is_nan() || diagonal > e / THETA {
                 failures.push(format!(
                     "k a {ka}, p {p}, {o:?}: {diagonal:.2e} > 2E = {:.2e}",
                     e / THETA
                 ));
             }
-            if !(rcr <= RCR_AGAINST_EXTENDED) {
+            if rcr.is_nan() || rcr > RCR_AGAINST_EXTENDED {
                 failures.push(format!("k a {ka}, p {p}, {o:?}: RCR {rcr:.2e}"));
             }
         }
