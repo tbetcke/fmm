@@ -79,7 +79,15 @@
 //!   (`Row::v_near`), the V pairs that ran, the multipoles read from other ranks, the source
 //!   points sent and received (`Row::source_points`), the P2P's seconds and near
 //!   interactions with its thread-nanoseconds per interaction, the M2L's seconds and the
-//!   evaluation; with `--levels` also a row per level with P2P.
+//!   evaluation; with `--levels` also a row per level with P2P. Its last two columns
+//!   (Helmholtz CH4.3b2b) give per level the V rule's crossover before the plan and after it
+//!   (`Row::v_crossovers`), and on the run's row whether the plan was built again.
+//! - `--v-after-plan off|taken|all,…` (Helmholtz CH4.3b2b, `HelmholtzFmmBuilder::v_after_plan`):
+//!   whether the cost model's V crossovers are decided again after the plan (`off`, the
+//!   default, the library's; `taken` on the levels the time rule took from the waves; `all`
+//!   also on those that keep them), each run with `--near-v cost` at each in turn (`taken` only
+//!   with `--diagonal auto`, where a level can be taken), inside `--near-v`'s loop; the column
+//!   "M2L" ends with `/vafter` or `/vafterall`. The build's part "replan" is the second plan.
 //! - `--leaf-size auto|n,…` and `--c-leaf auto|c,…` (Helmholtz CH4.0d3,
 //!   `HelmholtzFmmBuilder::{max_points_per_leaf, c_leaf}`): the octree's points per leaf and
 //!   the maximum leaf width in wavelengths (`auto`, the default, the library's), every run at
@@ -211,7 +219,7 @@ use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, DIAGONAL_AUTO_MIN_KA, Degrees, DiagonalCosts,
     HelmholtzDiagonal, HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit,
-    TransferBuild, VNear, Wavenumber, WxNear, s7_degree,
+    TransferBuild, VAfterPlan, VNear, Wavenumber, WxNear, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -256,6 +264,7 @@ struct Arguments {
     empty_boxes: Vec<bool>,
     near_v: Vec<VNear>,
     near_wx: Vec<WxNear>,
+    v_after_plan: Vec<VAfterPlan>,
     leaf_sizes: Vec<Option<usize>>,
     c_leaves: Vec<Option<f64>>,
     s7: bool,
@@ -332,7 +341,7 @@ fn arguments() -> Arguments {
              [--rcr-split auto|boxes|pairs,…] [--diagonal off|rule|<ε>,…] \
              [--diagonal-build direct|interpolated,…] \
              [--term on|off,…] [--block auto|w,…] [--empty-boxes on|off,…] [--near-v off|cost|n|inf,…] [--near-wx off|cost|n|inf,…] \
-             [--leaf-size auto|n,…] [--c-leaf auto|c,…] [--levels] \
+             [--v-after-plan off|taken|all,…] [--leaf-size auto|n,…] [--c-leaf auto|c,…] [--levels] \
              [--evaluations n]; got {args:?}"
         );
         std::process::exit(2);
@@ -366,6 +375,7 @@ fn arguments() -> Arguments {
         empty_boxes: vec![true],
         near_v: vec![VNear::Off],
         near_wx: vec![WxNear::Off],
+        v_after_plan: vec![VAfterPlan::Off],
         leaf_sizes: vec![None],
         c_leaves: vec![None],
         s7: false,
@@ -531,6 +541,17 @@ fn arguments() -> Arguments {
                         })
                         .collect::<Option<Vec<_>>>()
                         .map(|d| parsed.diagonals = d)
+                        .is_some(),
+                    "--v-after-plan" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "off" => Some(VAfterPlan::Off),
+                            "taken" => Some(VAfterPlan::TakenLevels),
+                            "all" => Some(VAfterPlan::AllLevels),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|v| parsed.v_after_plan = v)
                         .is_some(),
                     "--diagonal-costs" => value
                         .split(',')
@@ -761,8 +782,9 @@ fn m2l_string(row: &Row) -> String {
 }
 
 /// For a row with the empty-box rule off `/full` (Helmholtz CH4.0d1), with V pairs as
-/// near pairs `/v<n>` (Helmholtz CH4.0d2) and with W and X pairs as near pairs `/wx<n>`
-/// (Helmholtz CH4.0d3); else empty.
+/// near pairs `/v<n>` (Helmholtz CH4.0d2), with W and X pairs as near pairs `/wx<n>`
+/// (Helmholtz CH4.0d3) and with the V rule after the plan `/vafter` or `/vafterall`
+/// (Helmholtz CH4.3b2b); else empty.
 fn empty_suffix(row: &Row) -> String {
     let full = if row.empty_boxes { "" } else { "/full" };
     let v = match row.near_v {
@@ -774,7 +796,12 @@ fn empty_suffix(row: &Row) -> String {
         WxNear::Crossovers { w, .. } => format!("/wx{w}"),
         WxNear::CostModel => "/wxcost".to_string(),
     };
-    format!("{full}{v}{wx}")
+    let after = match row.v_after_plan {
+        VAfterPlan::Off => "",
+        VAfterPlan::TakenLevels => "/vafter",
+        VAfterPlan::AllLevels => "/vafterall",
+    };
+    format!("{full}{v}{wx}{after}")
 }
 
 /// For a row of a named leaf size `/n<size>` and of a named c_leaf `/c<c>` (Helmholtz
@@ -1347,9 +1374,10 @@ fn main() {
                 };
                 let p2p: f64 = row.p2p_seconds.iter().sum();
                 let interactions: u64 = row.near_interactions.iter().sum();
+                let replanned = if row.replanned { "replanned" } else { "–" };
                 let mut lines = vec![format!(
                     "{head} | Σ | {} | {} | {} | {} | {} | {} | {p2p:.4} | {interactions} | {} \
-                     | {:.4} | {:.4} |",
+                     | {:.4} | {:.4} | – | {replanned} |",
                     row.v_near[0],
                     row.v_near[1],
                     row.v_pairs.iter().sum::<usize>(),
@@ -1362,8 +1390,10 @@ fn main() {
                 )];
                 if arguments.levels {
                     for l in (0..row.levels).filter(|&l| row.near_interactions[l] > 0) {
+                        let [before, after] = row.v_crossovers.get(l).copied().unwrap_or_default();
                         lines.push(format!(
-                            "{head} | {l} | – | – | {} | – | – | – | {:.4} | {} | {} | {:.4} | – |",
+                            "{head} | {l} | – | – | {} | – | – | – | {:.4} | {} | {} | {:.4} | – \
+                             | {before:.0} | {after:.0} |",
                             row.v_pairs[l],
                             row.p2p_seconds[l],
                             row.near_interactions[l],
@@ -1561,12 +1591,29 @@ fn main() {
                     }
                 }
             }
+            // `--v-after-plan` inside `--near-v`'s loop (Helmholtz CH4.3b2b): with the cost
+            // model's V rule only, `taken` only with the time rule.
             let mut runs_by_rule = Vec::new();
             for &(diagonal, build, costs) in &diagonals {
                 for &rcr in &arguments.rcr_splits {
                     for &tree in &trees {
                         for &rule in &rules {
-                            runs_by_rule.push((diagonal, build, costs, rcr, tree, rule));
+                            let afters: Vec<VAfterPlan> = if rule.1 == VNear::CostModel {
+                                arguments
+                                    .v_after_plan
+                                    .iter()
+                                    .copied()
+                                    .filter(|&a| {
+                                        a != VAfterPlan::TakenLevels
+                                            || diagonal == HelmholtzDiagonal::Auto
+                                    })
+                                    .collect()
+                            } else {
+                                vec![VAfterPlan::Off]
+                            };
+                            for after in afters {
+                                runs_by_rule.push((diagonal, build, costs, rcr, tree, rule, after));
+                            }
                         }
                     }
                 }
@@ -1579,8 +1626,10 @@ fn main() {
                 rcr_split,
                 (leaf_size, c_leaf),
                 (empty_boxes, near_v, near_wx),
+                v_after_plan,
             ) in rules
             {
+                case.v_after_plan = v_after_plan;
                 case.diagonal = diagonal;
                 case.diagonal_build = diagonal_build;
                 case.diagonal_costs = diagonal_costs;
@@ -1929,11 +1978,12 @@ fn main() {
         println!(
             "| Workload | N | kD | degrees | M2L | ranks × threads | level | V pairs offered \
              | converted | V pairs | remote multipoles | source points sent | received | P2P s \
-             | near interactions | ns per interaction | M2L s | evaluate s |"
+             | near interactions | ns per interaction | M2L s | evaluate s | crossover \
+             | after the plan |"
         );
         println!(
             "| --- | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: \
-             | ---: | ---: | ---: | ---: | ---: |"
+             | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
         );
         for line in &near {
             println!("{line}");

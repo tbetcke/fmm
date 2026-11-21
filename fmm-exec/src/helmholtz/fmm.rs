@@ -267,6 +267,55 @@ impl std::fmt::Display for VNear {
     }
 }
 
+/// Whether the V rule of [`VNear::CostModel`] is decided again after the plan (Helmholtz
+/// CH4.3b2b; [`HelmholtzFmmBuilder::v_after_plan`]). Before the plan the builder knows the
+/// levels whose M2L may be the exponential one ([`HelmholtzFmmBuilder::near_v`]), and sets
+/// their crossover from the waves' per-pair constant, grouped per (parent, source); the time
+/// rule ([`HelmholtzDiagonal::Auto`]) decides from the plan's V lists which of them keep the
+/// waves. After the operator's choice, each level named below gets the crossover of the M2L
+/// it runs ([`v_after_plan_crossover`]) where that is higher (and where the first plan still
+/// holds a V pair between two leaves, on some rank), and the plan is built once more if any
+/// crossover rose: it converts the first plan's pairs and those the higher crossover
+/// adds (per pair on a level without waves, per (parent, source) on a level with them), so
+/// its V lists are within the first plan's and the operator's M2L per level and buffers
+/// hold. Opt-in, for CH4.3b2b's measurements.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VAfterPlan {
+    /// The plan of the crossovers before it (the default).
+    #[default]
+    Off,
+    /// The levels the time rule took from the waves
+    /// ([`HelmholtzOperator::taken_from_waves`]): the diagonal form's pair, or RCR's where
+    /// no class takes the form, at the level's degree.
+    TakenLevels,
+    /// Those, and the levels that keep the waves: the waves' level cost by the time rule's
+    /// model over the level's pairs.
+    AllLevels,
+}
+
+impl std::fmt::Display for VAfterPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Off => write!(f, "off"),
+            Self::TakenLevels => write!(f, "taken"),
+            Self::AllLevels => write!(f, "all"),
+        }
+    }
+}
+
+/// The M2L a level runs, as [`v_after_plan_crossover`] prices a V pair of it (Helmholtz
+/// CH4.3b2b).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VLevelM2l {
+    /// The exponential M2L: its cost per box with a V row, over the level's pairs.
+    Waves,
+    /// The diagonal form: its pair (on a level whose other classes run RCR too, the form's
+    /// pair prices them as well: lower than RCR's, so fewer of them convert).
+    Form,
+    /// RCR (Rotation): its pair.
+    Rcr,
+}
+
 /// Which W and X pairs between two leaves the plan makes near pairs (Helmholtz CH4.0d3;
 /// [`HelmholtzFmmBuilder::near_wx`]; `nd_fmm_plan::near::NearRule`, Laplace's mechanism of
 /// Phase 6 T12): a W pair (a leaf t and a finer leaf s of its W list) converts where s holds
@@ -347,6 +396,7 @@ pub struct HelmholtzFmmBuilder {
     diagonal: HelmholtzDiagonal,
     diagonal_build: TransferBuild,
     diagonal_costs: Option<DiagonalCosts>,
+    v_costs: Option<VCosts>,
     diagonal_budget: usize,
     diagonal_chunk: Option<usize>,
     c_leaf: f64,
@@ -354,6 +404,7 @@ pub struct HelmholtzFmmBuilder {
     empty_boxes: bool,
     near_v: VNear,
     near_wx: WxNear,
+    v_after_plan: VAfterPlan,
     pair_calls: bool,
 }
 
@@ -402,6 +453,7 @@ impl HelmholtzFmmBuilder {
             diagonal: HelmholtzDiagonal::Off,
             diagonal_build: DEFAULT_DIAGONAL_BUILD,
             diagonal_costs: None,
+            v_costs: None,
             diagonal_budget: DEFAULT_SIGNATURE_NODE_BUDGET,
             diagonal_chunk: None,
             c_leaf: DEFAULT_C_LEAF,
@@ -409,6 +461,7 @@ impl HelmholtzFmmBuilder {
             empty_boxes: true,
             near_v: VNear::CostModel,
             near_wx: WxNear::CostModel,
+            v_after_plan: VAfterPlan::Off,
             pair_calls: false,
         }
     }
@@ -572,6 +625,28 @@ impl HelmholtzFmmBuilder {
     /// X pairs are [`near_wx`](Self::near_wx)'s.
     pub fn near_v(mut self, choice: VNear) -> Self {
         self.near_v = choice;
+        self
+    }
+
+    /// Whether [`VNear::CostModel`]'s crossovers are decided again after the plan, on the
+    /// levels [`VAfterPlan`] names (Helmholtz CH4.3b2b; default [`VAfterPlan::Off`]): the
+    /// crossover of the M2L the operator runs there where it is higher, and a second plan if
+    /// any rose ([`HelmholtzFmm::replanned`]; its time is
+    /// [`HelmholtzBuildTimings::replan`]). The raised crossovers come from the agreed costs
+    /// and V lists, so every rank decides alike, and the output on P ranks is the one-rank
+    /// FMM's of the same setting bit for bit. Nothing changes under another [`VNear`].
+    pub fn v_after_plan(mut self, choice: VAfterPlan) -> Self {
+        self.v_after_plan = choice;
+        self
+    }
+
+    /// The cost model of the near rules' crossovers ([`VNear::CostModel`], the planned and the
+    /// after-plan crossovers, and [`WxNear::CostModel`]'s P2P per interaction; Helmholtz
+    /// CH4.3b2b; default `None`: [`v_costs`] of the P2P kernel's ISA), for the tests, whose
+    /// plans then do not depend on the machine class. The crossovers it gives are agreed over
+    /// the ranks as the default's.
+    pub fn v_costs(mut self, costs: Option<VCosts>) -> Self {
+        self.v_costs = costs;
         self
     }
 
@@ -1049,6 +1124,8 @@ impl HelmholtzFmmBuilder {
         };
         // The W and X crossovers of each level (Helmholtz CH4.0d3), by the finer leaf's
         // level: named, or the cost model's at the level's degree; agreed over the ranks.
+        // The near rules' cost model: named, or the machine class's.
+        let v_cost_model = self.v_costs.unwrap_or_else(|| v_costs(isa));
         // The degrees are those given, before the exponential M2L's raise: where a raised
         // level runs M2P and P2L at p_w (`PlaneWaveRaise::Level`, `Leaves`), the crossovers
         // are low, which converts fewer pairs, never a wrong one.
@@ -1056,7 +1133,7 @@ impl HelmholtzFmmBuilder {
             .flat_map(|l| match self.near_wx {
                 WxNear::Off => [0.0, 0.0],
                 WxNear::Crossovers { w, x } => [w, x],
-                WxNear::CostModel => wx_crossovers(&wx_costs(isa), &v_costs(isa), degrees[l]),
+                WxNear::CostModel => wx_crossovers(&wx_costs(isa), &v_cost_model, degrees[l]),
             })
             .collect();
         let mut wx = vec![0.0f64; local.len()];
@@ -1092,7 +1169,7 @@ impl HelmholtzFmmBuilder {
                         };
                         (cheapest, p)
                     };
-                    v_crossover(&v_costs(isa), m2l, p, self.gradients)
+                    v_crossover(&v_cost_model, m2l, p, self.gradients)
                 }
             })
             .collect();
@@ -1298,6 +1375,125 @@ impl HelmholtzFmmBuilder {
         let degrees: Vec<usize> = (0..degrees.len()).map(|l| operator.degree(l)).collect();
         timings.tables = operator.table_timings();
         timings.operator = lap(&mut clock);
+        // The V rule after the plan (Helmholtz CH4.3b2b): each level `v_after_plan` names gets
+        // the crossover of the M2L the operator runs there where that is higher, from the agreed
+        // costs and V lists alone, so every rank raises the same levels and builds the second
+        // plan or none (constraints 2 and 9). A level whose first plan holds no V pair between
+        // two leaves (over every rank) has nothing more to convert and keeps its crossover, so
+        // that no second plan is built for nothing.
+        let on = self.near_v == VNear::CostModel && self.v_after_plan != VAfterPlan::Off;
+        let v_leaf_pairs: Vec<u64> = if on {
+            let index = plan.index();
+            let leaf = |l: usize, i: usize| {
+                matches!(index.kind(l, i), KeyType::LocalLeaf | KeyType::GhostLeaf(_))
+            };
+            let local: Vec<u64> = (0..plan.nlevels())
+                .map(|l| {
+                    let v = plan.level(l).v();
+                    (0..v.nrows())
+                        .filter(|&t| plan.computes(l, t) && leaf(l, t))
+                        .map(|t| {
+                            let sources = v.row(t).0;
+                            sources.iter().filter(|&&s| leaf(l, s as usize)).count() as u64
+                        })
+                        .sum()
+                })
+                .collect();
+            let mut summed = vec![0u64; local.len()];
+            comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+            summed
+        } else {
+            Vec::new()
+        };
+        let after: Option<Vec<f64>> = on.then(|| {
+            let shapes = operator.diagonal_shapes();
+            (0..crossovers.len())
+                .map(|l| {
+                    if v_leaf_pairs.get(l).is_none_or(|&n| n == 0) {
+                        return crossovers[l];
+                    }
+                    let run = if operator.taken_from_waves(l) {
+                        Some(if operator.diagonal_classes(l).is_some() {
+                            VLevelM2l::Form
+                        } else {
+                            VLevelM2l::Rcr
+                        })
+                    } else if self.v_after_plan == VAfterPlan::AllLevels
+                        && waves[l]
+                        && operator.m2l_on(l) == HelmholtzM2l::PlaneWave
+                    {
+                        Some(VLevelM2l::Waves)
+                    } else {
+                        None
+                    };
+                    let shape = shapes.and_then(|s| s.get(l)).copied();
+                    match (run, shape) {
+                        (Some(run), Some(shape)) => crossovers[l].max(v_after_plan_crossover(
+                            &v_cost_model,
+                            &costs,
+                            run,
+                            operator.degree(l),
+                            &shape,
+                            self.gradients,
+                        )),
+                        _ => crossovers[l],
+                    }
+                })
+                .collect()
+        });
+        // Agreed over the ranks (the smallest), as the planned crossovers: the P2P's constant
+        // is the rank's ISA's.
+        let after = after.map(|local| {
+            let mut agreed = vec![0.0f64; local.len()];
+            comm.all_reduce_into(&local[..], &mut agreed[..], SystemOperation::min());
+            agreed
+        });
+        let raised: Vec<bool> = match &after {
+            Some(after) => after
+                .iter()
+                .zip(&crossovers)
+                .map(|(after, planned)| after > planned)
+                .collect(),
+            None => vec![false; crossovers.len()],
+        };
+        let replanned = raised.contains(&true);
+        let plan = if replanned {
+            // The first plan goes before the second is built (constraint 7). Its index has the
+            // ghost leaves numbered, so the second plan takes a fresh index of the octree.
+            drop(plan);
+            let index = BoxIndex::of_octree(&octree).map_err(FmmError::Plan)?;
+            let after = after.as_deref().unwrap_or(&crossovers);
+            let runs_waves: Vec<bool> = (0..crossovers.len())
+                .map(|l| operator.m2l_on(l) == HelmholtzM2l::PlaneWave)
+                .collect();
+            // A raised level converts the first plan's pairs and those its new crossover adds:
+            // per (parent, source) where the level keeps its waves, per pair elsewhere. So the V
+            // lists lie within the first plan's (every buffer sized from it holds), and every
+            // plan stays exact under the M2L the level runs.
+            let v_pairs_after = |pair: VPair| {
+                let level = morton::level(pair.target);
+                if !raised[level] {
+                    v_pairs(pair)
+                } else if runs_waves[level] {
+                    counts.as_ref().is_some_and(|counts| {
+                        v_group(pair, after[level], (all_keys, counts), &parent)
+                    })
+                } else {
+                    v_pairs(pair) || ((pair.sources * pair.targets) as f64) < after[level]
+                }
+            };
+            let near_after = counts
+                .as_ref()
+                .map(|counts| NearRule::new(counts, &leaf_pairs).with_v_pairs(&v_pairs_after));
+            let rules = PlanRules {
+                near: near_after.as_ref(),
+                empty_boxes: counts.as_ref().filter(|_| self.empty_boxes),
+            };
+            Plan::with_rules_on(&octree, index, &rules).map_err(FmmError::Plan)?
+        } else {
+            plan
+        };
+        timings.replan = lap(&mut clock);
         let calls = if self.pair_calls {
             Calls::Pairs(PerPair(operator))
         } else {
@@ -1340,6 +1536,10 @@ impl HelmholtzFmmBuilder {
             empty_boxes: self.empty_boxes,
             near_v: self.near_v,
             near_wx: self.near_wx,
+            v_after_plan: self.v_after_plan,
+            v_crossovers: crossovers,
+            v_crossovers_after: after,
+            replanned,
             build_timings: timings,
         })
     }
@@ -1378,6 +1578,9 @@ pub struct HelmholtzBuildTimings {
     pub operator: Duration,
     /// The operator's tables by part (within [`operator`](Self::operator)).
     pub tables: TableTimings,
+    /// The V rule after the plan (Helmholtz CH4.3b2b): its crossovers (an all-reduce) and
+    /// the second plan, where one is built.
+    pub replan: Duration,
     /// The evaluator: the stores and the exchanges.
     pub evaluator: Duration,
     /// Step 8: the leaf-scaled coordinates.
@@ -1395,6 +1598,7 @@ impl HelmholtzBuildTimings {
             + self.plan
             + self.shapes
             + self.operator
+            + self.replan
             + self.evaluator
             + self.load
     }
@@ -1517,6 +1721,39 @@ pub fn v_crossover(costs: &VCosts, m2l: HelmholtzM2l, p: usize, gradients: bool)
         costs.p2p * V_P2P_POTENTIAL_SHARE
     };
     m2l / p2p
+}
+
+/// The crossover of n_s n_t after the plan on a level that runs `m2l` at degree `p` with V
+/// lists `shape` (Helmholtz CH4.3b2b, [`VAfterPlan`]): the M2L's thread time per pair over the
+/// P2P's per interaction, with or without gradients. The diagonal form's pair and the waves'
+/// cost per box with a V row from the time rule's `diagonal` costs (the waves' over the
+/// level's pairs, their mean per pair; 0 on a level without pairs), RCR's pair from `v`'s
+/// (as [`v_crossover`]). A function of its arguments alone (constraint 9).
+pub fn v_after_plan_crossover(
+    v: &VCosts,
+    diagonal: &DiagonalCosts,
+    m2l: VLevelM2l,
+    p: usize,
+    shape: &DiagonalShape,
+    gradients: bool,
+) -> f64 {
+    let pair = match m2l {
+        VLevelM2l::Waves => {
+            let pairs: u64 = shape.class_pairs.iter().sum();
+            if pairs == 0 {
+                return 0.0;
+            }
+            DiagonalCosts::unit(diagonal.plane_wave, p) * shape.targets as f64 / pairs as f64
+        }
+        VLevelM2l::Form => DiagonalCosts::unit(diagonal.pair, p),
+        VLevelM2l::Rcr => return v_crossover(v, HelmholtzM2l::Rotation, p, gradients),
+    };
+    let p2p = if gradients {
+        v.p2p
+    } else {
+        v.p2p * V_P2P_POTENTIAL_SHARE
+    };
+    pair / p2p
 }
 
 /// The V rule's decision for `pair` on a level with waves (Helmholtz CH4.0d2): the
@@ -1703,6 +1940,14 @@ where
     near_v: VNear,
     /// The W and X pairs' near rule as built (Helmholtz CH4.0d3).
     near_wx: WxNear,
+    /// The V rule after the plan as built (Helmholtz CH4.3b2b).
+    v_after_plan: VAfterPlan,
+    /// The V rule's crossover of each level before the plan, agreed.
+    v_crossovers: Vec<f64>,
+    /// The crossovers after the plan, agreed, under [`VAfterPlan`] with the cost model.
+    v_crossovers_after: Option<Vec<f64>>,
+    /// Whether a crossover rose after the plan, so the plan was built again.
+    replanned: bool,
     /// The build's wall time by step (Helmholtz CH4.0h).
     build_timings: HelmholtzBuildTimings,
 }
@@ -1986,6 +2231,32 @@ where
     /// offered and converted on this rank are [`plan`](Self::plan)'s `near_pairs`.
     pub fn near_wx(&self) -> WxNear {
         self.near_wx
+    }
+
+    /// The V rule after the plan as built ([`HelmholtzFmmBuilder::v_after_plan`]).
+    pub fn v_after_plan(&self) -> VAfterPlan {
+        self.v_after_plan
+    }
+
+    /// The V rule's crossover of each level as set before the plan, agreed over the ranks:
+    /// n_s n_t (per (parent, source) on a level with predicted waves) below it converts; 0
+    /// with the rule off, the named one under [`VNear::Crossover`].
+    pub fn v_crossovers(&self) -> &[f64] {
+        &self.v_crossovers
+    }
+
+    /// The crossovers after the plan ([`HelmholtzFmmBuilder::v_after_plan`]; `None` with it
+    /// off or under a [`VNear`] other than the cost model): each at least
+    /// [`v_crossovers`](Self::v_crossovers)'.
+    pub fn v_crossovers_after_plan(&self) -> Option<&[f64]> {
+        self.v_crossovers_after.as_deref()
+    }
+
+    /// Whether a crossover rose after the plan, so that the plan was built again
+    /// ([`HelmholtzBuildTimings::replan`]). The operator's choices, and the level and diagonal
+    /// shapes it reports, are then those of the first plan, which decided them.
+    pub fn replanned(&self) -> bool {
+        self.replanned
     }
 
     /// The domain.

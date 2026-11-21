@@ -27,8 +27,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzDiagonal, HelmholtzM2l, LevelShape, Output,
-    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, VNear, Wavenumber,
-    WavenumberKind, WxNear, auto_m2l_mul_add, s7_degree,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, V_COSTS_NEON,
+    VAfterPlan, VNear, Wavenumber, WavenumberKind, WxNear, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -1352,5 +1352,67 @@ fn check_diagonal(world: &SimpleCommunicator) {
                 row.taken_from_waves, row.diagonal_classes, row.errors, row_d.errors
             );
         }
+    }
+    // The V rule after the plan (Helmholtz CH4.3b2b): under the defaults at 10⁻⁷ with the cost
+    // model's V rule, `AllLevels` keeps the crossovers before the plan, raises those of the
+    // levels that keep their waves (none falls), builds the plan again (its part timed),
+    // converts at least as many V pairs, and errs within 1.1× the setting off's. NEON's V costs
+    // named, so the plans are the same on every machine class (x86's first plan converts every
+    // leaf pair the raise would add, and nothing rises).
+    let near = Case {
+        near_v: VNear::CostModel,
+        v_costs: Some(V_COSTS_NEON),
+        ..defaults.clone()
+    };
+    assert_eq!(near.v_after_plan, VAfterPlan::Off, "Case::new's");
+    let after = Case {
+        v_after_plan: VAfterPlan::AllLevels,
+        ..near.clone()
+    };
+    let row_n = run(&near, &problem, &oracle, 1, world).expect("the FMM runs");
+    let row_v = run(&after, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row_n.v_after_plan, VAfterPlan::Off);
+    assert!(!row_n.replanned);
+    assert!(row_n.v_crossovers.iter().all(|[b, a]| a == b));
+    assert_eq!(row_v.v_after_plan, VAfterPlan::AllLevels);
+    assert!(row_v.replanned, "no second plan: {:?}", row_v.v_crossovers);
+    for (l, ([b, a], [n, _])) in row_v
+        .v_crossovers
+        .iter()
+        .zip(&row_n.v_crossovers)
+        .enumerate()
+    {
+        assert_eq!(b, n, "level {l}: the crossover before the plan");
+        assert!(a >= b, "level {l}: {b} → {a}");
+        if a > b {
+            assert!(
+                row_n.plane_wave[l].is_some(),
+                "level {l} raised without waves"
+            );
+        }
+    }
+    assert!(
+        row_v.v_near[1] >= row_n.v_near[1],
+        "{:?} against {:?}",
+        row_v.v_near,
+        row_n.v_near
+    );
+    let replan = BUILD_PARTS
+        .iter()
+        .position(|&p| p == "replan")
+        .expect("a part");
+    assert!(row_v.build_parts[replan] > 0.0);
+    for (got, want) in row_v.errors.iter().zip(&row_n.errors) {
+        assert!(
+            got[0] <= 1.1 * want[0] && got[1] <= 1.1 * want[1],
+            "after the plan: {got:?} against {want:?}"
+        );
+    }
+    if world.rank() == 0 {
+        println!(
+            "the V rule after the plan, ε {epsilon:e}: crossovers {:?}, V pairs converted {} → {}, \
+             errors {:?} against {:?}",
+            row_v.v_crossovers, row_n.v_near[1], row_v.v_near[1], row_v.errors, row_n.errors
+        );
     }
 }

@@ -77,6 +77,9 @@
 //!   the library's), [`Row::wx_near`] the pairs offered and converted and
 //!   [`Row::far_interactions`] the P2L and M2P point interactions per level, for the rule's
 //!   cost model.
+//!   [`Case::v_after_plan`] (Helmholtz CH4.3b2b) whether the V rule's crossovers are decided
+//!   again after the plan; [`Row::v_crossovers`] the crossovers before and after it and
+//!   [`Row::replanned`] whether the plan was built again (the build part "replan").
 
 use std::ops::Range;
 use std::thread;
@@ -89,8 +92,8 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DiagonalCosts, DiagonalCounts,
     DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
     HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, PlaneWaveTimes, RcrSplit, TransferBuild, VNear, Wavenumber, WxNear,
-    diagonal_rule_classes,
+    PlaneWaveSplit, PlaneWaveTimes, RcrSplit, TransferBuild, VAfterPlan, VCosts, VNear, Wavenumber,
+    WxNear, diagonal_rule_classes,
 };
 use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -219,6 +222,13 @@ pub struct Case {
     /// CH4.3b1; `None` in [`Case::new`], the machine class's; [`FORM_COSTS`] and [`RCR_COSTS`]
     /// force one option, Helmholtz CH4.3b2a).
     pub diagonal_costs: Option<DiagonalCosts>,
+    /// Whether the V rule's crossovers are decided again after the plan
+    /// (`HelmholtzFmmBuilder::v_after_plan`, Helmholtz CH4.3b2b; [`VAfterPlan::Off`] in
+    /// [`Case::new`], the library's default).
+    pub v_after_plan: VAfterPlan,
+    /// The near rules' costs (`HelmholtzFmmBuilder::v_costs`, Helmholtz CH4.3b2b; `None` in
+    /// [`Case::new`], the machine class's), for tests whose plans must not depend on it.
+    pub v_costs: Option<VCosts>,
 }
 
 /// Time-rule costs under which the diagonal form beats every other M2L wherever a class passes
@@ -285,6 +295,8 @@ impl Case {
             diagonal: HelmholtzDiagonal::Off,
             diagonal_build: TransferBuild::Direct,
             diagonal_costs: None,
+            v_after_plan: VAfterPlan::Off,
+            v_costs: None,
         }
     }
 }
@@ -842,6 +854,15 @@ pub struct Row {
     /// Per level, whether the time rule took it from the exponential M2L
     /// (`HelmholtzOperator::taken_from_waves`; Helmholtz CH4.3b2a), the same on every rank.
     pub taken_from_waves: Vec<bool>,
+    /// The V rule after the plan as built (`HelmholtzFmm::v_after_plan`; Helmholtz CH4.3b2b).
+    pub v_after_plan: VAfterPlan,
+    /// Per level, the V rule's crossover [before the plan, after it] (`HelmholtzFmm::
+    /// v_crossovers` and `v_crossovers_after_plan`, the second the first where nothing was
+    /// decided after the plan), agreed over the ranks.
+    pub v_crossovers: Vec<[f64; 2]>,
+    /// Whether a crossover rose after the plan, so that the plan was built again
+    /// (`HelmholtzFmm::replanned`).
+    pub replanned: bool,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -873,7 +894,7 @@ impl Row {
 
 /// The parts of [`Row::build_parts`]: the builder's steps (`HelmholtzBuildTimings`), then the
 /// operator's tables by part (`TableTimings`, within "operator").
-pub const BUILD_PARTS: [&str; 15] = [
+pub const BUILD_PARTS: [&str; 16] = [
     "settings",
     "domain",
     "octree",
@@ -887,6 +908,7 @@ pub const BUILD_PARTS: [&str; 15] = [
     "plane-wave tables",
     "diagonal tables",
     "scratch",
+    "replan",
     "evaluator",
     "load",
 ];
@@ -1102,7 +1124,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     builder = builder
         .diagonal(case.diagonal)
         .diagonal_build(case.diagonal_build)
-        .diagonal_costs(case.diagonal_costs);
+        .diagonal_costs(case.diagonal_costs)
+        .v_after_plan(case.v_after_plan)
+        .v_costs(case.v_costs);
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
     }
@@ -1132,6 +1156,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         timings.tables.plane_waves,
         timings.tables.diagonal,
         timings.tables.scratch,
+        timings.replan,
         timings.evaluator,
         timings.load,
     ]
@@ -1457,6 +1482,13 @@ pub fn run_output<C: CommunicatorCollectives>(
         taken_from_waves: (0..fmm.nlevels())
             .map(|l| fmm.operator().taken_from_waves(l))
             .collect(),
+        v_after_plan: fmm.v_after_plan(),
+        v_crossovers: {
+            let before = fmm.v_crossovers();
+            let after = fmm.v_crossovers_after_plan().unwrap_or(before);
+            before.iter().zip(after).map(|(&b, &a)| [b, a]).collect()
+        },
+        replanned: fmm.replanned(),
         errors,
         checksum,
     };

@@ -4107,3 +4107,46 @@ request, using this template:
 - Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
 - Follow-ups: CH4.3b2b's Also (the 58,551-pair level), CH4.3b2c's Also (W3 at kD = 200's evaluation
   on Kathleen; W3's dense levels), in the roadmap.
+
+## 2026-11-21: CH4.3b2b The V rule on the form's levels, and the defaults' errors at 10⁻⁶
+- Done:
+  - `nd_fmm_exec::helmholtz`: `VAfterPlan` (`Off`, `TakenLevels`, `AllLevels`; opt-in),
+    `HelmholtzFmmBuilder::v_after_plan`, `v_after_plan_crossover` and `VLevelM2l` (the form's
+    pair, RCR's, the waves' cost per box over the level's pairs), the second plan on a fresh index
+    where a raised level's first plan holds V pairs between leaves (`HelmholtzBuildTimings::
+    replan`, `HelmholtzFmm::{v_after_plan, v_crossovers, v_crossovers_after_plan, replanned}`).
+  - `nd-fmm-validate`: `Case::v_after_plan`, `Row::{v_after_plan, v_crossovers, replanned}`, the
+    build part "replan", `--v-after-plan off|taken|all`, the crossovers in "Near pairs".
+  - `tools/helmholtz/ch4-3b2b-runs.sh` (`errors`, `w1`, `w3`, `reverse`) and `ch4-3b2b-tables.py`.
+    Report `fmm-validate/results/helmholtz-ch4-3b2b.md`; record `docs/helmholtz/tasks/CH4.3b2b.md`.
+  - The plan reused the first plan's index for the second; on several ranks it carries the ghost
+    leaves' numbering and `Plan::with_rules_on` refuses it (caught by the MPI list at 2 ranks).
+- Tests: `tests/helmholtz/v_crossover.rs` (the closed form); `check_v_after_plan` in
+  `tests/helmholtz_fmm.rs` (the sphere at kD = 30, the time rule at named costs: the M2L per level
+  unchanged, the levels raised exactly where named, V pairs at most and conversions at least the
+  setting off's, errors within 1.1×, 2 threads and the one-rank FMM bit for bit, Rotation
+  unchanged); `fmm-validate`'s `check_diagonal` `AllLevels` at 10⁻⁷ on W1 at kD = 30.
+- Measurements (Kathleen jobs 653717, node-c11a-021, and 653724, node-c11a-006; `singlenode`,
+  1 × 40): W1 at kD = 100–1000 and W3 at N = 10⁶, kD = 200 and 500, 10⁻³–10⁻⁸:
+  - with the V rule off the defaults err 0.966–1.024× Rotation's; with it on 1.000–1.344×,
+    with the pairs converted (Rotation's plan 1.6–9.2× as many; qualitatively, at 10⁻⁶);
+  - the levels taken from the waves: the re-decision −0.12 to +0.02 s per case (≤ 3 %), within the spread;
+  - the raised levels with waves (10⁻⁷, 10⁻⁸): their leaf pairs all convert after the plan, 0.09–
+    0.75 s gained per case in both run orders, within 2–32 % of the levels' mean costs; the Also's
+    level (58,551 pairs) among them; errors at 10⁻⁷ 0.58–0.99×;
+  - unraised dense levels: the mean over-converts, +0.02–0.45 s;
+  - the second plan costs as much as the first (0.02–4.6 s on W1; 14 s for nothing on W3 at
+    kD = 500 before c315554); same-plan runs of one launch up to 30 % apart;
+  - raw outputs in `~/projects/fmm-archive/kathleen/runs/ch4-3b2b{,-reverse}/`.
+- Checks: see the PR (fmt; Clippy default, examples, workspace all-targets; rustdoc `-D warnings`;
+  the default and workspace tests at opt-level 1, 1,368 and 1,412 passed; the MPI list at 2 and 4
+  ranks at opt-level 1, after c315554; `helmholtz_fmm` one rank at opt-level 0 703.5 s at load 4–9,
+  CH4.3b2a 646 s at load 2–7). Not run: `cargo deny` (no manifest), Laplace's benchmarks (no
+  Laplace path), 8 ranks (no distributed code beyond the agreed second plan, run at 2 and 4).
+- Decisions: the report's questions 1–4, signed off 2026-11-21 by the user on #245, "Q1-4 as
+  recommended": 1, the explanation as read, nothing changes; 2, the levels taken from the waves
+  justified as they are, `VAfterPlan` stays opt-in; 3, the follow-up CH4.3b2d before CH4.3b2c;
+  4, unraised levels with waves not adopted, no task.
+- Laplace: not touched (Helmholtz modules of `nd-fmm-exec`, the validation harness, scripts).
+- Follow-ups: CH4.3b2d (the waves' V crossover on raised levels, one plan; added, question 3),
+  in the roadmap before CH4.3b2c; CH4.3b2c's Also notes the run-order spread.

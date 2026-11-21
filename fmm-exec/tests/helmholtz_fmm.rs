@@ -102,6 +102,15 @@
 //! `DIAGONAL_RATIO` of the setting's without the form, the one-rank FMM bit for bit with its
 //! shapes, and at free costs 2 threads and chunk widths bit for bit.
 //!
+//! The V rule after the plan (Helmholtz CH4.3b2b, `check_v_after_plan`): on the sphere at
+//! kD = 30 under the cost model's V rule, Auto with waves from degree 0 and the time rule at
+//! named costs (the form taking the levels with waves with a dear pair; RCR taking them; the
+//! form dearer than the waves), `VAfterPlan::TakenLevels` and `AllLevels`: the M2L per level the setting off's,
+//! the crossovers raised on the levels named and nowhere else, the V pairs per level at most
+//! and the converted pairs and near interactions at least the setting off's, the errors within
+//! `NEAR_ERROR_BOUND` of them, 2 threads and the one-rank FMM bit for bit; under Rotation
+//! nothing raised, no second plan, the setting off's output bit for bit.
+//!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
 //! at several ranks under a timeout, e.g. on macOS
 //! `cargo test -p nd-fmm-exec --test helmholtz_fmm --no-run`, then
@@ -123,8 +132,9 @@ use nd_fmm_exec::helmholtz::{
     DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
     HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision,
     PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild,
-    VNear, Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
-    auto_plane_wave_min_degree, default_max_points_per_leaf,
+    V_COSTS_NEON, VAfterPlan, VNear, Wavenumber, WxNear, auto_batched_max_degree,
+    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree,
+    default_max_points_per_leaf,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -136,6 +146,7 @@ use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, select};
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_octree::PhysicalBox;
+use nd_octree::octree::KeyType;
 
 type C = Complex<f64>;
 
@@ -1857,6 +1868,216 @@ fn check_time_rule_raised(scenario: &Scenario, comm: &SimpleCommunicator) -> usi
         }
     }
     most
+}
+
+/// Costs under which the form takes every level with waves where a class passes (the waves and
+/// RCR far dearer) with a pair far dearer than the V rule's per-pair constant of the waves, so
+/// that the crossover after the plan rises on those levels.
+const DEAR_FORM_PAIR: DiagonalCosts = DiagonalCosts {
+    s2f: [0.0, 0.0],
+    f2r: [0.0, 0.0],
+    pair: [1e4, 0.0],
+    rotation: [1e12, 1e12],
+    plane_wave: [1e12, 1e12],
+};
+
+/// Costs under which every level keeps its waves (the form dearer still), so that only
+/// `VAfterPlan::AllLevels` raises a crossover: the waves' level cost over its pairs.
+const DEARER_FORM: DiagonalCosts = DiagonalCosts {
+    pair: [1e14, 1e14],
+    ..DEAR_FORM_PAIR
+};
+
+/// The V rule after the plan (Helmholtz CH4.3b2b; `HelmholtzFmmBuilder::v_after_plan`) on
+/// `scenario` under the cost model's V rule: Auto with waves from degree 0 and the time rule at
+/// [`DEAR_FORM_PAIR`] (the form takes levels with waves) under `TakenLevels` and `AllLevels`, at
+/// [`FREE_RCR`] (RCR takes them) under `TakenLevels`, and at [`DEARER_FORM`] (the waves kept) under `AllLevels`: the M2L per level the setting
+/// off's; the crossovers after the plan at least those before, above them exactly on the levels
+/// the setting names whose first plan holds V pairs between leaves (the levels taken, and under `AllLevels` those that keep
+/// their waves), a second plan exactly then; the V pairs of every level at most, the converted V
+/// pairs and the near interactions at least the setting off's; the errors against the direct sum
+/// within [`NEAR_ERROR_BOUND`] of the setting off's; 2 threads and on P ranks the one-rank FMM
+/// bit for bit. Under Rotation nothing rises: no second plan, the setting off's output bit for
+/// bit. The V costs are named (NEON's), so the plans do not depend on the machine class.
+fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let inputs = &Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    // NEON's V costs named, so that the plans (and the levels left with leaf pairs to raise)
+    // are the same on every machine class: x86's waves' crossover is about 11 times NEON's,
+    // and its first plan converts every leaf pair of the sphere's level 3.
+    let base = default_builder(scenario)
+        .near_v(VNear::CostModel)
+        .v_costs(Some(V_COSTS_NEON));
+    let auto = base
+        .clone()
+        .m2l_plane_wave_min_degree(0)
+        .diagonal(HelmholtzDiagonal::Auto);
+    let sum = |x: u64| {
+        let mut total = 0u64;
+        comm.all_reduce_into(&x, &mut total, SystemOperation::sum());
+        total
+    };
+    let mut raised_any = [false; 2];
+    for (setting, off, choice) in [
+        (
+            "the form taking the waves",
+            auto.clone().diagonal_costs(Some(DEAR_FORM_PAIR)),
+            VAfterPlan::TakenLevels,
+        ),
+        (
+            "the form taking the waves",
+            auto.clone().diagonal_costs(Some(DEAR_FORM_PAIR)),
+            VAfterPlan::AllLevels,
+        ),
+        // RCR taking the levels the form would (`FREE_RCR`): RCR's pair after the plan.
+        (
+            "RCR taking the waves",
+            auto.clone().diagonal_costs(Some(FREE_RCR)),
+            VAfterPlan::TakenLevels,
+        ),
+        (
+            "the waves kept",
+            auto.clone().diagonal_costs(Some(DEARER_FORM)),
+            VAfterPlan::AllLevels,
+        ),
+        (
+            "Rotation",
+            base.clone().m2l(HelmholtzM2l::Rotation),
+            VAfterPlan::AllLevels,
+        ),
+    ] {
+        let what = format!(
+            "{}, {setting}, the V rule after the plan {choice}",
+            scenario.name
+        );
+        let (fmm_off, output_off) = run(&off, inputs, kind, comm);
+        assert_eq!(fmm_off.v_after_plan(), VAfterPlan::Off, "{what}");
+        assert!(
+            !fmm_off.replanned() && fmm_off.v_crossovers_after_plan().is_none(),
+            "{what}"
+        );
+        let nlevels = fmm_off.nlevels();
+        let op = fmm_off.operator();
+        let m2l_off: Vec<(HelmholtzM2l, Option<Vec<usize>>, bool)> = (0..nlevels)
+            .map(|l| (op.m2l_on(l), op.diagonal_classes(l), op.taken_from_waves(l)))
+            .collect();
+        let pairs_off: Vec<u64> = (0..nlevels)
+            .map(|l| sum(fmm_off.plan().level(l).v().len() as u64))
+            .collect();
+        let converted_off = sum(fmm_off.plan().near_pairs().v_converted as u64);
+        let interactions_off = sum(fmm_off.near_interactions().iter().sum());
+        let planned = fmm_off.v_crossovers().to_vec();
+        // The V pairs between two leaves per level, over every rank: only those can convert.
+        let plan = fmm_off.plan();
+        let index = plan.index();
+        let leaf = |l: usize, i: usize| {
+            matches!(index.kind(l, i), KeyType::LocalLeaf | KeyType::GhostLeaf(_))
+        };
+        let leaf_pairs: Vec<u64> = (0..nlevels)
+            .map(|l| {
+                let v = plan.level(l).v();
+                let local = (0..v.nrows())
+                    .filter(|&t| plan.computes(l, t) && leaf(l, t))
+                    .map(|t| v.row(t).0.iter().filter(|&&s| leaf(l, s as usize)).count())
+                    .sum::<usize>();
+                sum(local as u64)
+            })
+            .collect();
+        drop(fmm_off);
+        let errors_off = errors(scenario, inputs, &output_off, 0, comm);
+
+        let on = off.clone().v_after_plan(choice);
+        let (fmm, output) = run(&on, inputs, kind, comm);
+        assert_eq!(fmm.v_after_plan(), choice, "{what}");
+        let op = fmm.operator();
+        let m2l: Vec<(HelmholtzM2l, Option<Vec<usize>>, bool)> = (0..nlevels)
+            .map(|l| (op.m2l_on(l), op.diagonal_classes(l), op.taken_from_waves(l)))
+            .collect();
+        assert_eq!(m2l, m2l_off, "{what}: the M2L per level");
+        assert_eq!(
+            fmm.v_crossovers(),
+            &planned[..],
+            "{what}: the crossovers before the plan"
+        );
+        let after = fmm
+            .v_crossovers_after_plan()
+            .unwrap_or_else(|| panic!("{what}: no crossovers after the plan"))
+            .to_vec();
+        // The levels the setting names: taken from the waves, and under `AllLevels` those that
+        // keep them; a level without V pairs between leaves has nothing more to convert.
+        let named: Vec<bool> = (0..nlevels)
+            .map(|l| {
+                let (m2l, _, taken) = &m2l[l];
+                let keeps = choice == VAfterPlan::AllLevels && *m2l == HelmholtzM2l::PlaneWave;
+                (*taken || keeps) && leaf_pairs[l] > 0
+            })
+            .collect();
+        let raised: Vec<bool> = after.iter().zip(&planned).map(|(a, p)| a > p).collect();
+        assert!(
+            after.iter().zip(&planned).all(|(a, p)| a >= p),
+            "{what}: a crossover fell: {planned:?} → {after:?}"
+        );
+        assert_eq!(
+            raised, named,
+            "{what}: the raised levels ({planned:?} → {after:?})"
+        );
+        let replanned = raised.contains(&true);
+        assert_eq!(fmm.replanned(), replanned, "{what}: the second plan");
+        if setting == "Rotation" {
+            assert!(!replanned, "{what}: nothing to raise under Rotation");
+        } else {
+            raised_any[usize::from(setting == "the waves kept")] |= replanned;
+        }
+        let pairs: Vec<u64> = (0..nlevels)
+            .map(|l| sum(fmm.plan().level(l).v().len() as u64))
+            .collect();
+        assert!(
+            pairs.iter().zip(&pairs_off).all(|(a, b)| a <= b),
+            "{what}: V pairs per level {pairs:?} against {pairs_off:?}"
+        );
+        let converted = sum(fmm.plan().near_pairs().v_converted as u64);
+        let interactions = sum(fmm.near_interactions().iter().sum());
+        assert!(
+            converted >= converted_off && interactions >= interactions_off,
+            "{what}: {converted} converted and {interactions} near interactions against \
+             {converted_off} and {interactions_off}"
+        );
+        drop(fmm);
+        if !replanned {
+            assert_same(
+                &format!("{what}: nothing raised"),
+                &output,
+                &output_off,
+                comm,
+            );
+        }
+        let errors = errors(scenario, inputs, &output, 0, comm);
+        if comm.rank() == 0 {
+            println!(
+                "{what}: crossovers {planned:.0?} → {after:.0?}; V pairs per level {pairs_off:?} \
+                 → {pairs:?}; converted {converted_off} → {converted}; φ {:.3e} against {:.3e}, \
+                 ∇φ {:.3e} against {:.3e}",
+                errors.0, errors_off.0, errors.1, errors_off.1
+            );
+        }
+        assert!(
+            errors.0 <= NEAR_ERROR_BOUND * errors_off.0
+                && errors.1 <= NEAR_ERROR_BOUND * errors_off.1,
+            "{what}: errors {errors:?} against the setting off's {errors_off:?}"
+        );
+        if replanned {
+            let (_, threaded) = run(&on.clone().threads(2), inputs, kind, comm);
+            assert_same(&format!("{what}, 2 threads"), &threaded, &output, comm);
+            check_one_rank(&what, &on, inputs, kind, &output, comm);
+        }
+    }
+    assert!(
+        raised_any[0] && raised_any[1],
+        "{}: no second plan for the levels taken ({}) or kept ({})",
+        scenario.name,
+        raised_any[0],
+        raised_any[1]
+    );
 }
 
 /// The scenario of [`check_time_rule_raised`] whose raised level passes classes at p_w: the
@@ -3906,6 +4127,8 @@ fn helmholtz_fmm() {
     // The time rule at matched accuracy (CH4.3b2a): the form on a raised level.
     let classes = check_time_rule_raised(&time_rule_scenario(), &comm);
     assert!(classes > 0, "no raised level took the form");
+    // The V rule after the plan (CH4.3b2b): the sphere under the leaf rule.
+    check_v_after_plan(&sphere_scenario(), &comm);
     check_errors(&comm);
     if comm.rank() == 0 {
         println!(

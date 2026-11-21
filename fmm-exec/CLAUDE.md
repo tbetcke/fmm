@@ -800,6 +800,26 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `DIAGONAL_RATIO` of the defaults', 2 threads, chunks of 3 and the one-rank FMM bit for bit. Its
   debug cost: the one-rank run at opt-level 0 646 s at load 2–7 (CH4.2c2 611 s), 34.6 s at
   opt-level 1.
+  Since Helmholtz CH4.3b2b (docs/helmholtz/tasks/CH4.3b2b.md; fmm-validate/results/helmholtz-ch4-3b2b.md)
+  `HelmholtzFmmBuilder::v_after_plan` (`VAfterPlan`: `Off`, the default; `TakenLevels`;
+  `AllLevels`), under `VNear::CostModel` only, decides the V rule's crossovers again after the
+  operator's choice: a level the time rule took from the waves gets the form's pair (or RCR's)
+  over the P2P's per interaction, and under `AllLevels` a level that keeps its waves the waves'
+  cost per box with a V row over its pairs (`v_after_plan_crossover`, `VLevelM2l`), where higher
+  and where the first plan holds a V pair between leaves (summed over the ranks); if any rose, the
+  plan is built once more on a fresh `BoxIndex::of_octree` (the first plan's index has ghost leaves
+  numbered), converting the first plan's pairs and those the new crossover adds, so its V lists lie
+  within the first plan's, the operator's buffers and M2L per level hold, and every rank builds it
+  or none (`HelmholtzBuildTimings::replan`, `HelmholtzFmm::{v_after_plan, v_crossovers,
+  v_crossovers_after_plan, replanned}`); `HelmholtzFmmBuilder::v_costs` names the near rules'
+  `VCosts` (default the ISA's), for tests whose plans must not depend on the machine class. A measurement tool (the report: not adopted on the levels
+  taken, the raised levels' rule left to a follow-up). `tests/helmholtz/v_crossover.rs` checks the
+  closed form; `check_v_after_plan` in `tests/helmholtz_fmm.rs` (the sphere at kD = 30) the M2L per
+  level unchanged (NEON's V costs named: x86's first plan converts every leaf pair of the sphere's
+  level 3, so nothing was left to raise and CI failed until 2026-11-21), the levels raised exactly where named, V pairs at most and conversions at least
+  the setting off's, errors within `NEAR_ERROR_BOUND`, 2 threads and the one-rank FMM bit for bit,
+  Rotation unchanged. Its debug cost: the one-rank run at opt-level 0 703.5 s at load 4–9 on the M6,
+  34.3 s at opt-level 1.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
