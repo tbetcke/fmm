@@ -14,7 +14,8 @@ use nd_fmm_math::orthonormal::harmonics;
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_ref::Frame;
 use nd_fmm_ref::helmholtz::diagonal::{
-    self, BoundConstants, Grid, THETA, Transfer, bound, class_of, classes, offsets,
+    self, BoundConstants, ExtendedLocal, ExtendedM2l, Grid, THETA, Transfer, bound, class_of,
+    classes, offsets,
 };
 use nd_fmm_ref::helmholtz::{Level, Workspace, direct, leaf, p2p, rcr};
 
@@ -508,6 +509,100 @@ fn m2l_at_the_degrees_of_kd_1000() {
         assert!(failures.is_empty(), "k a = {ka}, p = {p}: {failures:?}");
     }
 }
+
+/// The error of an f64 local against the double-double reference (CH4.3c1): the field of
+/// their difference (formed in double-double, `ExtendedLocal::difference`) over the
+/// reference's, the larger of φ̃'s and ∇φ̃'s relative ℓ2 norms over the targets. The
+/// difference is evaluated on its own, so the evaluation's rounding is relative to it.
+fn against_extended(
+    p: usize,
+    level: &Level<f64>,
+    offset: [i32; 3],
+    reference: &ExtendedLocal,
+    local: &[f64],
+    x: &[[f64; 3]],
+) -> f64 {
+    let delta = evaluate(p, level, offset, &reference.difference(local), x);
+    let exact = evaluate(p, level, offset, reference.hi(), x);
+    let norm = |v: &[C]| v.iter().map(|z| z.norm_sqr()).sum::<f64>().sqrt();
+    let flat = |g: &[[C; 3]]| g.iter().flatten().copied().collect::<Vec<_>>();
+    (norm(&delta.potential) / norm(&exact.potential))
+        .max(norm(&flat(&delta.gradient)) / norm(&flat(&exact.gradient)))
+}
+
+/// CH4.3c1: the chain in double-double (`ExtendedM2l`) is the M2L. On the 34 classes at
+/// k a = 2.83 (p = 7), 8 (p 21 and, weakly damped, η = 0.1) and 16 (p 30; p from §3.5's
+/// formula at 10⁻⁶), the f64 diagonal form against it within 2E, the bound's contract, and RCR
+/// against it within [`RCR_AGAINST_EXTENDED`]; RCR and the diagonal form, two algorithms, meet
+/// the same reference. On the nearest classes at k a = 8 the f64 diagonal form errs by up to
+/// 10⁴ (E up to 2.8·10⁵) while RCR stays within 5.5·10⁻¹² of the reference (measured on the
+/// M6), so the reference holds where the f64 chain it mirrors fails; on the farthest classes
+/// at k a = 16, E's floor, the diagonal form errs at most 2.3·10⁻¹⁵ (20 u) and RCR
+/// 1.6·10⁻¹⁴ (145 u). Printed per
+/// case: the largest of each over E and in units of u.
+#[test]
+fn the_extended_chain_against_the_f64_chains() {
+    let u = f64::EPSILON / 2.0;
+    let mut failures = Vec::new();
+    for (i, (ka, eta, p)) in [
+        (2.83, 0.0, 7),
+        (8.0, 0.0, formula_degree(8.0, 1e-6)),
+        (8.0, 0.1, formula_degree(8.0, 1e-6)),
+        (16.0, 0.0, formula_degree(16.0, 1e-6)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let k = wavenumber(ka, eta);
+        let level = Level::new(k, HALF);
+        let grid = Grid::new(p);
+        let reference = ExtendedM2l::new(&grid, &level);
+        let (mut diagonal_worst, mut rcr_worst) = (0.0f64, 0.0f64);
+        for class in classes() {
+            let o = class.representative;
+            let case = Case::new(
+                5000 + 100 * i as u64 + (o[0] * 49 + o[1] * 7 + o[2]) as u64,
+                o,
+            );
+            let m = multipole(p, &level, &case);
+            let exact = reference.apply(&reference.transfer(&grid, &source(), &target(o)), &m);
+            let transfer = Transfer::new(&grid, &level, &source(), &target(o));
+            let by_diagonal = diagonal_local(&grid, &level, o, &transfer, &m);
+            let diagonal = against_extended(p, &level, o, &exact, &by_diagonal, &case.targets);
+            let rcr = against_extended(
+                p,
+                &level,
+                o,
+                &exact,
+                &rcr_local(p, &level, o, &m),
+                &case.targets,
+            );
+            let e = bound(k, distance(o), circumradius(), p, BoundConstants::F64);
+            diagonal_worst = diagonal_worst.max(diagonal / e);
+            rcr_worst = rcr_worst.max(rcr);
+            if !(diagonal <= e / THETA) {
+                failures.push(format!(
+                    "k a {ka}, p {p}, {o:?}: {diagonal:.2e} > 2E = {:.2e}",
+                    e / THETA
+                ));
+            }
+            if !(rcr <= RCR_AGAINST_EXTENDED) {
+                failures.push(format!("k a {ka}, p {p}, {o:?}: RCR {rcr:.2e}"));
+            }
+        }
+        println!(
+            "k a = {ka}, η = {eta}, p = {p}: the diagonal form ≤ {diagonal_worst:.3} E; RCR ≤ \
+             {rcr_worst:.2e} ({:.0} u)",
+            rcr_worst / u
+        );
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// RCR's largest error against the double-double reference that
+/// [`the_extended_chain_against_the_f64_chains`] allows: about 10× the largest measured on the
+/// M6, 5.5·10⁻¹² (class (0, 2, 0) at k a = 8, η = 0.1), for glibc's last bits.
+const RCR_AGAINST_EXTENDED: f64 = 5e-11;
 
 /// The largest difference against RCR that [`m2l_at_the_degrees_of_kd_1000`] allows at
 /// k a = 216 (p = 245) above 2E: about twice the largest measured, 2.3·10⁻¹³ (about 1,000 u);

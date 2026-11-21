@@ -110,12 +110,14 @@ mod angles;
 mod bound;
 mod classes;
 mod dd;
+mod extended;
 mod grid;
 mod transfer;
 
 pub use angles::AngleTable;
 pub use bound::{BoundConstants, THETA, bound};
 pub use classes::{Class, Symmetry, class_of, classes, offsets};
+pub use extended::{ExtendedLocal, ExtendedM2l, ExtendedTransfer};
 pub use grid::{Grid, azimuth_count};
 pub use transfer::Transfer;
 
