@@ -28,7 +28,8 @@ use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzDiagonal, HelmholtzM2l, LevelShape, Output,
     PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, RcrSplit, TransferBuild, V_COSTS_NEON,
-    VAfterPlan, VNear, Wavenumber, WavenumberKind, WxNear, auto_m2l_mul_add, s7_degree,
+    VAfterPlan, VNear, VRaisedPrice, Wavenumber, WavenumberKind, WxNear, auto_m2l_mul_add,
+    s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
@@ -1362,6 +1363,8 @@ fn check_diagonal(world: &SimpleCommunicator) {
     let near = Case {
         near_v: VNear::CostModel,
         v_costs: Some(V_COSTS_NEON),
+        // CH4.3b2d's per-pair price, under which the first plan leaves pairs to raise.
+        v_raised_price: Some(VRaisedPrice::PerPair),
         ..defaults.clone()
     };
     assert_eq!(near.v_after_plan, VAfterPlan::Off, "Case::new's");
@@ -1413,6 +1416,82 @@ fn check_diagonal(world: &SimpleCommunicator) {
             "the V rule after the plan, ε {epsilon:e}: crossovers {:?}, V pairs converted {} → {}, \
              errors {:?} against {:?}",
             row_v.v_crossovers, row_n.v_near[1], row_v.v_near[1], row_v.errors, row_n.errors
+        );
+    }
+    // The V rule's price per box on raised levels (Helmholtz CH4.3b2d): one plan; the leaves
+    // and V entries counted on the levels with waves raised (and nowhere else); every crossover
+    // at least the per-pair one, raised on some counted level; at least as many V pairs
+    // converted; the errors within 1.1× the per-pair price's.
+    let per_box = Case {
+        v_raised_price: Some(VRaisedPrice::PerBox),
+        ..near.clone()
+    };
+    let row_b = run(&per_box, &problem, &oracle, 1, world).expect("the FMM runs");
+    // The degrees given: Rotation's (no waves, nothing raised).
+    let given = run(
+        &Case {
+            m2l: HelmholtzM2l::Rotation,
+            ..near.clone()
+        },
+        &problem,
+        &oracle,
+        1,
+        world,
+    )
+    .expect("the FMM runs")
+    .degrees;
+    assert_eq!(row_n.v_raised_price, VRaisedPrice::PerPair, "named");
+    assert!(row_n.raised_v_shapes.is_empty());
+    assert_eq!(row_b.v_raised_price, VRaisedPrice::PerBox);
+    assert!(!row_b.replanned);
+    assert_eq!(row_b.raised_v_shapes.len(), row_b.levels);
+    let mut rose = false;
+    for (l, ([b, _], [n, _])) in row_b
+        .v_crossovers
+        .iter()
+        .zip(&row_n.v_crossovers)
+        .enumerate()
+    {
+        let [leaves, pairs] = row_b.raised_v_shapes[l];
+        let raised = row_n.plane_wave[l].is_some() && row_b.degrees[l] > given[l];
+        assert!(b >= n, "level {l}: {n} → {b}");
+        if b > n {
+            assert!(pairs > 0 && leaves > 0, "level {l} raised without counts");
+            rose = true;
+        }
+        if pairs > 0 {
+            assert!(raised, "level {l} counted without raised waves");
+        }
+    }
+    assert!(rose, "no crossover rose: {:?}", row_b.v_crossovers);
+    // The library's default (Case::new names none) is the price per box.
+    let library = Case {
+        v_raised_price: None,
+        ..near.clone()
+    };
+    let row_l = run(&library, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row_l.v_raised_price, VRaisedPrice::PerBox, "the library's");
+    assert_eq!(
+        row_l.checksum, row_b.checksum,
+        "the library's: PerBox's output"
+    );
+    assert!(row_b.v_near[1] >= row_n.v_near[1]);
+    for (got, want) in row_b.errors.iter().zip(&row_n.errors) {
+        assert!(
+            got[0] <= 1.1 * want[0] && got[1] <= 1.1 * want[1],
+            "per box: {got:?} against {want:?}"
+        );
+    }
+    if world.rank() == 0 {
+        println!(
+            "the V rule's price per box, ε {epsilon:e}: counts {:?}, crossovers {:?}, V pairs \
+             converted {} → {}, errors {:?} against {:?}",
+            row_b.raised_v_shapes,
+            row_b.v_crossovers,
+            row_n.v_near[1],
+            row_b.v_near[1],
+            row_b.errors,
+            row_n.errors
         );
     }
 }

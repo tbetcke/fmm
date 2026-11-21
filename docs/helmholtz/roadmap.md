@@ -9,13 +9,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-21): **H1, H3 and H6 closed** (`docs/helmholtz/gates/H1.md`, 2026-11-19;
 `gates/H3.md`, 2026-11-02; `gates/H6.md`, 2026-11-12). Of the H4 list, items 1–9 are merged, and of
-item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a and CH4.3b2b. CH4.3b2d (the waves' V
-crossover on raised levels) is in progress; CH4.3c was split into CH4.3c1 and CH4.3c2, and CH4.3c1
-(C₀ = 200 confirmed at p ≥ 72 against a double-double reference) is signed off. Next CH4.3c2 (the
-degrees refit), then CH4.3b2c (the form by default; it needs CH4.3b2d and, since CH4.3c1, CH4.3c2),
-then CH4.3d and CH4.3e; CH4.2d off the list; the FFT track stays item 11.
-HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7, CH7.5a–c. The history of
-this line until H6.G is in `progress.md` and in this file's history
+item 10 CH4.1, CH4.2, CH4.2c, CH4.3a, CH4.3b1, CH4.3b2a, CH4.3b2b, CH4.3b2d (signed off 2026-11-21:
+the raised levels' V crossover priced per box before the plan, one plan, `VRaisedPrice::PerBox` the
+default) and CH4.3c1 (C₀ = 200 confirmed at p ≥ 72 against a double-double reference); CH4.3c was
+split into CH4.3c1 and CH4.3c2. Next CH4.3c2 (the degrees refit), then CH4.3b2c (the form by
+default; it needs CH4.3c2 since CH4.3c1), then CH4.3d and CH4.3e; CH4.2d off the list; the FFT
+track stays item 11. HR, H0 and H2 are still open; of H0, CH0.4 and CH0.6 are done, and of H7,
+CH7.5a–c. The history of this line until H6.G is in `progress.md` and in this file's history
 (`git show 4b5b37f:docs/helmholtz/roadmap.md`); until H1.G in
 `git show 8475009:docs/helmholtz/roadmap.md`.
 
@@ -789,17 +789,18 @@ task's full line is in its record or report and its progress entry
   again after the plan: on the levels taken from the waves within the spread (justified as it is),
   on raised levels with waves 0.09–0.75 s gained per case (the Also's level among them).
   *Sign-off:* the report's questions 1–4: signed off 2026-11-21 by the user on #245, "Q1-4 as recommended": 1, the explanation as read, nothing changes; 2, the levels taken from the waves justified as they are, `VAfterPlan` opt-in (a measurement tool and CH4.3b2d's trusted path); 3, the follow-up CH4.3b2d before CH4.3b2c; 4, unraised levels with waves not adopted, no task.
-- [ ] **CH4.3b2d The waves' V crossover on raised levels, in one plan.** *Done when:* (CH4.3b2b's
-  report §5–§7, question 3, signed off 2026-11-21) on a level with waves raised to p_w > p_l (ε < 10⁻⁶),
-  the V near rule's crossover before the plan priced by the waves' cost per box at p_w (not the
-  per-pair constant `VCosts::plane_wave`), one plan; against `VAfterPlan::AllLevels` on the raised
-  levels as the trusted measure: pair evidence (per level, the conversions and the levels' M2L and
-  P2P) and FMM evidence (W1 at kD = 100–500 and W3 at N = 10⁶, kD = 200 and 500, at 10⁻⁷ and 10⁻⁸,
-  both run orders), W3's dense raised levels included (n_s n_t up to 256² per pair); the errors
-  within 1.1× the defaults'; adoption for sign-off. *Needs:* CH4.3b2b. *Machines:* Kathleen.
+- [x] **CH4.3b2d The waves' V crossover on raised levels, in one plan.** Report:
+  `fmm-validate/results/helmholtz-ch4-3b2d.md`; record `docs/helmholtz/tasks/CH4.3b2d.md`.
+  `VRaisedPrice::PerBox`: on a raised level the waves' cost per box over the V entries per leaf the
+  per-pair price leaves, counted before the plan, one plan; the trusted measure's
+  (`VAfterPlan::RaisedLevels`) output bit for bit on 36 of 40 runs (W1, W3 at 10⁻⁷, 10⁻⁸, both
+  orders), the raised levels −0.12 to −0.98 s per case on W1, errors 0.58–1.00×; `PerBox` the default.
+  *Sign-off:* the report's questions 1–3: signed off 2026-11-21 by the user on #247, "All sign off questions as recommended": 1, the acceptance as read; 2, `PerBox` the
+  default; 3, `VAfterPlan` stays opt-in, no task.
 - [ ] **CH4.3b2c The diagonal form by default.** *Done when:* W1 and W3 at 10⁻³–10⁻⁸ on Kathleen
   and locust, the defaults with `HelmholtzDiagonal::Auto` (as CH4.3b2a and CH4.3b2b leave it)
-  against the defaults: the errors within 1.1×, the evaluation and the build per level; the order
+  against the defaults (with CH4.3b2d's `VRaisedPrice::PerBox`, the default since its sign-off):
+  the errors within 1.1×, the evaluation and the build per level; the order
   between the waves, the form and RCR per level (D8 amended here if it moves); the whole-level
   fallback at 40 × 1 (W1 at kD = 1000, levels 2–3); `Auto` the default (`HelmholtzDiagonal`, `Off`
   until here) for sign-off. Also (CH4.3b1's report): the model's misses on W3's small dense levels

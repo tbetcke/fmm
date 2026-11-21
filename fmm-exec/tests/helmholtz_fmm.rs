@@ -128,13 +128,13 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     C_LEAF, ChargeKind, Charges, DEFAULT_C_LEAF, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
-    DEFAULT_DIAGONAL_BUILD, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, DiagonalCosts,
-    DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
-    HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild,
-    V_COSTS_NEON, VAfterPlan, VNear, Wavenumber, WxNear, auto_batched_max_degree,
-    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree,
-    default_max_points_per_leaf,
+    DEFAULT_DIAGONAL_BUILD, DEFAULT_PLANE_WAVE_NODE_BUDGET, DIAGONAL_COSTS_NEON, Degrees,
+    DensityError, DiagonalCosts, DiagonalTimes, HelmholtzDiagonal, HelmholtzFmm,
+    HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, LeafVShape, MIN_BUFFER_BOXES,
+    OperatorError, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit,
+    PlaneWaveTimes, RCR_PAIR_FEW_DEGREE, RcrSplit, TransferBuild, V_COSTS_NEON, VAfterPlan, VNear,
+    VRaisedPrice, Wavenumber, WxNear, auto_batched_max_degree, auto_batched_min_columns,
+    auto_m2l_mul_add, auto_plane_wave_min_degree, default_max_points_per_leaf, raised_crossover,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -1898,7 +1898,11 @@ const DEARER_FORM: DiagonalCosts = DiagonalCosts {
 /// pairs and the near interactions at least the setting off's; the errors against the direct sum
 /// within [`NEAR_ERROR_BOUND`] of the setting off's; 2 threads and on P ranks the one-rank FMM
 /// bit for bit. Under Rotation nothing rises: no second plan, the setting off's output bit for
-/// bit. The V costs are named (NEON's), so the plans do not depend on the machine class.
+/// bit. `RaisedLevels` (Helmholtz CH4.3b2d) at both [`DEAR_FORM_PAIR`] and [`DEARER_FORM`] names
+/// neither the levels taken nor the levels that keep their waves at the degree given, so on a
+/// scenario without raised levels (ε ≥ 10⁻⁶) nothing rises where `TakenLevels` and `AllLevels`
+/// do; and `VRaisedPrice::PerBox` counts nothing there, the per-pair price's output bit for bit.
+/// The V costs are named (NEON's), so the plans do not depend on the machine class.
 fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
     let inputs = &Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
@@ -1907,6 +1911,7 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
     // and its first plan converts every leaf pair of the sphere's level 3.
     let base = default_builder(scenario)
         .near_v(VNear::CostModel)
+        .v_raised_price(VRaisedPrice::PerPair)
         .v_costs(Some(V_COSTS_NEON));
     let auto = base
         .clone()
@@ -1939,6 +1944,18 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
             "the waves kept",
             auto.clone().diagonal_costs(Some(DEARER_FORM)),
             VAfterPlan::AllLevels,
+        ),
+        // `RaisedLevels` (CH4.3b2d): neither the levels taken nor those that keep their waves
+        // unraised.
+        (
+            "the form taking the waves",
+            auto.clone().diagonal_costs(Some(DEAR_FORM_PAIR)),
+            VAfterPlan::RaisedLevels,
+        ),
+        (
+            "the waves kept",
+            auto.clone().diagonal_costs(Some(DEARER_FORM)),
+            VAfterPlan::RaisedLevels,
         ),
         (
             "Rotation",
@@ -2009,7 +2026,9 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
             .map(|l| {
                 let (m2l, _, taken) = &m2l[l];
                 let keeps = choice == VAfterPlan::AllLevels && *m2l == HelmholtzM2l::PlaneWave;
-                (*taken || keeps) && leaf_pairs[l] > 0
+                // The scenario raises no level (ε ≥ 10⁻⁶), so `RaisedLevels` names none.
+                let taken = *taken && choice != VAfterPlan::RaisedLevels;
+                (taken || keeps) && leaf_pairs[l] > 0
             })
             .collect();
         let raised: Vec<bool> = after.iter().zip(&planned).map(|(a, p)| a > p).collect();
@@ -2025,6 +2044,8 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
         assert_eq!(fmm.replanned(), replanned, "{what}: the second plan");
         if setting == "Rotation" {
             assert!(!replanned, "{what}: nothing to raise under Rotation");
+        } else if choice == VAfterPlan::RaisedLevels {
+            assert!(!replanned, "{what}: no raised level");
         } else {
             raised_any[usize::from(setting == "the waves kept")] |= replanned;
         }
@@ -2078,6 +2099,272 @@ fn check_v_after_plan(scenario: &Scenario, comm: &SimpleCommunicator) {
         raised_any[0],
         raised_any[1]
     );
+    // The per-box price (CH4.3b2d) without a raised level: nothing counted, one plan, the
+    // per-pair price's output bit for bit.
+    let what = format!("{}, the V rule's price per box", scenario.name);
+    let kept = auto.clone().diagonal_costs(Some(DEARER_FORM));
+    let (_, output_pair) = run(&kept, inputs, kind, comm);
+    let (fmm, output) = run(
+        &kept.v_raised_price(VRaisedPrice::PerBox),
+        inputs,
+        kind,
+        comm,
+    );
+    assert!(
+        fmm.raised_v_shapes().is_none() && !fmm.replanned(),
+        "{what}: counted or planned again"
+    );
+    drop(fmm);
+    assert_same(&what, &output, &output_pair, comm);
+}
+
+/// The scenario of [`check_v_raised`]: 3,000 points on the sphere at kD = 30 under the leaf
+/// rule at ε = 10⁻⁷ (level 3's leaves hold about 18 points, so that NEON's per-pair crossover
+/// keeps some of their V pairs),
+/// whose levels with waves run at p_w = 28 above the degrees given, with V pairs between
+/// leaves.
+fn raised_v_scenario() -> Scenario {
+    Scenario {
+        name: "sphere, kD = 30, ε = 1e-7, complex charges, gradients",
+        n: (3000, None),
+        degrees: Degrees::Tolerance(1e-7),
+        bound: ERROR_FACTOR * 1e-7,
+        ..sphere_scenario()
+    }
+}
+
+/// The V rule's price on raised levels (Helmholtz CH4.3b2d, `VRaisedPrice`) on `scenario`, under
+/// Auto with waves from degree 0, the empty-box rule and NEON's V and time-rule costs named (so
+/// that the plans are the same on every machine class):
+/// - the counts before the plan against the plan: the computed local leaves with a V row and
+///   their entries on each raised level of `PerPair`'s plan (what the per-pair crossover
+///   leaves), summed over the ranks;
+/// - `PerBox` against `PerPair`: the M2L per level unchanged; the crossovers the higher of the
+///   per-pair one and `raised_crossover` of the counts exactly on the raised levels with entries,
+///   unchanged elsewhere, raised on some level; V pairs per level at most and conversions at
+///   least `PerPair`'s; one plan; the errors within `NEAR_ERROR_BOUND`; 2 threads and on P
+///   ranks the one-rank FMM bit for bit;
+/// - under Rotation (no waves) `PerBox` counts nothing and is `PerPair`'s output bit for bit;
+/// - `VAfterPlan::RaisedLevels` (CH4.3b2d's trusted measure) under `PerPair`: raised exactly the
+///   raised levels with waves and V pairs between leaves, a second plan; 2 threads and the
+///   one-rank FMM bit for bit.
+fn check_v_raised(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let inputs = &Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let sum = |x: u64| {
+        let mut total = 0u64;
+        comm.all_reduce_into(&x, &mut total, SystemOperation::sum());
+        total
+    };
+    // Leaves of up to 128 points, so that the per-pair crossover leaves leaf pairs to convert.
+    let base = default_builder(scenario)
+        .max_points_per_leaf(128)
+        .near_v(VNear::CostModel)
+        .v_raised_price(VRaisedPrice::PerPair)
+        .v_costs(Some(V_COSTS_NEON))
+        .diagonal_costs(Some(DIAGONAL_COSTS_NEON))
+        .m2l_plane_wave_min_degree(0);
+    // The degrees given: Rotation's (no waves, nothing raised).
+    let (rotation, rotation_output) = run(
+        &base.clone().m2l(HelmholtzM2l::Rotation),
+        inputs,
+        kind,
+        comm,
+    );
+    let nlevels = rotation.nlevels();
+    let given: Vec<usize> = (0..nlevels)
+        .map(|l| rotation.operator().degree(l))
+        .collect();
+    drop(rotation);
+    let (rotation_box, output) = run(
+        &base
+            .clone()
+            .m2l(HelmholtzM2l::Rotation)
+            .v_raised_price(VRaisedPrice::PerBox),
+        inputs,
+        kind,
+        comm,
+    );
+    assert!(
+        rotation_box.raised_v_shapes().is_none(),
+        "{}: Rotation counted",
+        scenario.name
+    );
+    drop(rotation_box);
+    assert_same(
+        &format!("{}: Rotation, PerBox", scenario.name),
+        &output,
+        &rotation_output,
+        comm,
+    );
+
+    let what = format!("{}, the V rule's price per box", scenario.name);
+    let (fmm_pair, output_pair) = run(&base, inputs, kind, comm);
+    assert_eq!(fmm_pair.v_raised_price(), VRaisedPrice::PerPair, "{what}");
+    assert!(fmm_pair.raised_v_shapes().is_none(), "{what}");
+    let op = fmm_pair.operator();
+    let m2l_pair: Vec<(HelmholtzM2l, usize)> =
+        (0..nlevels).map(|l| (op.m2l_on(l), op.degree(l))).collect();
+    let raised: Vec<bool> = (0..nlevels)
+        .map(|l| m2l_pair[l].0 == HelmholtzM2l::PlaneWave && m2l_pair[l].1 > given[l])
+        .collect();
+    assert!(raised.contains(&true), "{what}: no raised level");
+    let pairs_pair: Vec<u64> = (0..nlevels)
+        .map(|l| sum(fmm_pair.plan().level(l).v().len() as u64))
+        .collect();
+    let converted_pair = sum(fmm_pair.plan().near_pairs().v_converted as u64);
+    let crossovers_pair = fmm_pair.v_crossovers().to_vec();
+    // The counts against the per-pair plan's own V rows: per level its computed local leaves
+    // with a V entry left, and those entries.
+    let plan = fmm_pair.plan();
+    let index = plan.index();
+    let counted: Vec<LeafVShape> = (0..nlevels)
+        .map(|l| {
+            let v = plan.level(l).v();
+            let rows: Vec<u64> = (0..v.nrows())
+                .filter(|&t| plan.computes(l, t) && index.kind(l, t) == KeyType::LocalLeaf)
+                .map(|t| v.row(t).0.len() as u64)
+                .filter(|&n| n > 0)
+                .collect();
+            LeafVShape {
+                leaves: sum(rows.len() as u64),
+                pairs: sum(rows.iter().sum()),
+            }
+        })
+        .collect();
+    drop(fmm_pair);
+    let errors_pair = errors(scenario, inputs, &output_pair, 0, comm);
+
+    let on = base.clone().v_raised_price(VRaisedPrice::PerBox);
+    let (fmm, output) = run(&on, inputs, kind, comm);
+    assert_eq!(fmm.v_raised_price(), VRaisedPrice::PerBox, "{what}");
+    assert!(!fmm.replanned(), "{what}: a second plan");
+    let op = fmm.operator();
+    let m2l: Vec<(HelmholtzM2l, usize)> =
+        (0..nlevels).map(|l| (op.m2l_on(l), op.degree(l))).collect();
+    assert_eq!(m2l, m2l_pair, "{what}: the M2L and degree per level");
+    let shapes = fmm
+        .raised_v_shapes()
+        .unwrap_or_else(|| panic!("{what}: nothing counted"))
+        .to_vec();
+    for l in 0..nlevels {
+        let want = if raised[l] {
+            counted[l]
+        } else {
+            LeafVShape::default()
+        };
+        assert_eq!(
+            shapes[l], want,
+            "{what}: level {l}'s counts against the plan"
+        );
+    }
+    let crossovers = fmm.v_crossovers().to_vec();
+    for l in 0..nlevels {
+        let want = if raised[l] && shapes[l].pairs > 0 {
+            crossovers_pair[l].max(raised_crossover(
+                &V_COSTS_NEON,
+                &DIAGONAL_COSTS_NEON,
+                m2l[l].1,
+                shapes[l],
+                scenario.gradients,
+            ))
+        } else {
+            crossovers_pair[l]
+        };
+        assert!(
+            (crossovers[l] - want).abs() <= 1e-12 * want.max(1.0),
+            "{what}: level {l}'s crossover {} against {want}",
+            crossovers[l]
+        );
+    }
+    assert!(
+        crossovers.iter().zip(&crossovers_pair).any(|(a, b)| a > b),
+        "{what}: no crossover rose ({crossovers_pair:?} → {crossovers:?})"
+    );
+    let pairs: Vec<u64> = (0..nlevels)
+        .map(|l| sum(fmm.plan().level(l).v().len() as u64))
+        .collect();
+    assert!(
+        pairs.iter().zip(&pairs_pair).all(|(a, b)| a <= b),
+        "{what}: V pairs per level {pairs:?} against {pairs_pair:?}"
+    );
+    let converted = sum(fmm.plan().near_pairs().v_converted as u64);
+    assert!(
+        converted > converted_pair,
+        "{what}: {converted} converted against {converted_pair}; counts {shapes:?}; \
+         crossovers {crossovers_pair:.0?} → {crossovers:.0?}; V pairs {pairs_pair:?} → {pairs:?}; \
+         raised {raised:?}"
+    );
+    drop(fmm);
+    let errors = errors(scenario, inputs, &output, 0, comm);
+    if comm.rank() == 0 {
+        println!(
+            "{what}: counts {shapes:?}; crossovers {crossovers_pair:.0?} → {crossovers:.0?}; V \
+             pairs per level {pairs_pair:?} → {pairs:?}; converted {converted_pair} → \
+             {converted}; φ {:.3e} against {:.3e}, ∇φ {:.3e} against {:.3e}",
+            errors.0, errors_pair.0, errors.1, errors_pair.1
+        );
+    }
+    assert!(
+        errors.0 <= NEAR_ERROR_BOUND * errors_pair.0
+            && errors.1 <= NEAR_ERROR_BOUND * errors_pair.1,
+        "{what}: errors {errors:?} against PerPair's {errors_pair:?}"
+    );
+    // The counts on the pool (chunks of leaves) the serial counts.
+    let (fmm, threaded) = run(&on.clone().threads(2), inputs, kind, comm);
+    assert_eq!(
+        fmm.raised_v_shapes(),
+        Some(&shapes[..]),
+        "{what}, 2 threads: the counts"
+    );
+    drop(fmm);
+    assert_same(&format!("{what}, 2 threads"), &threaded, &output, comm);
+    check_one_rank(&what, &on, inputs, kind, &output, comm);
+
+    // The trusted measure: the second plan on the raised levels that keep their waves.
+    let what = format!(
+        "{}, the V rule after the plan on raised levels",
+        scenario.name
+    );
+    let trusted = base.clone().v_after_plan(VAfterPlan::RaisedLevels);
+    let (fmm, output) = run(&trusted, inputs, kind, comm);
+    let after = fmm
+        .v_crossovers_after_plan()
+        .unwrap_or_else(|| panic!("{what}: no crossovers after the plan"))
+        .to_vec();
+    let leaf_pairs_named: Vec<bool> = (0..nlevels)
+        .map(|l| raised[l] && counted[l].pairs > 0)
+        .collect();
+    let rose: Vec<bool> = after
+        .iter()
+        .zip(&crossovers_pair)
+        .map(|(a, p)| a > p)
+        .collect();
+    // A raised level rises where its first plan kept a V pair between leaves: on this tree
+    // every raised level with entries left.
+    assert_eq!(
+        rose, leaf_pairs_named,
+        "{what}: {crossovers_pair:?} → {after:?}"
+    );
+    assert!(fmm.replanned(), "{what}: no second plan");
+    // The per-box price before the plan counts what the per-pair plan leaves, so where a
+    // raised level's boxes with a V row are leaves (on this tree), it is the trusted measure's
+    // crossover after the plan.
+    for l in (0..nlevels).filter(|&l| leaf_pairs_named[l]) {
+        assert!(
+            (after[l] - crossovers[l]).abs() <= 1e-9 * after[l],
+            "{what}: level {l}: after the plan {} against {} per box before it",
+            after[l],
+            crossovers[l]
+        );
+    }
+    drop(fmm);
+    if comm.rank() == 0 {
+        println!("{what}: crossovers {crossovers_pair:.0?} → {after:.0?}");
+    }
+    let (_, threaded) = run(&trusted.clone().threads(2), inputs, kind, comm);
+    assert_same(&format!("{what}, 2 threads"), &threaded, &output, comm);
+    check_one_rank(&what, &trusted, inputs, kind, &output, comm);
 }
 
 /// The scenario of [`check_time_rule_raised`] whose raised level passes classes at p_w: the
@@ -3516,6 +3803,7 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_eq!(fmm.c_leaf(), DEFAULT_C_LEAF, "{name}");
     assert_eq!(fmm.near_v(), VNear::CostModel, "{name}");
     assert_eq!(fmm.near_wx(), WxNear::CostModel, "{name}");
+    assert_eq!(fmm.v_raised_price(), VRaisedPrice::PerBox, "{name}");
     check_build_timings(name, &defaults, &inputs, comm);
     let (phi, grad) = errors(scenario, &inputs, &output, 0, comm);
     if comm.rank() == 0 {
@@ -3536,6 +3824,7 @@ fn check_defaults(scenario: &Scenario, comm: &SimpleCommunicator) {
         .max_points_per_leaf(points)
         .c_leaf(DEFAULT_C_LEAF)
         .near_v(VNear::CostModel)
+        .v_raised_price(VRaisedPrice::PerBox)
         .near_wx(WxNear::CostModel);
     let (_, output_named) = run(&named, &inputs, kind, comm);
     assert_same(&format!("{name}: named"), &output_named, &output, comm);
@@ -4129,6 +4418,8 @@ fn helmholtz_fmm() {
     assert!(classes > 0, "no raised level took the form");
     // The V rule after the plan (CH4.3b2b): the sphere under the leaf rule.
     check_v_after_plan(&sphere_scenario(), &comm);
+    // The V rule's price per box on raised levels (CH4.3b2d): the sphere at 10⁻⁷.
+    check_v_raised(&raised_v_scenario(), &comm);
     check_errors(&comm);
     if comm.rank() == 0 {
         println!(

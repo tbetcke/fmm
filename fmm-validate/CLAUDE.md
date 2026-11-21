@@ -658,6 +658,19 @@ checks `AllLevels` under the defaults at 10⁻⁷ on W1 at kD = 30, with NEON's 
 runs the task's stages (`errors`, `w1`, `w3`, `reverse`), `ch4-3b2b-tables.py` makes the report's
 tables. Its report is `results/helmholtz-ch4-3b2b.md`.
 
+Helmholtz CH4.3b2d (the V rule's price per box on raised levels; docs/helmholtz/tasks/CH4.3b2d.md)
+added `helmholtz_accuracy::Case::v_raised_price` (`HelmholtzFmmBuilder::v_raised_price`, `None` in
+`Case::new`, the library's) and `Row::{v_raised_price, raised_v_shapes}` (as built; per level the
+leaves and V entries counted before the plan), and to the example `--v-raised pair|box,…` (each
+`--near-v cost` run at each, outside `--v-after-plan`'s loop; the column "M2L" ending `/vbox` per
+box), `--v-after-plan raised` (`/vafterraised`) and a last column of "Near pairs" (the counts per
+level). `tests/helmholtz_accuracy.rs` (`check_diagonal`) checks `PerBox` under the defaults at 10⁻⁷
+on W1 at kD = 30 (one plan, counts only on raised levels, a crossover risen, the errors within
+1.1×, the library's default `PerBox`'s output); CH4.3b2b's `AllLevels` check there names
+`PerPair`. `tools/helmholtz/ch4-3b2d-runs.sh` runs the task's stages (`smoke`, `w1`, `w3`, `reverse`),
+`ch4-3b2d-tables.py` makes the report's tables (`runs`, `levels`, `summary`). Its report is
+`results/helmholtz-ch4-3b2d.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
